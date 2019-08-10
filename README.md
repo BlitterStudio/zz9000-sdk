@@ -1,0 +1,63 @@
+# MNT ZZ9000 ARM SDK
+
+MNT ZZ9000 is a graphics and ARM coprocessor card for Amiga computers equipped with Zorro slots. It is based on a Xilinx ZYNQ Z-7020 chip that combines 7-series FPGA fabric with dual ARM Cortex-A9 CPUs clocked at 666MHz. The current version has 1GB of DDR3 RAM and no eMMC soldered.
+
+This repository contains some example programs and documentation that will help you to get started hacking on ARM software for the ZZ9000.
+
+The mechanism for launching and interacting with ARM programs from AmigaOS is still rudimentary at this point. We're grateful for any constructive feedback and pull requests that will help shape the system.
+
+# Requirements
+
+To build the example applications, you need a version of GCC called arm-none-eabi-gcc, which is available in major Linux distributions. We're exclusively developing on Linux (Debian, specifically) and don't support any other platforms at the moment. You're welcome to contribute build instructions for other platforms. It would be nice to have an ARM compiler/assembler for AmigaOS as well, so that you can develop on the target machine.
+
+# Building
+
+Every example application has a build.sh script that calls arm-none-eabi-gcc to build and statically link the application with a special linker file, link.ld. Every application is per default linked to run at address 0x03000000 and can access arbitrary memory. There is no memory protection or memory management, but you can use the included libmemory for malloc/free as demonstrated by the nanojpeg example. 
+
+ZZ9000OS offers much less infrastructure to applications than traditional operating systems. Currently, only the following functions and arguments are provided by a structure called ZZ9K_ENV passed to your entry function:
+
+```
+struct ZZ9K_ENV {
+  uint32_t api_version;
+  uint32_t argv[8];
+  uint32_t argc;
+
+  int      (*putchar)(char);
+  void     (*set_output_putchar_to_events)(char);
+  void     (*set_output_events_blocking)(char);
+  void     (*put_event_code)(uint16_t);
+  uint16_t (*get_event_serial)();
+  uint16_t (*get_event_code)();
+  char     (*output_event_acked)();
+};
+```
+
+# Loading
+
+In the "zz9k-loader" directory, you can find sources for the zz9k-loader that runs on AmigaOS (m68k). With zz9k-loader, you can load an ARM application into the DDR3 memory of ZZ9000 and run it. The loader supports setting up multiple user interface modalities as a convenience:
+
+- `run` just jumps to your code with no user interface.
+- `screen` sets up a 640x480@32 Intuition screen. If you pass a `!screen` parameter to your application, it will be substituted for the screen's bitmap address for direct access. Pass `!width` as a parameter to get the screen's width in pixels.
+- `screen-low` similar to screen, but with 320x240@32 resolution.
+- `attach` attaches stdin and stdout of the Shell to your application.
+- `audio` experimental mode that plays back an audio buffer your application creates until a mouse button is pressed.
+
+Example:
+
+```
+zz9k-loader load vector.bin
+zz9k-loader screen-low !screen !width
+```
+
+
+
+# License / Copyright
+
+If not stated otherwise in specific source code files, everything here is:
+
+Copyright (C) 2016-2019, Lukas F. Hartmann <lukas@mntre.com>
+MNT Research GmbH, Berlin
+https://mntre.com
+
+SPDX-License-Identifier: GPL-3.0-or-later
+https://spdx.org/licenses/GPL-3.0-or-later.html
