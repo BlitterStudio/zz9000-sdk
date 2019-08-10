@@ -12,7 +12,7 @@ To build the example applications, you need a version of GCC called arm-none-eab
 
 # Building
 
-Every example application has a build.sh script that calls arm-none-eabi-gcc to build and statically link the application with a special linker file, link.ld. Every application is per default linked to run at address 0x03000000 and can access arbitrary memory. There is no memory protection or memory management, but you can use the included libmemory for malloc/free as demonstrated by the nanojpeg example. 
+Every example application has a `build-appname.sh` script that calls `arm-none-eabi-gcc` to build and statically link the application with a special linker file, `link.ld`. Every application is per default linked to run at address `0x03000000` and can access arbitrary memory. There is no memory protection or memory management, but you can link in the included `libmemory` for malloc/free as demonstrated by the nanojpeg example (you just give it a fixed memory block on startup). 
 
 ZZ9000OS offers much less infrastructure to applications than traditional operating systems. Currently, only the following functions and arguments are provided by a structure called ZZ9K_ENV passed to your entry function:
 
@@ -34,22 +34,33 @@ struct ZZ9K_ENV {
 
 # Loading
 
-In the "zz9k-loader" directory, you can find sources for the zz9k-loader that runs on AmigaOS (m68k). With zz9k-loader, you can load an ARM application into the DDR3 memory of ZZ9000 and run it. The loader supports setting up multiple user interface modalities as a convenience:
+In the `zz9k-loader` directory, you can find sources for the zz9k-loader that runs on AmigaOS (m68k). With `zz9k-loader`, you can load an ARM application into the DDR3 memory of ZZ9000 and run it. The loader supports setting up multiple user interface modalities as a convenience:
 
 - `run` just jumps to your code with no user interface.
 - `screen` sets up a 640x480@32 Intuition screen. If you pass a `!screen` parameter to your application, it will be substituted for the screen's bitmap address for direct access. Pass `!width` as a parameter to get the screen's width in pixels.
 - `screen-low` similar to screen, but with 320x240@32 resolution.
-- `attach` attaches stdin and stdout of the Shell to your application.
-- `audio` experimental mode that plays back an audio buffer your application creates until a mouse button is pressed.
+- `attach` attaches stdin and stdout of the Shell to your application, demonstrated by the `shell` example.
+- `audio` experimental mode that plays back an audio buffer your application creates until a mouse button is pressed, demonstrated by `minimp3`.
 
 Example:
 
 ```
-zz9k-loader load vector.bin
+zz9k-loader load conway.bin
 zz9k-loader screen-low !screen !width
 ```
 
+# Third Party Code
 
+The SDK contains a collection of third-party libraries/code for ARM bare metal applications:
+
+- Runtime ABI for Cortex-M0 (lib/div), by Jörg Mische <bobbl@gmx.de>
+- Tiny printf, sprintf, vsnprintf (lib/printf), by Marco Paland <info@paland.com>
+- libmemory memory allocator (lib/memory/libmemory_freelist.a), by Embedded Artistry, sources at: https://github.com/embeddedartistry/libmemory
+- memcpy, memset, memmove (lib/memory), Public Domain
+
+Portions of example code is lifted from the following sources:
+
+- "Conway's game of life", Rosetta Code, https://rosettacode.org/wiki/Conway%27s_Game_of_Life#C
 
 # License / Copyright
 
