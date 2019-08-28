@@ -58,6 +58,13 @@ zz9k load vector.bin
 zz9k -320x240 !screen !width
 ```
 
+## Raytrace
+
+```
+zz9k load raytrace.bin
+zz9k -320x240 !screen !width
+```
+
 # Third Party Code
 
 The SDK contains a collection of third-party libraries/code for ARM bare metal applications:
