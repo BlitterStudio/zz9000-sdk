@@ -4,8 +4,8 @@
 #include "zz9k_env.h"
 
 // matrix width and height
-#define CONW_W 640
-#define CONW_H (480-16)
+#define CONW_W 320
+#define CONW_H (240-16)
 
 unsigned char univ[CONW_H][CONW_W];
 unsigned char new[CONW_H][CONW_W];
@@ -84,8 +84,6 @@ void _putchar(char c) {
   _zz9k_env->putchar(c);
 };
 
-int did_init = 0;
-
 void __attribute__ ((section (".binstart"))) main(struct ZZ9K_ENV* env) {
   _zz9k_env = env;
 
@@ -93,20 +91,16 @@ void __attribute__ ((section (".binstart"))) main(struct ZZ9K_ENV* env) {
     return;
   }
 
-  if (env->argc<3) {
+  if (env->argc<2) {
     return;
   }
 
-  // arg0: init the matrix?
-  if (env->argv[0] || !did_init) {
-    init(CONW_W, CONW_H);
-    did_init = 1;
-  }
-
+  init(CONW_W, CONW_H);
+  
   while (1) {
     evolve(CONW_W, CONW_H);
-    // arg1: framebuffer pointer (32bpp)
-    // arg2: framebuffer width in pixels
-    show((uint32_t*)env->argv[1], (uint32_t)env->argv[2], CONW_W, CONW_H);
+    // arg0: framebuffer pointer (32bpp)
+    // arg1: framebuffer width in pixels
+    show((uint32_t*)env->argv[0], (uint32_t)env->argv[1], CONW_W, CONW_H);
   }
 }

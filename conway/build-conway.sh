@@ -1,8 +1,10 @@
-COMPILE="arm-none-eabi-gcc -std=gnu99 -nostdlib -O5 -c -mcpu=cortex-a9 -mfpu=neon -mfloat-abi=hard -I../lib -I../include"
-LINK="arm-none-eabi-gcc -T ../link.ld -std=gnu99 -nostdlib -O5 -mcpu=cortex-a9 -mfpu=neon -mfloat-abi=hard"
+COMPILE="arm-none-eabi-gcc -std=gnu99 -nostdlib -O2 -c -mcpu=cortex-a9 -mfpu=neon -mfloat-abi=hard -I../lib -I../include"
+LINK="arm-none-eabi-gcc -T ../link.ld -std=gnu99 -nostdlib -O2 -mcpu=cortex-a9 -mfpu=neon -mfloat-abi=hard"
 NAME=conway
 
 mkdir -p build
+
+cppcheck --template='{file}:{line}:{severity}:{message}' --enable=all -I. -I../lib -I../include $NAME.c
 
 $COMPILE -I. -o build/$NAME.o $NAME.c
 $COMPILE -o build/idiv.o ../lib/div/idiv.S
