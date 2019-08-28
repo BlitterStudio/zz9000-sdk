@@ -34,19 +34,28 @@ struct ZZ9K_ENV {
 
 # Loading
 
-In the `zz9k-loader` directory, you can find sources for the zz9k-loader that runs on AmigaOS (m68k). With `zz9k-loader`, you can load an ARM application into the DDR3 memory of ZZ9000 and run it. The loader supports setting up multiple user interface modalities as a convenience:
+In the `zz9k-loader` directory, you can find sources for the `zz9k` CLI tool that runs on AmigaOS (m68k). With `zz9k`, you can load an ARM application into the DDR3 memory of ZZ9000 and run it. The loader supports setting up multiple user interface modalities as a convenience:
 
 - `run` just jumps to your code with no user interface.
-- `screen` sets up a 640x480@32 Intuition screen. If you pass a `!screen` parameter to your application, it will be substituted for the screen's bitmap address for direct access. Pass `!width` as a parameter to get the screen's width in pixels.
-- `screen-low` similar to screen, but with 320x240@32 resolution.
-- `attach` attaches stdin and stdout of the Shell to your application, demonstrated by the `shell` example.
-- `audio` experimental mode that plays back an audio buffer your application creates until a mouse button is pressed, demonstrated by `minimp3`.
+- `-640x480` and `-320x240` set up a 640x480@32 or 320x240@32 Intuition screen. If you pass a `!screen` parameter to your application, it will be substituted for the screen's bitmap address for direct access. Pass `!width` as a parameter to get the screen's width in pixels.
+- `-keyboard` passes raw Amiga keyboard scan codes to the ARM application's event stream.
+- `-console` attaches stdin and stdout of the Shell to your application, demonstrated by the `shell` example.
+- `-audio` experimental mode that plays back an audio buffer your application creates until a mouse button is pressed, demonstrated by `minimp3`.
 
-Example:
+# Launching Example Apps
+
+## Conway
 
 ```
-zz9k-loader load conway.bin
-zz9k-loader screen-low !screen !width
+zz9k load conway.bin
+zz9k -320x240 !screen !width
+```
+
+## Vector
+
+```
+zz9k load vector.bin
+zz9k -320x240 !screen !width
 ```
 
 # Third Party Code
