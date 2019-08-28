@@ -51,20 +51,6 @@
 
 volatile MNTZZ9KRegs* regs;
 
-// lifted from https://stackoverflow.com/a/15171925
-unsigned crc8(unsigned crc, unsigned char const *data, size_t len)
-{
-    if (data == NULL)
-        return 0;
-    crc = ~crc & 0xff;
-    while (len--) {
-        crc ^= *data++;
-        for (unsigned k = 0; k < 8; k++)
-            crc = crc & 1 ? (crc >> 1) ^ 0xb2 : crc >> 1;
-    }
-    return crc ^ 0xff;
-}
-
 struct Screen* zz9k_screen;
 
 void open_screen(int w, int h) {
@@ -339,8 +325,6 @@ int main(int argc, char** argv) {
       size_t bytes_read = fread(dest, 1, fsize, f);
       fclose(f);
       printf("%lx\n",bytes_read);
-
-      //printf("CRC: %lx\n",crc8(0,dest,bytes_read));
     } else {
       printf("0\n");
     }
