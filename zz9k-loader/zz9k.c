@@ -159,7 +159,7 @@ void cleanup() {
 }
 
 int is_hex(char* str) {
-  if (strlen(str)>2 && str[0]=='0' && str[0]=='x') {
+  if (strlen(str)>2 && str[0]=='0' && str[1]=='x') {
     return 1;
   }
   return 0;
