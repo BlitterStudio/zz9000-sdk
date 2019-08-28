@@ -1,10 +1,10 @@
-COMPILE="arm-none-eabi-gcc -std=gnu99 -nostdlib -O5 -c -mcpu=cortex-a9 -mfpu=neon -mfloat-abi=hard -I../lib"
+COMPILE="arm-none-eabi-gcc -std=gnu99 -nostdlib -O5 -c -mcpu=cortex-a9 -mfpu=neon -mfloat-abi=hard -I../lib -I../include"
 LINK="arm-none-eabi-gcc -T ../link.ld -std=gnu99 -nostdlib -O5 -mcpu=cortex-a9 -mfpu=neon -mfloat-abi=hard"
 NAME=conway
 
 mkdir -p build
 
-$COMPILE -I. -o build/conway.o conway.c
+$COMPILE -I. -o build/$NAME.o $NAME.c
 $COMPILE -o build/idiv.o ../lib/div/idiv.S
 $COMPILE -o build/idivmod.o ../lib/div/idivmod.S
 $COMPILE -o build/ldivmod.o ../lib/div/ldivmod.S

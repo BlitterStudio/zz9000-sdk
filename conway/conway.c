@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include "printf/printf.h"
+#include "zz9k_env.h"
 
 // matrix width and height
 #define CONW_W 640
@@ -10,13 +11,13 @@ unsigned char univ[CONW_H][CONW_W];
 unsigned char new[CONW_H][CONW_W];
 
 void __aeabi_idiv0(int r) {
+  printf("__aeabi_idiv0()!\n");
   while (1) {
-    printf("__aeabi_idiv0()!\n");
   }
 }
 void __aeabi_ldiv0(int r) {
+  printf("__aeabi_idiv0()!\n");
   while (1) {
-    printf("__aeabi_idiv0()!\n");
   }
 }
 
@@ -77,17 +78,10 @@ void init(int w, int h) {
   }
 }
 
-struct ZZ9K_ENV {
-  uint32_t api_version;
-  uint32_t argv[8];
-  uint32_t argc;
-  int (*fn_putchar)(char);
-};
-
 struct ZZ9K_ENV* _zz9k_env;
 
 void _putchar(char c) {
-  _zz9k_env->fn_putchar(c);
+  _zz9k_env->putchar(c);
 };
 
 int did_init = 0;
