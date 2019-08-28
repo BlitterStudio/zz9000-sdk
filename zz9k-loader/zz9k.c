@@ -142,6 +142,12 @@ void cleanup() {
   }
 }
 
+void reset_arm() { 
+  // reset application ARM core
+  regs->arm_run_hi = 0;
+  regs->arm_run_lo = 0x100;
+}
+
 int is_hex(char* str) {
   if (strlen(str)>2 && str[0]=='0' && str[1]=='x') {
     return 1;
@@ -152,9 +158,7 @@ int is_hex(char* str) {
 int main(int argc, char** argv) {
   struct ConfigDev* cd = NULL;
   uint8_t* memory;
-  uint16_t fw;
   uint32_t load_offset = 0;
-  uint32_t audio_offset = 0;
   char* load_filename = NULL;
   int load_mode = 0;
   int run_mode = 0;
@@ -225,14 +229,15 @@ int main(int argc, char** argv) {
             arm_args[arm_argc++] = strtoul(&argv[i][2], NULL, 16);
           } else if (argv[i][0] == '!') {
             // special variable
-            if (placeholders>4) {
+            if (placeholders>3) {
               printf("Too many special variables (maximum 4).\n");
               syntax_ok = 0;
               break;
+            } else {
+              placeholder_argi[placeholders]=i;
+              placeholder_arm_argi[placeholders]=arm_argc++;
+              placeholders++;
             }
-            placeholder_argi[placeholders]=i;
-            placeholder_arm_argi[placeholders]=arm_argc++;
-            placeholders++;
           } else {
             // decimal arg
             arm_args[arm_argc++] = strtoul(argv[i], NULL, 10);
@@ -301,9 +306,7 @@ int main(int argc, char** argv) {
   regs = (volatile MNTZZ9KRegs*)(cd->cd_BoardAddr);
   
   if (stop_mode) {
-    // reset application ARM core
-    regs->arm_run_hi = 0;
-    regs->arm_run_lo = 0;
+    reset_arm();
     printf("ARM core reset.\n");
     exit(0);
   }
@@ -314,17 +317,17 @@ int main(int argc, char** argv) {
     uint8_t* dest = memory + ZZ9K_APP_SPACE - ZZ9K_MEM_START + load_offset;
 
     if (verbose_mode) {
-      printf("Loading '%s' to ARM address 0x%lx (Amiga address 0x%lx)\n", argv[2], ZZ9K_APP_SPACE + load_offset, dest);
+      printf("Loading '%s' to ARM address 0x%lx (Amiga address 0x%lx)\n", argv[2], ZZ9K_APP_SPACE + load_offset, (uint32_t)dest);
     }
 
-    FILE* f = fopen(argv[2],"rb");
+    FILE* f = fopen(load_filename, "rb");
     if (f) {
       fseek(f, 0, SEEK_END);
       long fsize = ftell(f);
       fseek(f, 0, SEEK_SET);
       size_t bytes_read = fread(dest, 1, fsize, f);
       fclose(f);
-      printf("%lx\n",bytes_read);
+      printf("%lx\n",(uint32_t)bytes_read);
     } else {
       printf("0\n");
     }
@@ -336,13 +339,13 @@ int main(int argc, char** argv) {
     // TODO encapsulate all this audio junk
     char* audio_buf = NULL;
     const int audio_bufsz = 16000;
-    uint32_t t = 0;
+    uint32_t audio_offset = 0;
     uint32_t chipoffset = 0;
     const uint32_t chunksz = 48000*2;
     char audio_devopened;
     struct MsgPort *audio_port;
     struct IOAudio *aio[1];
-    volatile int16_t* src;
+    volatile int16_t* src = NULL;
 
     if (screen_mode) {
       open_screen(screen_w, screen_h);
@@ -415,6 +418,7 @@ int main(int argc, char** argv) {
       
       if (!audio_buf) {
         printf("Error: allocating chipmem failed.\n");
+        exit(5);
       } else {
         memset(audio_buf,0,audio_bufsz);
       }
@@ -423,7 +427,7 @@ int main(int argc, char** argv) {
     // pass ARM app arguments
     for (int i=0; i<arm_argc; i++) {
       if (verbose_mode) {
-        printf("ARM arg%d: %ld (%lx)\n", i, arm_args[i], arm_args[i]);
+        printf("ARM arg%d: %lu (%lx)\n", i, arm_args[i], arm_args[i]);
       }
       
       regs->arm_arg[i*2]   = arm_args[i]>>16;
@@ -509,9 +513,7 @@ int main(int argc, char** argv) {
     }
 
     // done running
-    // reset application ARM core
-    regs->arm_run_hi = 0;
-    regs->arm_run_lo = 0;
+    reset_arm();
     if (verbose_mode) {
       printf("ARM core reset.\n");
     }
