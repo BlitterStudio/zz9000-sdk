@@ -1,5 +1,11 @@
 build
 *.lha
 *.o
-conway/conway
+*.bin
+examples/vector/vector
+examples/conway/conway
+examples/blur/blur
+examples/shell/shell
+examples/nanojpeg/nanojpeg
+
 
