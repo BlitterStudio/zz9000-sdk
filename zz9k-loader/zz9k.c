@@ -101,7 +101,7 @@ __saveds struct InputEvent *input_handler(__reg("a0") struct InputEvent *ielist,
     }
     
     ie = ie->ie_NextEvent;
-	}
+  }
   
   return (ielist);
 }
