@@ -124,8 +124,6 @@ int setup_input() {
   if (!input_dev_open) {
     printf("Error: Could not open input.device.\n");
   } else {
-    ULONG sigs;
-
     input_irq_handler->is_Code = (APTR)input_handler;
     input_irq_handler->is_Data = (APTR)input_port;
     input_irq_handler->is_Node.ln_Name = "";
