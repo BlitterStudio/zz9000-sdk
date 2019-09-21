@@ -7,4 +7,4 @@ REM 3) The CyberGraphX DevKit extracted in D:\vbcc\cybergraphics
 REM 
 REM Please adapt the script accordingly if your environment is different
 REM 
-vc +aos68k -I"D:\vbcc\cybergraphics\include" -o .\zz9k .\zz9k.c -lamiga -lauto
+vc +aos68k -I"D:\vbcc\cybergraphics\include" -c99 -O2 -o .\zz9k .\zz9k.c -lamiga -lauto
