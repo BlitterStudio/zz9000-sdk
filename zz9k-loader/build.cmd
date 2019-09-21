@@ -8,3 +8,6 @@ REM
 REM Please adapt the script accordingly if your environment is different
 REM 
 vc +aos68k -I"D:\vbcc\P96\Include" -c99 -O2 -o .\zz9k .\zz9k.c -lamiga -lauto
+
+del zz9k.lha
+lha a zz9k.lha zz9k

@@ -21,6 +21,19 @@
             }
         },
         {
+            "label": "LHA Pack",
+            "type": "shell",
+            "windows": {
+                "command": "lha a zz9k.lha zz9k"
+            },
+            "osx": {
+                "command": "lha a zz9k.lha zz9k"
+            },
+            "linux": {
+                "command": "lha a zz9k.lha zz9k"
+            }
+        },
+        {
             "label": "Clean",
             "type": "shell",
             "windows": {
