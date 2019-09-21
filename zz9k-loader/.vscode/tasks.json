@@ -7,13 +7,13 @@
             "label": "Build",
             "type": "shell",
             "windows": {
-                "command": "vc +aos68k -ID:/vbcc/cybergraphics/include -o ./zz9k ./zz9k.c -c99 -lamiga -lauto"
+                "command": "vc +aos68k -ID:/vbcc/cybergraphics/include -c99 -O2 -o ./zz9k ./zz9k.c -lamiga -lauto"
             },
             "osx": {
-                "command": "vc +aos68k -I/opt/vbcc/cybergraphics/include -o ./zz9k ./zz9k.c -c99 -lamiga -lauto"
+                "command": "vc +aos68k -I/opt/vbcc/cybergraphics/include -c99 -O2 -o ./zz9k ./zz9k.c -lamiga -lauto"
             },
             "linux": {
-                "command": "vc +aos68k -I/opt/vbcc/cybergraphics/include -o ./zz9k ./zz9k.c -c99 -lamiga -lauto"
+                "command": "vc +aos68k -I/opt/vbcc/cybergraphics/include -c99 -O2 -o ./zz9k ./zz9k.c -lamiga -lauto"
             },
             "group": {
                 "kind": "build",
@@ -24,7 +24,7 @@
             "label": "Clean",
             "type": "shell",
             "windows": {
-                "command": "del .\\zz9k"
+                "command": "del ./zz9k"
             },
             "osx": {
                 "command": "rm ./zz9k"
