@@ -48,21 +48,21 @@ In the `zz9k-loader` directory, you can find sources for the `zz9k` CLI tool tha
 
 ```
 zz9k load conway.bin
-zz9k -320x240 !screen !width
+zz9k run -320x240 !screen !width
 ```
 
 ## Vector
 
 ```
 zz9k load vector.bin
-zz9k -320x240 !screen !width
+zz9k run -320x240 !screen !width
 ```
 
 ## Raytrace
 
 ```
 zz9k load raytrace.bin
-zz9k -320x240 !screen !width
+zz9k run -320x240 !screen !width
 ```
 
 # Third Party Code
