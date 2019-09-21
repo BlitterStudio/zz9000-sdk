@@ -1,0 +1,37 @@
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks.json format
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build",
+            "type": "shell",
+            "windows": {
+                "command": "vc +aos68k -ID:\\vbcc\\cybergraphics\\include -o .\\zz9k .\\zz9k.c -lamiga -lauto"
+            },
+            "osx": {
+                "command": "vc +aos68k -I/opt/vbcc/cybergraphics/include -o ./zz9k ./zz9k.c -lamiga -lauto"
+            },
+            "linux": {
+                "command": "vc +aos68k -I/opt/vbcc/cybergraphics/include -o ./zz9k ./zz9k.c -lamiga -lauto"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "Clean",
+            "type": "shell",
+            "windows": {
+                "command": "del .\\zz9k"
+            },
+            "osx": {
+                "command": "rm ./zz9k"
+            },
+            "linux": {
+                "command": "rm ./zz9k"
+            }
+        }
+    ]
+}
