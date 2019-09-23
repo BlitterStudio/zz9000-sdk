@@ -29,8 +29,7 @@
 
 #include <proto/intuition.h>
 #include <intuition/screens.h>
-#include <cybergraphx/cybergraphics.h>
-#include <proto/cybergraphics.h>
+#include <proto/Picasso96.h>
 #include <devices/audio.h>
 #include <devices/input.h>
 #include <exec/ports.h>
@@ -54,25 +53,26 @@ volatile MNTZZ9KRegs* regs;
 struct Screen* zz9k_screen;
 
 void open_screen(int w, int h) {
-  uint32_t bmid=BestCModeIDTags(CYBRBIDTG_NominalWidth, w,
-                                CYBRBIDTG_NominalHeight, h,
-                                CYBRBIDTG_Depth, 24,
-                                TAG_DONE);
-
-  //printf("Mode ID: %lx\n", bmid);
-  
-  zz9k_screen = OpenScreenTags(NULL,
+  ULONG DisplayID;
+  if (DisplayID = p96BestModeIDTags(P96BIDTAG_NominalWidth, w,
+                                    P96BIDTAG_NominalHeight, h,
+                                    P96BIDTAG_Depth, 24,
+                                    TAG_DONE)) {
+    //printf("Mode ID: %lx\n", DisplayID);
+    if (DisplayID != INVALID_ID) { 
+      zz9k_screen = OpenScreenTags(NULL,
                                SA_Title,"ZZ9000 ARM Application",
-                               SA_DisplayID, bmid,
+                               SA_DisplayID, DisplayID,
                                SA_Depth, 24,
                                TAG_DONE);
 
-  /*printf("Planes[0]: %p\n", zz9k_screen->BitMap.Planes[0]);
-  printf("BytesPerRow: %d\n", zz9k_screen->BitMap.BytesPerRow);
-  printf("Rows: %d\n", zz9k_screen->BitMap.Rows);
-  printf("Depth: %d\n", zz9k_screen->BitMap.Depth);*/
+    /*printf("Planes[0]: %p\n", zz9k_screen->BitMap.Planes[0]);
+    printf("BytesPerRow: %d\n", zz9k_screen->BitMap.BytesPerRow);
+    printf("Rows: %d\n", zz9k_screen->BitMap.Rows);
+    printf("Depth: %d\n", zz9k_screen->BitMap.Depth);*/
+    }
+  }
 }
-
 __saveds struct InputEvent *input_handler(__reg("a0") struct InputEvent *ielist, __reg("a1") struct MsgPort *port) {
   struct InputEvent *ie, *prev;
 

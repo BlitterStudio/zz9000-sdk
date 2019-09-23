@@ -7,17 +7,30 @@
             "label": "Build",
             "type": "shell",
             "windows": {
-                "command": "vc +aos68k -ID:/vbcc/cybergraphics/include -c99 -O2 -o ./zz9k ./zz9k.c -lamiga -lauto"
+                "command": "vc +aos68k -ID:/vbcc/P96/Include -c99 -O2 -o ./zz9k ./zz9k.c -lamiga -lauto"
             },
             "osx": {
-                "command": "vc +aos68k -I/opt/vbcc/cybergraphics/include -c99 -O2 -o ./zz9k ./zz9k.c -lamiga -lauto"
+                "command": "vc +aos68k -I/opt/vbcc/P96/Include -c99 -O2 -o ./zz9k ./zz9k.c -lamiga -lauto"
             },
             "linux": {
-                "command": "vc +aos68k -I/opt/vbcc/cybergraphics/include -c99 -O2 -o ./zz9k ./zz9k.c -lamiga -lauto"
+                "command": "vc +aos68k -I/opt/vbcc/P96/Include -c99 -O2 -o ./zz9k ./zz9k.c -lamiga -lauto"
             },
             "group": {
                 "kind": "build",
                 "isDefault": true
+            }
+        },
+        {
+            "label": "LHA Pack",
+            "type": "shell",
+            "windows": {
+                "command": "lha a zz9k.lha zz9k"
+            },
+            "osx": {
+                "command": "lha a zz9k.lha zz9k"
+            },
+            "linux": {
+                "command": "lha a zz9k.lha zz9k"
             }
         },
         {

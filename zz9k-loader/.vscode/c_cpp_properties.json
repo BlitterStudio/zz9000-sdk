@@ -6,6 +6,7 @@
                 "${workspaceFolder}/**",
                 "${VBCC}/targets/m68k-amigaos/include",
                 "${VBCC}/ndk39/include/include_h",
+                "${VBCC}/P96/Include",
                 "${VBCC}/cybergraphics/include"
             ],
             "defines": [],
