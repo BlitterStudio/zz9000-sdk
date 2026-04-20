@@ -2,10 +2,10 @@ build
 *.lha
 *.o
 *.bin
+.DS_Store
 examples/vector/vector
 examples/conway/conway
 examples/blur/blur
 examples/shell/shell
 examples/nanojpeg/nanojpeg
-
 
