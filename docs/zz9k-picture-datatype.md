@@ -2,8 +2,9 @@
 
 Copyright (C) 2024-2026, Dimitris Panokostas / BlitterStudio
 
-`zz9k-picture.datatype` is packaged as a side-by-side subclass of the system
-`picture.datatype`. It must not replace `Classes/DataTypes/picture.datatype`.
+`zz9k-picture.datatype 42.139` is the validated SDK v2 DataType candidate for
+the current package. It is packaged as a side-by-side subclass of the system
+`picture.datatype` and must not replace `Classes/DataTypes/picture.datatype`.
 
 The class binary installs as:
 
@@ -11,7 +12,8 @@ The class binary installs as:
 Classes/DataTypes/zz9k-picture.datatype
 ```
 
-The JPEG and PNG recognition descriptors are currently packaged inactive under:
+The JPEG and PNG recognition descriptors are packaged inactive under `Storage/DataTypes`
+so activation is an explicit install step:
 
 ```text
 Storage/DataTypes/ZZ9000-JPEG
@@ -20,8 +22,8 @@ Storage/DataTypes/ZZ9000-PNG
 Storage/DataTypes/ZZ9000-PNG.info
 ```
 
-For hardware testing, install the class and temporarily activate the packaged
-descriptors:
+To activate the validated DataType path on a test or release-install system,
+install the class and copy the descriptors into `DEVS:DataTypes`:
 
 ```text
 copy Classes/DataTypes/zz9k-picture.datatype TO SYS:Classes/DataTypes/
@@ -33,9 +35,10 @@ AddDataTypes LIST
 ```
 
 `AddDataTypes LIST` should show `ZZ9000-JPEG` and `ZZ9000-PNG` before
-MultiView is expected to route matching files to `zz9k-picture.datatype`.
-Until hardware validation is finished, keeping them in `Storage:DataTypes`
-avoids routing normal JPEG/PNG application loads to the unvalidated class path.
+MultiView or browser clients are expected to route matching files to
+`zz9k-picture.datatype`. Keeping the descriptors in `Storage/DataTypes` by
+default prevents accidental global routing on systems that only want the SDK
+tools or manual smoke tests.
 
 The package also includes `C:zz9k-dtprobe` for isolating DataTypes failures:
 

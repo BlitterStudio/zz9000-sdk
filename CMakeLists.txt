@@ -839,6 +839,16 @@ add_test(
           ${CMAKE_CURRENT_SOURCE_DIR}/tools/zz9k-image-window.c
 )
 
+add_executable(picture_datatype_doc_test
+  tests/picture_datatype_doc_test.c
+)
+
+add_test(
+  NAME picture_datatype_doc_test
+  COMMAND picture_datatype_doc_test
+          ${CMAKE_CURRENT_SOURCE_DIR}/docs/zz9k-picture-datatype.md
+)
+
 add_executable(datatype_probe_source_test
   tests/datatype_probe_source_test.c
 )
