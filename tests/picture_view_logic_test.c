@@ -229,6 +229,8 @@ int main(int argc, char **argv)
 	ok &= expect_contains(source, "zz9k_image_window_poll_event");
 	ok &= expect_contains(source, "zz9k_picture_viewer_render_image");
 	ok &= expect_contains(source, "zz9k_image_window_set_title");
+	ok &= expect_contains(source, "zz9k_view_format_window_title");
+	ok &= expect_contains(source, "ZZ9000 View %lu/%lu %s");
 
 	free(source);
 	if (!ok)

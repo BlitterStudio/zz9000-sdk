@@ -157,6 +157,38 @@ static int zz9k_view_decode_image(ZZ9KContext *ctx,
 	return 0;
 }
 
+static int zz9k_view_format_window_title(
+	char *title,
+	size_t title_capacity,
+	uint32_t index,
+	uint32_t count,
+	const ZZ9KPictureViewerImage *image)
+{
+	const char *codec;
+	const char *base;
+	int needed;
+
+	if (!title || title_capacity == 0U || !image)
+		return 0;
+	if (zz9k_picture_viewer_format_title(
+		    title, title_capacity, index + 1U, count, image)) {
+		return 1;
+	}
+
+	codec = zz9k_picture_viewer_codec_name(image->codec);
+	base = zz9k_picture_viewer_basename(image->path);
+	needed = snprintf(title, title_capacity, "ZZ9000 View %lu/%lu %s - %s",
+	                  (unsigned long)(index + 1U),
+	                  (unsigned long)count, codec, base);
+	if (needed > 0 && (size_t)needed < title_capacity)
+		return 1;
+
+	needed = snprintf(title, title_capacity, "ZZ9000 View %lu/%lu %s",
+	                  (unsigned long)(index + 1U),
+	                  (unsigned long)count, codec);
+	return needed > 0 && (size_t)needed < title_capacity;
+}
+
 static int zz9k_view_present_image(ZZ9KContext *ctx,
                                    const ZZ9KSurface *framebuffer,
                                    ZZ9KImageWindow *ui,
@@ -167,8 +199,8 @@ static int zz9k_view_present_image(ZZ9KContext *ctx,
 	char title[160];
 	int status;
 
-	if (!zz9k_picture_viewer_format_title(
-		    title, sizeof(title), index + 1U, count, image)) {
+	if (!zz9k_view_format_window_title(
+		    title, sizeof(title), index, count, image)) {
 		printf("zz9k-view: could not format window title for '%s'\n",
 		       image && image->path ? image->path : "");
 		return 0;
