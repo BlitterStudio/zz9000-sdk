@@ -45,6 +45,8 @@ The package is written to `build/package/amigaos3`. It contains:
   `zz9k-surfaceops`, `zz9k-mp3`, `zz9k-mpega-smoke`, `zz9k-jpeg`, `zz9k-png`,
   `zz9k-view`, `zz9k-hash`, `zz9k-chacha`, `zz9k-aead`, and
   archive/decompression tools
+- `Classes/DataTypes/zz9k-picture.datatype` plus JPEG/PNG descriptors packaged
+  inactive under `Storage/DataTypes` for explicit opt-in activation
 - developer headers under `Developer/Include`
 - public docs under `Docs`
 - examples under `Examples`
