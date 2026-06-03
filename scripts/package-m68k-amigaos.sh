@@ -165,6 +165,7 @@ copy_one "README.md" "Docs/README.md"
 copy_one "docs/zz9k-library.md" "Docs/zz9k-library.md"
 copy_one "docs/zz9k-modules.md" "Docs/zz9k-modules.md"
 copy_one "docs/zz9k-picture-datatype.md" "Docs/zz9k-picture-datatype.md"
+copy_one "docs/zz9k-release-smoke.md" "Docs/zz9k-release-smoke.md"
 copy_one "examples/amiga-library/zz9k-library-demo.c" \
   "Examples/zz9k-library-demo.c"
 copy_one "examples/amiga-jpeg-stream/zz9k-jpeg-stream-demo.c" \

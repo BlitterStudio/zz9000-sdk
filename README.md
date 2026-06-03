@@ -58,6 +58,8 @@ zz9k-services --check-release
 ```
 
 The command should end with `release check ok`.
+For a broader package-level runtime pass, follow
+[`docs/zz9k-release-smoke.md`](docs/zz9k-release-smoke.md).
 
 For most application-side helper code, include `zz9k/sdk.h`; it pulls in the
 stable SDK v2 ABI, host/request/reply types, and helper headers. Include

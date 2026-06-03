@@ -150,6 +150,7 @@ Copy-One "README.md" "Docs/README.md"
 Copy-One "docs/zz9k-library.md" "Docs/zz9k-library.md"
 Copy-One "docs/zz9k-modules.md" "Docs/zz9k-modules.md"
 Copy-One "docs/zz9k-picture-datatype.md" "Docs/zz9k-picture-datatype.md"
+Copy-One "docs/zz9k-release-smoke.md" "Docs/zz9k-release-smoke.md"
 Copy-One "examples/amiga-library/zz9k-library-demo.c" `
   "Examples/zz9k-library-demo.c"
 Copy-One "examples/amiga-jpeg-stream/zz9k-jpeg-stream-demo.c" `

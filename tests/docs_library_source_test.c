@@ -88,6 +88,8 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "#define ZZ9K_LIBRARY_REVISION 22");
   ok &= expect_contains(source, "zz9k-services --check-release");
   ok &= expect_contains(source, "release check ok");
+  ok &= expect_contains(source, "zz9k-release-smoke.md");
+  ok &= expect_contains(source, "package-level runtime smoke pass");
   ok &= expect_contains(source, "SDK v2 is paired with the new SDK-service firmware");
   ok &= expect_contains(source, "pre-service firmware");
   ok &= expect_contains(source, "not a supported runtime");

@@ -157,6 +157,8 @@ static int check_script(const char *path, const char *name)
   ok &= expect_contains(script, name, "docs/zz9k-library.md");
   ok &= expect_contains(script, name, "docs/zz9k-modules.md");
   ok &= expect_contains(script, name, "docs/zz9k-picture-datatype.md");
+  ok &= expect_contains(script, name, "docs/zz9k-release-smoke.md");
+  ok &= expect_contains(script, name, "Docs/zz9k-release-smoke.md");
   ok &= expect_contains(script, name,
                         "examples/amiga-jpeg-stream/"
                         "zz9k-jpeg-stream-demo.c");

@@ -128,6 +128,11 @@ current release contract. A matching firmware ends with:
 release check ok
 ```
 
+For the broader package-level runtime smoke pass, use
+[`zz9k-release-smoke.md`](zz9k-release-smoke.md). It groups the shipped tools
+by service family and records the expected pass signal and failure routing for
+each check.
+
 Compression helpers live in `zz9k/compression.h`. They build the low-level
 shared-buffer descriptors used by archive and datatype tools without turning
 the SDK into an archive parser.

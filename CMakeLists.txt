@@ -311,6 +311,16 @@ add_test(
           ${CMAKE_CURRENT_SOURCE_DIR}/docs/zz9k-library.md
 )
 
+add_executable(release_smoke_doc_test
+  tests/release_smoke_doc_test.c
+)
+
+add_test(
+  NAME release_smoke_doc_test
+  COMMAND release_smoke_doc_test
+          ${CMAKE_CURRENT_SOURCE_DIR}/docs/zz9k-release-smoke.md
+)
+
 add_executable(amiga_library_metadata_test
   tests/amiga_library_metadata_test.c
 )
