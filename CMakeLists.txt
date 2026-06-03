@@ -817,6 +817,7 @@ target_include_directories(jpeg_tool_logic_test
 target_link_libraries(jpeg_tool_logic_test PRIVATE zz9k_host)
 target_link_libraries(jpeg_tool_logic_test PRIVATE zz9k_fb_common)
 target_link_libraries(jpeg_tool_logic_test PRIVATE zz9k_image_window)
+target_link_libraries(jpeg_tool_logic_test PRIVATE zz9k_picture_viewer)
 add_test(NAME jpeg_tool_logic_test COMMAND jpeg_tool_logic_test)
 
 add_executable(png_tool_logic_test

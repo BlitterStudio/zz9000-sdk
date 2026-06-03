@@ -2212,6 +2212,12 @@ int zz9k_jpeg_decode_viewer_image(ZZ9KContext *ctx,
 	input.fit_framebuffer = 1;
 	input.prefer_surface_backup = 1;
 
+	if (!zz9k_jpeg_require_stream_service(ctx, 1, 1)) {
+		printf("zz9k-view: JPEG stream surface/scaling service is "
+		       "not available\n");
+		goto cleanup;
+	}
+
 	status = zz9k_alloc_shared(ctx, ZZ9K_JPEG_STAGING_BYTES, 16U, 0,
 	                          &staging);
 	if (status != ZZ9K_STATUS_OK) {
@@ -2303,9 +2309,8 @@ int zz9k_jpeg_decode_viewer_image(ZZ9KContext *ctx,
 		       (unsigned long)result.output_format);
 		goto cleanup;
 	}
-	if (result.tile_width == 0U || result.tile_height == 0U ||
-	    result.tile_width > decoded_surface.width ||
-	    result.tile_height > decoded_surface.height) {
+	if (result.tile_width != decode_width ||
+	    result.tile_height != decode_height) {
 		printf("zz9k-view: unexpected JPEG surface output %lu x %lu "
 		       "for surface %lu x %lu\n",
 		       (unsigned long)result.tile_width,
@@ -2316,7 +2321,7 @@ int zz9k_jpeg_decode_viewer_image(ZZ9KContext *ctx,
 	}
 	output_width = result.tile_width;
 	output_height = result.tile_height;
-	if (!zz9k_surface_layout(output_width, output_height, output_format,
+	if (!zz9k_surface_layout(decode_width, decode_height, output_format,
 	                         &expected_output_pitch,
 	                         &expected_output_bytes)) {
 		printf("zz9k-view: JPEG decoded output is too large\n");
