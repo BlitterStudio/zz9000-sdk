@@ -6,6 +6,7 @@
 
 #include "zz9k-fb-common.h"
 #include "zz9k-image-window.h"
+#include "zz9k-png-view.h"
 #include "zz9k/caps.h"
 #include "zz9k/host.h"
 #include "zz9k/image.h"
@@ -1624,6 +1625,184 @@ cleanup:
 	if (staging_allocated)
 		zz9k_free_shared(ctx, staging.handle);
 	return rc;
+}
+
+int zz9k_png_decode_viewer_image(ZZ9KContext *ctx,
+                                 const ZZ9KSurface *framebuffer,
+                                 const char *path,
+                                 ZZ9KPictureViewerImage *image)
+{
+	ZZ9KPngInput input;
+	ZZ9KSharedBuffer staging;
+	ZZ9KSurface surface;
+	ZZ9KImageSessionBeginDesc begin;
+	ZZ9KImageSessionResult result;
+	ZZ9KRect output_rect;
+	FILE *file = 0;
+	uint32_t output_format = 0U;
+	uint32_t output_pitch = 0U;
+	uint32_t expected_output_bytes = 0U;
+	uint32_t session = 0U;
+	int staging_allocated = 0;
+	int surface_allocated = 0;
+	int session_open = 0;
+	int stopped = 0;
+	int success = 0;
+	int status;
+
+	if (!image) {
+		printf("zz9k-view: missing PNG viewer image output\n");
+		return 0;
+	}
+	zz9k_picture_viewer_image_init(image);
+
+	if (!ctx || !framebuffer || !path || path[0] == '\0' ||
+	    framebuffer->width == 0U || framebuffer->height == 0U) {
+		printf("zz9k-view: invalid PNG viewer decode request\n");
+		return 0;
+	}
+
+	output_format = framebuffer->format;
+	if (!zz9k_surface_is_native_rtg_format(output_format)) {
+		printf("zz9k-view: framebuffer is not native RTG "
+		       "(framebuffer %lu x %lu format=%lu)\n",
+		       (unsigned long)framebuffer->width,
+		       (unsigned long)framebuffer->height,
+		       (unsigned long)framebuffer->format);
+		return 0;
+	}
+
+	memset(&input, 0, sizeof(input));
+	memset(&staging, 0, sizeof(staging));
+	memset(&surface, 0, sizeof(surface));
+	memset(&begin, 0, sizeof(begin));
+	memset(&result, 0, sizeof(result));
+
+	if (!zz9k_png_load_file(path, &input)) {
+		printf("zz9k-view: failed to load PNG metadata for '%s'\n", path);
+		goto cleanup;
+	}
+	input.hold_ticks = ZZ9K_PNG_DEFAULT_FRAMEBUFFER_HOLD_TICKS;
+	input.chunk_bytes = ZZ9K_PNG_DEFAULT_CHUNK_BYTES;
+	input.restore_framebuffer = 0;
+
+	if (!zz9k_png_require_stream_service(ctx, 0)) {
+		printf("zz9k-view: PNG stream surface service is not available\n");
+		goto cleanup;
+	}
+
+	status = zz9k_alloc_shared(ctx, ZZ9K_PNG_STAGING_BYTES, 16U, 0U,
+	                           &staging);
+	if (status != ZZ9K_STATUS_OK) {
+		printf("zz9k-view: PNG staging alloc failed: %s (%d)\n",
+		       zz9k_status_name(status), status);
+		goto cleanup;
+	}
+	staging_allocated = 1;
+
+	if (!zz9k_surface_layout(input.width, input.height, output_format,
+	                         &output_pitch, &expected_output_bytes)) {
+		printf("zz9k-view: PNG output is too large\n");
+		goto cleanup;
+	}
+	status = zz9k_alloc_surface_ex(ctx, input.width, input.height,
+	                               output_format,
+	                               ZZ9K_SURFACE_FLAG_ARM_LOCAL,
+	                               output_pitch, &surface);
+	if (status != ZZ9K_STATUS_OK) {
+		printf("zz9k-view: PNG decode surface alloc failed: %s (%d)\n",
+		       zz9k_status_name(status), status);
+		goto cleanup;
+	}
+	surface_allocated = 1;
+
+	output_rect.x = 0U;
+	output_rect.y = 0U;
+	output_rect.w = input.width;
+	output_rect.h = input.height;
+	if (!zz9k_image_build_surface_session_begin_desc(
+		    &begin, ZZ9K_IMAGE_CODEC_PNG, surface.handle,
+		    &output_rect, output_format, 0U)) {
+		printf("zz9k-view: could not build PNG stream begin descriptor\n");
+		goto cleanup;
+	}
+
+	status = zz9k_image_session_begin(ctx, &begin, &result);
+	if (status != ZZ9K_STATUS_OK) {
+		printf("zz9k-view: PNG stream begin failed: %s (%d)\n",
+		       zz9k_status_name(status), status);
+		goto cleanup;
+	}
+	session = result.session;
+	session_open = 1;
+	if (session == 0U ||
+	    result.state != ZZ9K_IMAGE_SESSION_STATE_NEED_INPUT) {
+		printf("zz9k-view: unexpected PNG stream begin result\n");
+		goto cleanup;
+	}
+
+	file = fopen(path, "rb");
+	if (!file) {
+		printf("zz9k-view: failed to open '%s'\n", path);
+		goto cleanup;
+	}
+	if (!zz9k_png_feed_stream(ctx, file, &input, &staging, session,
+	                          &result, &stopped)) {
+		printf("zz9k-view: PNG stream feed failed for '%s'\n", path);
+		goto cleanup;
+	}
+	if (stopped) {
+		printf("zz9k-view: PNG stream stopped before completion\n");
+		goto cleanup;
+	}
+
+	if (result.image_width != input.width ||
+	    result.image_height != input.height ||
+	    result.output_format != output_format ||
+	    result.tile_width != input.width ||
+	    result.tile_height != input.height ||
+	    result.bytes_written != expected_output_bytes) {
+		printf("zz9k-view: unexpected PNG stream result %lu x %lu -> "
+		       "%lu x %lu format=%lu bytes=%lu expected=%lu\n",
+		       (unsigned long)result.image_width,
+		       (unsigned long)result.image_height,
+		       (unsigned long)result.tile_width,
+		       (unsigned long)result.tile_height,
+		       (unsigned long)result.output_format,
+		       (unsigned long)result.bytes_written,
+		       (unsigned long)expected_output_bytes);
+		goto cleanup;
+	}
+
+	success = 1;
+
+cleanup:
+	if (file)
+		fclose(file);
+	if (session_open) {
+		status = zz9k_image_session_close(ctx, session, 0U);
+		if (status != ZZ9K_STATUS_OK) {
+			printf("zz9k-view: PNG stream close failed: %s (%d)\n",
+			       zz9k_status_name(status), status);
+			success = 0;
+		}
+	}
+	if (success) {
+		image->codec = ZZ9K_PICTURE_VIEWER_CODEC_PNG;
+		image->path = path;
+		image->width = input.width;
+		image->height = input.height;
+		image->surface = surface;
+		image->surface_allocated = 1;
+		surface_allocated = 0;
+	}
+	if (surface_allocated)
+		zz9k_free_surface(ctx, surface.handle);
+	if (staging_allocated)
+		zz9k_free_shared(ctx, staging.handle);
+	if (!success)
+		zz9k_picture_viewer_image_init(image);
+	return success;
 }
 
 #ifndef ZZ9K_PNG_NO_MAIN

@@ -833,6 +833,7 @@ target_include_directories(png_tool_logic_test
 target_link_libraries(png_tool_logic_test PRIVATE zz9k_host)
 target_link_libraries(png_tool_logic_test PRIVATE zz9k_fb_common)
 target_link_libraries(png_tool_logic_test PRIVATE zz9k_image_window)
+target_link_libraries(png_tool_logic_test PRIVATE zz9k_picture_viewer)
 add_test(NAME png_tool_logic_test COMMAND png_tool_logic_test)
 
 add_executable(picture_view_logic_test
@@ -1044,7 +1045,15 @@ add_executable(zz9k_png
   tools/zz9k-png.c
 )
 
-target_link_libraries(zz9k_png PRIVATE zz9k_host zz9k_fb_common zz9k_image_window)
+target_link_libraries(zz9k_png PRIVATE zz9k_host zz9k_fb_common zz9k_image_window zz9k_picture_viewer)
+
+add_library(zz9k_png_view_backend STATIC
+  tools/zz9k-png.c
+)
+
+target_compile_definitions(zz9k_png_view_backend PRIVATE ZZ9K_PNG_NO_MAIN=1)
+
+target_link_libraries(zz9k_png_view_backend PUBLIC zz9k_host zz9k_fb_common zz9k_image_window zz9k_picture_viewer)
 
 add_executable(zz9k_view
   tools/zz9k-view.c

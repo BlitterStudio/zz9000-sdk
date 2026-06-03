@@ -84,6 +84,7 @@ int main(int argc, char **argv)
 	ok = 1;
 	ok &= expect_contains(source, "#include \"zz9k/image.h\"");
 	ok &= expect_contains(source, "#include \"zz9k/surface.h\"");
+	ok &= expect_contains(source, "#include \"zz9k-png-view.h\"");
 	ok &= expect_contains(source, "zz9k_image_stream_required_service_flags");
 	ok &= expect_contains(source, "zz9k_image_service_supports_clipped_scale");
 	ok &= expect_contains(source, "zz9k_image_window_visible_clips");
@@ -97,6 +98,9 @@ int main(int argc, char **argv)
 	                      "zz9k_surface_layout(png_input->width, png_input->height,");
 	ok &= expect_contains(source, "output_pitch");
 	ok &= expect_contains(source, "result.output_format != output_format");
+	ok &= expect_contains(source, "zz9k_png_decode_viewer_image");
+	ok &= expect_contains(source, "ZZ9KPictureViewerImage");
+	ok &= expect_contains(source, "ZZ9K_PICTURE_VIEWER_CODEC_PNG");
 	ok &= expect_not_contains(source, "zz9k_png_output_bytes");
 	ok &= expect_not_contains(source, "uint32_t bytes_per_pixel");
 	ok &= expect_not_contains(source, "ZZ9K_SURFACE_FORMAT_BGRA8888");

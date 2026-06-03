@@ -120,6 +120,9 @@ static int check_script(const char *path, const char *name)
   ok &= expect_contains(script, name, "tools/zz9k-picture-viewer.c");
   ok &= expect_contains(script, name, "build/m68k/zz9k-picture-viewer.o");
   ok &= expect_contains(script, name, "tools/zz9k-jpeg.c");
+  ok &= expect_contains(script, name,
+                        "build/m68k/zz9k-picture-viewer.o "
+                        "tools/zz9k-png.c");
   ok &= expect_contains(script, name, "tools/zz9k-png.c");
   ok &= expect_contains(script, name, "tools/zz9k-view.c");
   ok &= expect_contains(script, name, "tools/zz9k-dtprobe.c");
