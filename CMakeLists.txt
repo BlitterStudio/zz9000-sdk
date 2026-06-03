@@ -40,6 +40,19 @@ target_include_directories(zz9k_image_window
 
 target_link_libraries(zz9k_image_window PUBLIC zz9k_host)
 
+add_library(zz9k_picture_viewer STATIC
+  tools/zz9k-picture-viewer.c
+)
+
+target_include_directories(zz9k_picture_viewer
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/host/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools
+)
+
+target_link_libraries(zz9k_picture_viewer PUBLIC zz9k_host zz9k_image_window)
+
 add_library(zz9k_lha_unix STATIC
   tools/lha-unix/bitio.c
   tools/lha-unix/crcio.c
@@ -824,6 +837,15 @@ add_test(NAME png_tool_logic_test COMMAND png_tool_logic_test)
 add_executable(picture_view_logic_test
   tests/picture_view_logic_test.c
 )
+
+target_include_directories(picture_view_logic_test
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/host/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools
+)
+
+target_link_libraries(picture_view_logic_test PRIVATE zz9k_picture_viewer)
 
 add_test(NAME picture_view_logic_test COMMAND picture_view_logic_test)
 
