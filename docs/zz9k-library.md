@@ -695,9 +695,9 @@ This is deliberately a decompression primitive, not a ZIP, LHA, or full 7z parse
 CLI tools and datatypes should parse archive/container metadata on the Amiga
 side, then offload the expensive raw deflate, zlib, gzip, LZ4 block,
 LZMA-alone, or LZMA2 payload work to the ARM side when firmware advertises the
-matching `ZZ9K_SERVICE_CODEC` flags. This is the first 7z-relevant layer: full
-`.7z` extraction still needs deeper tool-side parsing for folders, coders,
-solid blocks, filters, and encrypted/unsupported methods.
+matching `ZZ9K_SERVICE_CODEC` flags. This is the first 7z-relevant layer:
+broader `.7z` extraction still needs deeper tool-side parsing for solid blocks,
+multi-coder folders, filters, and encrypted/unsupported methods.
 
 Programs that call `zz9k.library` directly can submit the same job through the
 typed request layer with `zz9k_request_decompress()` and decode completions
@@ -907,9 +907,12 @@ skipped deliberately, while unknown file metadata properties are rejected rather
 than silently accepted. 7z member names are decoded from UTF-16, backslash
 separators are normalized to `/`, current-directory path components such as
 leading `./` and embedded `/./` are stripped, and duplicate slash separators
-are collapsed before the common path-safety checks run. 7z archive-root
-metadata entries such as `./` are skipped and do not consume output entry
-slots. A single-folder 7z LZMA2 stream with one file,
+are collapsed before the common path-safety checks run. Non-Copy
+multi-substream folders are detected and listed with their substream names and
+sizes, but test/extract refuses them with a specific unsupported-layout
+diagnostic because splitting a decoded solid-like stream into file ranges is not
+implemented yet. 7z archive-root metadata entries such as `./` are skipped and
+do not consume output entry slots. A single-folder 7z LZMA2 stream with one file,
 one pack stream, and the normal 1-byte LZMA2 property is offloaded through the
 LZMA2 codec service. If the LZMA2 feed/stream path reports `no-memory` while
 allocating the ARM-side dictionary, `zz9k-archive` falls back to a one-shot

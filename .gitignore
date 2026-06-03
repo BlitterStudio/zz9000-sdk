@@ -3,5 +3,5 @@ build
 *.o
 *.bin
 .DS_Store
-archive_tool_*
+/archive_tool_*
 

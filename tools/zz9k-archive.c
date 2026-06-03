@@ -33,6 +33,7 @@
 #define ZZ9K_ARCHIVE_TAR_FLAG_GNU_LONG_NAME 2U
 #define ZZ9K_ARCHIVE_TAR_FLAG_PAX_HEADER 4U
 #define ZZ9K_ARCHIVE_ENTRY_FLAG_CRC32 0x80000000UL
+#define ZZ9K_ARCHIVE_ENTRY_FLAG_7Z_UNSUPPORTED_SPLIT 0x40000000UL
 #define ZZ9K_ARCHIVE_ZIP_METHOD_STORE 0U
 #define ZZ9K_ARCHIVE_ZIP_METHOD_DEFLATE 8U
 #define ZZ9K_ARCHIVE_ZIP_EXTRA_ZIP64 0x0001U
@@ -147,6 +148,7 @@ typedef struct ZZ9KArchive7zStreams {
   uint32_t *unpack_sizes;
   uint32_t *crcs;
   uint32_t *methods;
+  uint32_t *flags;
   uint8_t *crc_defined;
   uint8_t *props_sizes;
   uint8_t *props;
@@ -1795,6 +1797,7 @@ static void zz9k_archive_7z_streams_free(ZZ9KArchive7zStreams *streams)
   free(streams->unpack_sizes);
   free(streams->crcs);
   free(streams->methods);
+  free(streams->flags);
   free(streams->crc_defined);
   free(streams->props_sizes);
   free(streams->props);
@@ -1818,6 +1821,8 @@ static int zz9k_archive_7z_streams_alloc(ZZ9KArchive7zStreams *streams,
                                      sizeof(uint32_t));
   streams->methods = (uint32_t *)calloc((size_t)count,
                                         sizeof(uint32_t));
+  streams->flags = (uint32_t *)calloc((size_t)count,
+                                      sizeof(uint32_t));
   streams->crc_defined = (uint8_t *)calloc((size_t)count,
                                            sizeof(uint8_t));
   streams->props_sizes = (uint8_t *)calloc((size_t)count,
@@ -1826,7 +1831,8 @@ static int zz9k_archive_7z_streams_alloc(ZZ9KArchive7zStreams *streams,
                                      ZZ9K_ARCHIVE_7Z_MAX_METHOD_PROPS);
   if (!streams->data_offsets || !streams->pack_sizes ||
       !streams->unpack_sizes || !streams->crcs || !streams->methods ||
-      !streams->crc_defined || !streams->props_sizes || !streams->props) {
+      !streams->flags || !streams->crc_defined ||
+      !streams->props_sizes || !streams->props) {
     zz9k_archive_7z_streams_free(streams);
     return 0;
   }
@@ -2052,6 +2058,7 @@ static int zz9k_archive_7z_streams_flatten_substreams(
   uint32_t *unpack_sizes = 0;
   uint32_t *crcs = 0;
   uint32_t *methods = 0;
+  uint32_t *flags = 0;
   uint8_t *crc_defined = 0;
   uint8_t *props_sizes = 0;
   uint8_t *props = 0;
@@ -2072,6 +2079,7 @@ static int zz9k_archive_7z_streams_flatten_substreams(
                                     sizeof(uint32_t));
   crcs = (uint32_t *)calloc((size_t)substream_count, sizeof(uint32_t));
   methods = (uint32_t *)calloc((size_t)substream_count, sizeof(uint32_t));
+  flags = (uint32_t *)calloc((size_t)substream_count, sizeof(uint32_t));
   crc_defined = (uint8_t *)calloc((size_t)substream_count,
                                   sizeof(uint8_t));
   props_sizes = (uint8_t *)calloc((size_t)substream_count,
@@ -2079,7 +2087,7 @@ static int zz9k_archive_7z_streams_flatten_substreams(
   props = (uint8_t *)calloc((size_t)substream_count,
                             ZZ9K_ARCHIVE_7Z_MAX_METHOD_PROPS);
   if (!data_offsets || !pack_sizes || !unpack_sizes || !crcs ||
-      !methods || !crc_defined || !props_sizes || !props) {
+      !methods || !flags || !crc_defined || !props_sizes || !props) {
     goto out;
   }
 
@@ -2087,6 +2095,7 @@ static int zz9k_archive_7z_streams_flatten_substreams(
     uint32_t count = substream_counts[folder];
     uint32_t offset = streams->data_offsets[folder];
     uint32_t total = 0U;
+    int unsupported_split = 0;
     uint32_t i;
 
     if (count == 0U || out + count < out || out + count > substream_count) {
@@ -2095,7 +2104,7 @@ static int zz9k_archive_7z_streams_flatten_substreams(
     if (count > 1U &&
         (streams->methods[folder] != ZZ9K_ARCHIVE_7Z_METHOD_COPY ||
          streams->pack_sizes[folder] != streams->unpack_sizes[folder])) {
-      goto out;
+      unsupported_split = 1;
     }
     for (i = 0U; i < count; i++) {
       uint32_t size = substream_sizes[out + i];
@@ -2104,13 +2113,17 @@ static int zz9k_archive_7z_streams_flatten_substreams(
           size > streams->unpack_sizes[folder] - total) {
         goto out;
       }
-      data_offsets[out + i] = count == 1U ?
-          streams->data_offsets[folder] : offset;
-      pack_sizes[out + i] =
-          streams->methods[folder] == ZZ9K_ARCHIVE_7Z_METHOD_COPY ?
-          size : streams->pack_sizes[folder];
+      data_offsets[out + i] = unsupported_split ? streams->data_offsets[folder] :
+          (count == 1U ? streams->data_offsets[folder] : offset);
+      pack_sizes[out + i] = unsupported_split ? streams->pack_sizes[folder] :
+          (streams->methods[folder] == ZZ9K_ARCHIVE_7Z_METHOD_COPY ?
+           size : streams->pack_sizes[folder]);
       unpack_sizes[out + i] = size;
       methods[out + i] = streams->methods[folder];
+      flags[out + i] = streams->flags[folder];
+      if (unsupported_split) {
+        flags[out + i] |= ZZ9K_ARCHIVE_ENTRY_FLAG_7Z_UNSUPPORTED_SPLIT;
+      }
       props_sizes[out + i] = streams->props_sizes[folder];
       if (props_sizes[out + i] != 0U) {
         memcpy(props + (out + i) * ZZ9K_ARCHIVE_7Z_MAX_METHOD_PROPS,
@@ -2141,6 +2154,7 @@ static int zz9k_archive_7z_streams_flatten_substreams(
   free(streams->unpack_sizes);
   free(streams->crcs);
   free(streams->methods);
+  free(streams->flags);
   free(streams->crc_defined);
   free(streams->props_sizes);
   free(streams->props);
@@ -2149,6 +2163,7 @@ static int zz9k_archive_7z_streams_flatten_substreams(
   streams->unpack_sizes = unpack_sizes;
   streams->crcs = crcs;
   streams->methods = methods;
+  streams->flags = flags;
   streams->crc_defined = crc_defined;
   streams->props_sizes = props_sizes;
   streams->props = props;
@@ -2158,6 +2173,7 @@ static int zz9k_archive_7z_streams_flatten_substreams(
   unpack_sizes = 0;
   crcs = 0;
   methods = 0;
+  flags = 0;
   crc_defined = 0;
   props_sizes = 0;
   props = 0;
@@ -2169,6 +2185,7 @@ out:
   free(unpack_sizes);
   free(crcs);
   free(methods);
+  free(flags);
   free(crc_defined);
   free(props_sizes);
   free(props);
@@ -2475,6 +2492,7 @@ static int zz9k_archive_7z_parse_files_info(
       candidate.data_offset = streams->data_offsets[stream_index];
       candidate.compressed_size = streams->pack_sizes[stream_index];
       candidate.uncompressed_size = streams->unpack_sizes[stream_index];
+      candidate.flags = streams->flags[stream_index];
       if (streams->crc_defined[stream_index]) {
         candidate.crc32 = streams->crcs[stream_index];
         candidate.flags |= ZZ9K_ARCHIVE_ENTRY_FLAG_CRC32;
@@ -2545,6 +2563,7 @@ static int zz9k_archive_7z_encoded_header_entry(
   entry->data_offset = streams.data_offsets[0];
   entry->compressed_size = streams.pack_sizes[0];
   entry->uncompressed_size = streams.unpack_sizes[0];
+  entry->flags = streams.flags[0];
   entry->method_props_size = streams.props_sizes[0];
   if (entry->method_props_size != 0U) {
     memcpy(entry->method_props, streams.props,
@@ -6173,6 +6192,49 @@ static int zz9k_archive_entry_has_crc32(const ZZ9KArchiveEntry *entry)
          (entry->flags & ZZ9K_ARCHIVE_ENTRY_FLAG_CRC32) != 0U;
 }
 
+static int zz9k_archive_7z_entry_has_unsupported_split(
+    const ZZ9KArchiveEntry *entry)
+{
+  return entry &&
+         (entry->flags &
+          ZZ9K_ARCHIVE_ENTRY_FLAG_7Z_UNSUPPORTED_SPLIT) != 0U;
+}
+
+static void zz9k_archive_print_7z_entry_unsupported(
+    const ZZ9KArchiveEntry *entry)
+{
+  if (!entry) {
+    return;
+  }
+  if (zz9k_archive_7z_entry_has_unsupported_split(entry)) {
+    printf("7z non-Copy multi-substream unsupported: %s\n", entry->name);
+  } else {
+    printf("7z entry unsupported: %s\n", entry->name);
+  }
+}
+
+static int zz9k_archive_print_7z_unsupported_split_entries(
+    const ZZ9KArchiveEntry *entries,
+    uint32_t count)
+{
+  uint32_t i;
+  int printed = 0;
+
+  if (!entries) {
+    return 0;
+  }
+  for (i = 0U; i < count; i++) {
+    if (!zz9k_archive_entry_matches_filter(&entries[i]) ||
+        entries[i].is_dir ||
+        !zz9k_archive_7z_entry_has_unsupported_split(&entries[i])) {
+      continue;
+    }
+    zz9k_archive_print_7z_entry_unsupported(&entries[i]);
+    printed = 1;
+  }
+  return printed;
+}
+
 static int zz9k_archive_zip_result_matches_entry(
     const ZZ9KArchiveEntry *entry,
     const ZZ9KDecompressResult *result)
@@ -7674,6 +7736,9 @@ static int zz9k_archive_7z_file_can_handle_entries(
     if (entries[i].is_dir) {
       continue;
     }
+    if (zz9k_archive_7z_entry_has_unsupported_split(&entries[i])) {
+      return 0;
+    }
     if (entries[i].data_offset > archive_length ||
         entries[i].compressed_size >
           archive_length - entries[i].data_offset) {
@@ -7758,6 +7823,12 @@ static int zz9k_archive_handle_7z_file(ZZ9KContext **ctx,
       }
       zz9k_archive_print_entry(&entries[i]);
     }
+    goto out;
+  }
+
+  if (zz9k_archive_print_7z_unsupported_split_entries(entries, count)) {
+    *attempted = 1;
+    ok = 0;
     goto out;
   }
 
@@ -7966,7 +8037,7 @@ static int zz9k_archive_handle_7z_file(ZZ9KContext **ctx,
         ok = 0;
       }
     } else {
-      printf("7z entry unsupported: %s\n", entries[i].name);
+      zz9k_archive_print_7z_entry_unsupported(&entries[i]);
       ok = 0;
     }
   }
@@ -8034,6 +8105,11 @@ static int zz9k_archive_handle_7z(ZZ9KContext **ctx,
         ok = 0;
         continue;
       }
+      if (zz9k_archive_7z_entry_has_unsupported_split(&entries[i])) {
+        zz9k_archive_print_7z_entry_unsupported(&entries[i]);
+        ok = 0;
+        continue;
+      }
       if (!entries[i].is_dir &&
           entries[i].method == ZZ9K_ARCHIVE_7Z_METHOD_COPY) {
         uint32_t actual_crc = 0U;
@@ -8041,7 +8117,7 @@ static int zz9k_archive_handle_7z(ZZ9KContext **ctx,
         if (entries[i].data_offset > length ||
             entries[i].compressed_size > length - entries[i].data_offset ||
             entries[i].compressed_size != entries[i].uncompressed_size) {
-          printf("7z entry unsupported: %s\n", entries[i].name);
+          zz9k_archive_print_7z_entry_unsupported(&entries[i]);
           ok = 0;
           continue;
         }
@@ -8226,11 +8302,15 @@ static int zz9k_archive_handle_7z(ZZ9KContext **ctx,
     } else {
       if (entries[i].is_dir) {
         ok &= zz9k_archive_write_entry(output_dir, &entries[i], data);
+      } else if (zz9k_archive_7z_entry_has_unsupported_split(&entries[i])) {
+        zz9k_archive_print_7z_entry_unsupported(&entries[i]);
+        ok = 0;
+        continue;
       } else if (entries[i].method == ZZ9K_ARCHIVE_7Z_METHOD_COPY) {
         if (entries[i].compressed_size != entries[i].uncompressed_size ||
             entries[i].data_offset > length ||
             entries[i].compressed_size > length - entries[i].data_offset) {
-          printf("7z entry unsupported: %s\n", entries[i].name);
+          zz9k_archive_print_7z_entry_unsupported(&entries[i]);
           ok = 0;
           continue;
         }
@@ -8476,7 +8556,7 @@ static int zz9k_archive_handle_7z(ZZ9KContext **ctx,
         free(wrapped);
         free(decoded);
       } else {
-        printf("7z entry unsupported: %s\n", entries[i].name);
+        zz9k_archive_print_7z_entry_unsupported(&entries[i]);
         ok = 0;
       }
     }
