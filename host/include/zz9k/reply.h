@@ -1,0 +1,565 @@
+/*
+ * Header-only typed reply decoders for SDK mailbox completions.
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+#ifndef ZZ9K_REPLY_H
+#define ZZ9K_REPLY_H
+
+#include "zz9k/audio.h"
+#include "zz9k/host.h"
+#include "zz9k/compression.h"
+#include <string.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct ZZ9KSharedBufferInfo {
+  uint32_t handle;
+  uint32_t arm_addr;
+  uint32_t length;
+  uint32_t flags;
+} ZZ9KSharedBufferInfo;
+
+static inline int zz9k_reply_require(const ZZ9KMailboxEntry *reply,
+                                     uint16_t opcode,
+                                     uint32_t min_payload_len)
+{
+  if (!reply) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+  if (reply->status != ZZ9K_STATUS_OK) {
+    return reply->status;
+  }
+  if (reply->opcode != opcode ||
+      reply->payload_len > sizeof(reply->payload.inline_data) ||
+      reply->payload_len < min_payload_len) {
+    return ZZ9K_STATUS_INTERNAL_ERROR;
+  }
+
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_reply_copy_inline_payload(
+    const ZZ9KMailboxEntry *reply, uint16_t opcode, uint8_t *dst,
+    uint32_t *dst_len)
+{
+  uint32_t capacity;
+  int status;
+
+  if (!dst_len || (dst && *dst_len == 0U)) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  status = zz9k_reply_require(reply, opcode, 0U);
+  if (status != ZZ9K_STATUS_OK) {
+    if (reply && reply->payload_len <= sizeof(reply->payload.inline_data)) {
+      *dst_len = reply->payload_len;
+    }
+    return status;
+  }
+
+  capacity = *dst_len;
+  *dst_len = reply->payload_len;
+  if (dst) {
+    if (capacity < reply->payload_len) {
+      return ZZ9K_STATUS_BAD_REQUEST;
+    }
+    if (reply->payload_len != 0U) {
+      memcpy(dst, reply->payload.inline_data, reply->payload_len);
+    }
+  }
+
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_reply_caps(const ZZ9KMailboxEntry *reply,
+                                  ZZ9KCaps *caps)
+{
+  const uint8_t *payload;
+  int status;
+
+  if (!caps) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  memset(caps, 0, sizeof(*caps));
+  status = zz9k_reply_require(reply, ZZ9K_OP_QUERY_CAPS, 32U);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  payload = reply->payload.inline_data;
+  caps->magic = zz9k_get_be32(&payload[0]);
+  caps->abi_major = zz9k_get_be16(&payload[4]);
+  caps->abi_minor = zz9k_get_be16(&payload[6]);
+  caps->capability_bits = zz9k_get_be32(&payload[8]);
+  caps->max_inline_payload = zz9k_get_be32(&payload[12]);
+  caps->max_shared_buffers = zz9k_get_be32(&payload[16]);
+  caps->max_surfaces = zz9k_get_be32(&payload[20]);
+  caps->firmware_version = zz9k_get_be32(&payload[24]);
+  caps->request_ring_entries = zz9k_get_be32(&payload[28]);
+  if (reply->payload_len >= 36U) {
+    caps->completion_ring_entries = zz9k_get_be32(&payload[32]);
+  }
+
+  if (caps->magic != ZZ9K_ABI_MAGIC ||
+      caps->abi_major != ZZ9K_ABI_VERSION_MAJOR) {
+    memset(caps, 0, sizeof(*caps));
+    return ZZ9K_STATUS_UNSUPPORTED;
+  }
+
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_reply_service_info(const ZZ9KMailboxEntry *reply,
+                                          uint32_t expected_service_id,
+                                          ZZ9KServiceInfo *service)
+{
+  const uint8_t *payload;
+  int status;
+
+  if (!service) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  memset(service, 0, sizeof(*service));
+  status = zz9k_reply_require(reply, ZZ9K_OP_QUERY_SERVICE,
+                              sizeof(ZZ9KServiceInfoPayload));
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  payload = reply->payload.inline_data;
+  service->service_id = zz9k_get_be32(&payload[0]);
+  service->version = zz9k_get_be32(&payload[4]);
+  service->capability_bits = zz9k_get_be32(&payload[8]);
+  service->flags = zz9k_get_be32(&payload[12]);
+  service->opcode_base = zz9k_get_be32(&payload[16]);
+  service->opcode_count = zz9k_get_be32(&payload[20]);
+  service->max_inline_payload = zz9k_get_be32(&payload[24]);
+  memcpy(service->name, &payload[28], 20);
+  service->name[20] = '\0';
+
+  if (service->service_id != expected_service_id) {
+    memset(service, 0, sizeof(*service));
+    return ZZ9K_STATUS_INTERNAL_ERROR;
+  }
+
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_reply_shared_buffer(const ZZ9KMailboxEntry *reply,
+                                           ZZ9KSharedBufferInfo *buffer)
+{
+  const uint8_t *payload;
+  int status;
+
+  if (!buffer) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  memset(buffer, 0, sizeof(*buffer));
+  status = zz9k_reply_require(reply, ZZ9K_OP_ALLOC_SHARED, 16U);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  payload = reply->payload.inline_data;
+  buffer->handle = zz9k_get_be32(&payload[0]);
+  buffer->arm_addr = zz9k_get_be32(&payload[4]);
+  buffer->length = zz9k_get_be32(&payload[8]);
+  if (reply->payload_len >= 16U) {
+    buffer->flags = zz9k_get_be32(&payload[12]);
+  }
+
+  if (buffer->handle == ZZ9K_INVALID_HANDLE || buffer->length == 0) {
+    memset(buffer, 0, sizeof(*buffer));
+    return ZZ9K_STATUS_INTERNAL_ERROR;
+  }
+
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_reply_surface(const ZZ9KMailboxEntry *reply,
+                                     uint16_t opcode, ZZ9KSurface *surface)
+{
+  const uint8_t *payload;
+  int status;
+
+  if (!surface) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  memset(surface, 0, sizeof(*surface));
+  status = zz9k_reply_require(reply, opcode, 32U);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  payload = reply->payload.inline_data;
+  surface->handle = zz9k_get_be32(&payload[0]);
+  surface->arm_addr = zz9k_get_be32(&payload[4]);
+  surface->width = zz9k_get_be32(&payload[8]);
+  surface->height = zz9k_get_be32(&payload[12]);
+  surface->pitch = zz9k_get_be32(&payload[16]);
+  surface->format = zz9k_get_be32(&payload[20]);
+  surface->flags = zz9k_get_be32(&payload[24]);
+  surface->length = zz9k_get_be32(&payload[28]);
+
+  if (surface->handle == ZZ9K_INVALID_HANDLE || surface->width == 0 ||
+      surface->height == 0 || surface->pitch == 0 ||
+      surface->length == 0) {
+    memset(surface, 0, sizeof(*surface));
+    return ZZ9K_STATUS_INTERNAL_ERROR;
+  }
+
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_reply_diag_info(const ZZ9KMailboxEntry *reply,
+                                       ZZ9KDiagInfo *diag)
+{
+  const uint8_t *payload;
+  int status;
+
+  if (!diag) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  memset(diag, 0, sizeof(*diag));
+  status = zz9k_reply_require(reply, ZZ9K_OP_DIAG_READ, 40U);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  payload = reply->payload.inline_data;
+  diag->requests_completed = zz9k_get_be32(&payload[0]);
+  diag->requests_failed = zz9k_get_be32(&payload[4]);
+  diag->last_status = zz9k_get_be32(&payload[8]);
+  diag->pending_requests = zz9k_get_be32(&payload[12]);
+  diag->shared_buffers_used = zz9k_get_be32(&payload[16]);
+  diag->shared_heap_total = zz9k_get_be32(&payload[20]);
+  diag->shared_heap_free = zz9k_get_be32(&payload[24]);
+  diag->shared_heap_largest_free = zz9k_get_be32(&payload[28]);
+  diag->mailbox_arm_addr = zz9k_get_be32(&payload[32]);
+  diag->mailbox_ring_entries = zz9k_get_be32(&payload[36]);
+  if (reply->payload_len >= 44U) {
+    diag->surfaces_used = zz9k_get_be32(&payload[40]);
+  }
+  if (reply->payload_len >= 48U) {
+    diag->allocator_invalid_slots = zz9k_get_be32(&payload[44]);
+  }
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_reply_diag_timing(const ZZ9KMailboxEntry *reply,
+                                         ZZ9KDiagTimingInfo *timing)
+{
+  const uint8_t *payload;
+  int status;
+
+  if (!timing) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  memset(timing, 0, sizeof(*timing));
+  status = zz9k_reply_require(reply, ZZ9K_OP_DIAG_TIMING,
+                              sizeof(ZZ9KDiagTimingPayload));
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  payload = reply->payload.inline_data;
+  timing->version = zz9k_get_be32(&payload[0]);
+  timing->timer_hz = zz9k_get_be32(&payload[4]);
+  timing->requests_timed = zz9k_get_be32(&payload[8]);
+  timing->total_us = zz9k_get_be32(&payload[12]);
+  timing->surface_requests = zz9k_get_be32(&payload[16]);
+  timing->surface_us = zz9k_get_be32(&payload[20]);
+  timing->audio_requests = zz9k_get_be32(&payload[24]);
+  timing->audio_us = zz9k_get_be32(&payload[28]);
+  timing->last_opcode = zz9k_get_be32(&payload[32]);
+  timing->last_us = zz9k_get_be32(&payload[36]);
+  timing->max_opcode = zz9k_get_be32(&payload[40]);
+  timing->max_us = zz9k_get_be32(&payload[44]);
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_reply_image_decode_result(
+  const ZZ9KMailboxEntry *reply,
+  uint16_t opcode,
+  ZZ9KImageDecodeResult *result)
+{
+  const uint8_t *payload;
+  int status;
+
+  if (!result) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  memset(result, 0, sizeof(*result));
+  status = zz9k_reply_require(reply, opcode,
+                              sizeof(ZZ9KImageDecodeResultPayload));
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  payload = reply->payload.inline_data;
+  result->width = zz9k_get_be32(&payload[0]);
+  result->height = zz9k_get_be32(&payload[4]);
+  result->output_format = zz9k_get_be32(&payload[8]);
+  result->flags = zz9k_get_be32(&payload[12]);
+  result->bytes_written = zz9k_get_be32(&payload[16]);
+
+  if (result->width == 0U || result->height == 0U) {
+    memset(result, 0, sizeof(*result));
+    return ZZ9K_STATUS_INTERNAL_ERROR;
+  }
+
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_reply_image_session_result(
+    const ZZ9KMailboxEntry *reply,
+    uint16_t opcode,
+    ZZ9KImageSessionResult *result)
+{
+  const uint8_t *payload;
+  int status;
+
+  if (!result) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  memset(result, 0, sizeof(*result));
+  status = zz9k_reply_require(reply, opcode,
+                              sizeof(ZZ9KImageSessionResultPayload));
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  payload = reply->payload.inline_data;
+  result->session = zz9k_get_be32(&payload[0]);
+  result->state = zz9k_get_be32(&payload[4]);
+  result->image_width = zz9k_get_be32(&payload[8]);
+  result->image_height = zz9k_get_be32(&payload[12]);
+  result->output_format = zz9k_get_be32(&payload[16]);
+  result->tile_x = zz9k_get_be32(&payload[20]);
+  result->tile_y = zz9k_get_be32(&payload[24]);
+  result->tile_width = zz9k_get_be32(&payload[28]);
+  result->tile_height = zz9k_get_be32(&payload[32]);
+  result->bytes_consumed = zz9k_get_be32(&payload[36]);
+  result->bytes_written = zz9k_get_be32(&payload[40]);
+  result->flags = zz9k_get_be32(&payload[44]);
+
+  if (result->session == 0U ||
+      result->state < ZZ9K_IMAGE_SESSION_STATE_NEED_INPUT ||
+      result->state > ZZ9K_IMAGE_SESSION_STATE_ERROR) {
+    memset(result, 0, sizeof(*result));
+    return ZZ9K_STATUS_INTERNAL_ERROR;
+  }
+
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_reply_audio_decode_result(
+    const ZZ9KMailboxEntry *reply,
+    ZZ9KAudioDecodeResult *result)
+{
+  const uint8_t *payload;
+  int status;
+
+  if (!result) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  memset(result, 0, sizeof(*result));
+  status = zz9k_reply_require(reply, ZZ9K_OP_DECODE_MP3,
+                              sizeof(ZZ9KAudioDecodeResultPayload));
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  payload = reply->payload.inline_data;
+  result->bytes_consumed = zz9k_get_be32(&payload[0]);
+  result->bytes_written = zz9k_get_be32(&payload[4]);
+  result->sample_rate = zz9k_get_be32(&payload[8]);
+  result->channels = zz9k_get_be32(&payload[12]);
+  result->sample_format = zz9k_get_be32(&payload[16]);
+  result->frames_written = zz9k_get_be32(&payload[20]);
+  result->flags = zz9k_get_be32(&payload[24]);
+
+  if (result->bytes_written == 0U || result->sample_rate == 0U ||
+      result->channels == 0U ||
+      !zz9k_audio_sample_format_known(result->sample_format)) {
+    memset(result, 0, sizeof(*result));
+    return ZZ9K_STATUS_INTERNAL_ERROR;
+  }
+
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_reply_audio_stream_result(
+    const ZZ9KMailboxEntry *reply,
+    uint16_t opcode,
+    ZZ9KAudioStreamResult *result)
+{
+  const uint8_t *payload;
+  int status;
+
+  if (!result ||
+      (opcode != ZZ9K_OP_AUDIO_STREAM_BEGIN &&
+       opcode != ZZ9K_OP_AUDIO_STREAM_FEED &&
+       opcode != ZZ9K_OP_AUDIO_STREAM_READ &&
+       opcode != ZZ9K_OP_AUDIO_STREAM_CLOSE)) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  memset(result, 0, sizeof(*result));
+  status = zz9k_reply_require(reply, opcode,
+                              sizeof(ZZ9KAudioStreamResultPayload));
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  payload = reply->payload.inline_data;
+  result->session = zz9k_get_be32(&payload[0]);
+  result->state = zz9k_get_be32(&payload[4]);
+  result->sample_rate = zz9k_get_be32(&payload[8]);
+  result->channels = zz9k_get_be32(&payload[12]);
+  result->sample_format = zz9k_get_be32(&payload[16]);
+  result->mp3_read = zz9k_get_be32(&payload[20]);
+  result->pcm_write = zz9k_get_be32(&payload[24]);
+  result->pcm_read = zz9k_get_be32(&payload[28]);
+  result->frames_decoded = zz9k_get_be32(&payload[32]);
+  result->bytes_consumed = zz9k_get_be32(&payload[36]);
+  result->bytes_produced = zz9k_get_be32(&payload[40]);
+  result->flags = zz9k_get_be32(&payload[44]);
+
+  if (result->session == 0U ||
+      result->state < ZZ9K_AUDIO_STREAM_STATE_NEED_INPUT ||
+      result->state > ZZ9K_AUDIO_STREAM_STATE_ERROR ||
+      (result->sample_format != ZZ9K_AUDIO_SAMPLE_FORMAT_NONE &&
+       !zz9k_audio_sample_format_known(result->sample_format))) {
+    memset(result, 0, sizeof(*result));
+    return ZZ9K_STATUS_INTERNAL_ERROR;
+  }
+
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_reply_crypto_result(const ZZ9KMailboxEntry *reply,
+                                           uint16_t opcode,
+                                           ZZ9KCryptoResult *result)
+{
+  const uint8_t *payload;
+  int status;
+
+  if (!result) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  memset(result, 0, sizeof(*result));
+  status = zz9k_reply_require(reply, opcode,
+                              sizeof(ZZ9KCryptoResultPayload));
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  payload = reply->payload.inline_data;
+  result->bytes_written = zz9k_get_be32(&payload[0]);
+  result->algorithm = zz9k_get_be32(&payload[4]);
+  result->flags = zz9k_get_be32(&payload[8]);
+
+  if (result->bytes_written == 0U) {
+    memset(result, 0, sizeof(*result));
+    return ZZ9K_STATUS_INTERNAL_ERROR;
+  }
+
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_reply_decompress_result(
+    const ZZ9KMailboxEntry *reply, ZZ9KDecompressResult *result)
+{
+  const uint8_t *payload;
+  int status;
+
+  if (!result) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  memset(result, 0, sizeof(*result));
+  status = zz9k_reply_require(reply, ZZ9K_OP_DECOMPRESS,
+                              sizeof(ZZ9KDecompressResultPayload));
+  if (status != ZZ9K_STATUS_OK) {
+    status = zz9k_reply_require(reply, ZZ9K_OP_DECOMPRESS_TEST,
+                                sizeof(ZZ9KDecompressResultPayload));
+  }
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  payload = reply->payload.inline_data;
+  result->bytes_consumed = zz9k_get_be32(&payload[0]);
+  result->bytes_written = zz9k_get_be32(&payload[4]);
+  result->checksum = zz9k_get_be32(&payload[8]);
+  result->algorithm = zz9k_get_be32(&payload[12]);
+  result->flags = zz9k_get_be32(&payload[16]);
+
+  if (result->bytes_consumed == 0U || result->bytes_written == 0U ||
+      !zz9k_compression_algorithm_known(result->algorithm)) {
+    memset(result, 0, sizeof(*result));
+    return ZZ9K_STATUS_INTERNAL_ERROR;
+  }
+
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_reply_decompress_stream_result(
+    const ZZ9KMailboxEntry *reply,
+    uint16_t opcode,
+    ZZ9KDecompressStreamResult *result)
+{
+  const uint8_t *payload;
+  int status;
+
+  if (!result ||
+      (opcode != ZZ9K_OP_DECOMPRESS_STREAM_BEGIN &&
+       opcode != ZZ9K_OP_DECOMPRESS_STREAM_FEED &&
+       opcode != ZZ9K_OP_DECOMPRESS_STREAM_READ)) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  memset(result, 0, sizeof(*result));
+  status = zz9k_reply_require(reply, opcode,
+                              sizeof(ZZ9KDecompressStreamResultPayload));
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  payload = reply->payload.inline_data;
+  result->session = zz9k_get_be32(&payload[0]);
+  result->bytes_consumed = zz9k_get_be32(&payload[4]);
+  result->bytes_written = zz9k_get_be32(&payload[8]);
+  result->checksum = zz9k_get_be32(&payload[12]);
+  result->algorithm = zz9k_get_be32(&payload[16]);
+  result->flags = zz9k_get_be32(&payload[20]);
+
+  if (result->session == 0U ||
+      !zz9k_compression_algorithm_known(result->algorithm)) {
+    memset(result, 0, sizeof(*result));
+    return ZZ9K_STATUS_INTERNAL_ERROR;
+  }
+
+  return ZZ9K_STATUS_OK;
+}
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* ZZ9K_REPLY_H */

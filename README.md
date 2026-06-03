@@ -1,101 +1,97 @@
-# ZZ9000 ARM SDK — BlitterStudio fork
+# ZZ9000 SDK v2 - BlitterStudio fork
 
 > **Fork notice.** This repository is an independent fork and continued
 > development of the original MNT ZZ9000 ARM SDK. It is maintained by
 > Dimitris Panokostas / **BlitterStudio** and is **not affiliated with,
 > endorsed by, or supported by MNT Research GmbH**. The ZZ9000 hardware
-> itself is designed and manufactured by MNT Research GmbH — hardware
+> itself is designed and manufactured by MNT Research GmbH - hardware
 > questions belong with them; SDK issues and fork-specific discussion
-> belong here. See `v2/` for the reimagined service-runtime SDK
-> (in-progress).
+> belong here. The SDK v2 service-runtime implementation lives under
+> `include/zz9k/`, `host/include/zz9k/`, `amiga/`, `tools/`, `examples/`,
+> and `docs/`.
 >
 > Upstream (pre-fork): https://source.mnt.re/amiga/zz9000-sdk
 
-The ZZ9000 is a graphics and ARM coprocessor card for Amiga computers equipped with Zorro slots. It is based on a Xilinx ZYNQ Z-7020 chip that combines 7-series FPGA fabric with dual ARM Cortex-A9 CPUs clocked at 666MHz. The current version has 1GB of DDR3 RAM and no eMMC soldered.
+The ZZ9000 is a graphics and ARM coprocessor card for Amiga computers equipped
+with Zorro slots. It is based on a Xilinx ZYNQ Z-7020 chip that combines
+7-series FPGA fabric with dual ARM Cortex-A9 CPUs clocked at 666 MHz. The
+current hardware has 1 GB of DDR3 RAM and no soldered eMMC.
 
-This repository contains some example programs and documentation that will help you to get started hacking on ARM software for the ZZ9000.
+This repository is focused on SDK v2: a firmware-integrated mailbox/service ABI
+exposed to AmigaOS through `zz9k.library`, with public helper headers under
+`include/zz9k/` and Amiga examples under `examples/amiga-*`. The obsolete
+fixed-address ARM launcher, standalone ARM examples, and their bare-metal
+support libraries have been removed from this branch.
 
-The mechanism for launching and interacting with ARM programs from AmigaOS is still rudimentary at this point. We're grateful for any constructive feedback and pull requests that will help shape the system.
+Start new AmigaOS-side work with [`docs/zz9k-library.md`](docs/zz9k-library.md).
+Firmware-side service metadata is described in
+[`docs/zz9k-modules.md`](docs/zz9k-modules.md).
 
-# Requirements
+## Quick Start
 
-To build the example applications, you need a version of GCC called arm-none-eabi-gcc, which is available in major Linux distributions. We're exclusively developing on Linux (Debian, specifically) and don't support any other platforms at the moment. You're welcome to contribute build instructions for other platforms. It would be nice to have an ARM compiler/assembler for AmigaOS as well, so that you can develop on the target machine.
+Build the AmigaOS 3 SDK tools and package with Docker:
 
-# Building
-
-Every example application has a `build-appname.sh` script that calls `arm-none-eabi-gcc` to build and statically link the application with a special linker file, `link.ld`. Every application is per default linked to run at address `0x03000000` and can access arbitrary memory. There is no memory protection or memory management, but you can link in the included `libmemory` for malloc/free as demonstrated by the nanojpeg example (you just give it a fixed memory block on startup). 
-
-ZZ9000OS offers much less infrastructure to applications than traditional operating systems. Currently, only the following functions and arguments are provided by a structure called ZZ9K_ENV passed to your entry function:
-
-```
-struct ZZ9K_ENV {
-  uint32_t api_version;
-  uint32_t argv[8];
-  uint32_t argc;
-
-  int      (*putchar)(char);
-  void     (*set_output_putchar_to_events)(char);
-  void     (*set_output_events_blocking)(char);
-  void     (*put_event_code)(uint16_t);
-  uint16_t (*get_event_serial)();
-  uint16_t (*get_event_code)();
-  char     (*output_event_acked)();
-};
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build-m68k-amigaos.ps1
+powershell -ExecutionPolicy Bypass -File scripts\package-m68k-amigaos.ps1
 ```
 
-# Loading
+The package is written to `build/package/amigaos3`. It contains:
 
-In the `zz9k-loader` directory, you can find sources for the `zz9k` CLI tool that runs on AmigaOS (m68k). With `zz9k`, you can load an ARM application into the DDR3 memory of ZZ9000 and run it. The loader supports setting up multiple user interface modalities as a convenience:
+- `Libs/zz9k.library`
+- `Libs/mpega.library` as the runtime drop-in candidate, plus
+  `Libs/mpega.library.zz9k` for side-by-side diagnostics
+- CLI tools such as `zz9k-info`, `zz9k-services`, `zz9k-bench`,
+  `zz9k-surfaceops`, `zz9k-mp3`, `zz9k-mpega-smoke`, `zz9k-jpeg`, `zz9k-png`,
+  `zz9k-view`, `zz9k-hash`, `zz9k-chacha`, `zz9k-aead`, and
+  archive/decompression tools
+- developer headers under `Developer/Include`
+- public docs under `Docs`
+- examples under `Examples`
+- `MANIFEST.sha256` with SHA-256 checksums for every packaged file
 
-- `run` just jumps to your code with no user interface.
-- `-640x480` and `-320x240` set up a 640x480@32 or 320x240@32 Intuition screen. If you pass a `!screen` parameter to your application, it will be substituted for the screen's bitmap address for direct access. Pass `!width` as a parameter to get the screen's width in pixels.
-- `-keyboard` passes raw Amiga keyboard scan codes to the ARM application's event stream.
-- `-console` attaches stdin and stdout of the Shell to your application, demonstrated by the `shell` example.
-- `-audio` experimental mode that plays back an audio buffer your application creates until a mouse button is pressed, demonstrated by `minimp3`.
+For most application-side helper code, include `zz9k/sdk.h`; it pulls in the
+stable SDK v2 ABI, host/request/reply types, and helper headers. Include
+`proto/zz9k.h` as well when calling `zz9k.library` from AmigaOS.
 
-# Launching Example Apps
+Useful public helper headers for narrow includes:
 
-## Conway
+- `zz9k/sdk.h`: application-facing umbrella header
+- `zz9k/caps.h`: capability and service-flag checks plus stable bit names
+- `zz9k/surface.h`: surface layout, colors, fill/copy descriptors
+- `zz9k/image_geometry.h`: scale and clipped-scale descriptors
+- `zz9k/image.h`: one-shot and streaming image decode descriptors
+- `zz9k/shared.h`: bounds-checked shared-buffer byte access
+- `zz9k/audio.h`: MP3 decode and streaming audio descriptors
+- `zz9k/compression.h`: decompression and streaming decompression descriptors
+- `zz9k/crypto.h`: hash, HMAC, Poly1305, ChaCha20, and AEAD descriptors
+- `zz9k/text.h`: stable status text for user-facing tools
 
-```
-zz9k load conway.bin
-zz9k run -320x240 !screen !width
-```
+## Requirements
 
-## Vector
+For AmigaOS 3 tools, the supported local path is Docker with the
+`sacredbanana/amiga-compiler:m68k-amigaos` image, driven by the scripts above.
 
-```
-zz9k load vector.bin
-zz9k run -320x240 !screen !width
-```
+## Third-Party Code
 
-## Raytrace
+The SDK carries third-party code where current SDK v2 tools need it:
 
-```
-zz9k load raytrace.bin
-zz9k run -320x240 !screen !width
-```
+- LHa for UNIX decoder subset (tools/lha-unix), from jca02266/lha
+  1.14i-ac20220213, retaining the original LHa for UNIX redistribution terms
 
-# Third Party Code
+## License / Copyright
 
-The SDK contains a collection of third-party libraries/code for ARM bare metal applications:
+SDK v2, including the firmware-integrated service ABI, `zz9k.library`, AmigaOS
+service tools, public SDK v2 headers, docs, examples, and packaging work in
+this fork, is:
 
-- Runtime ABI for Cortex-M0 (lib/div), by Jörg Mische <bobbl@gmx.de>
-- Tiny printf, sprintf, vsnprintf (lib/printf), by Marco Paland <info@paland.com>
-- libmemory memory allocator (lib/memory/libmemory_freelist.a), by Embedded Artistry, sources at: https://github.com/embeddedartistry/libmemory
-- memcpy, memset, memmove (lib/memory), Public Domain
+Copyright (C) 2024-2026, Dimitris Panokostas / BlitterStudio
 
-Portions of example code is lifted from the following sources:
+Older pre-fork material from the original MNT ZZ9000 ARM SDK has been removed
+from this branch unless retained in individual files with their own notices.
 
-- "Conway's game of life", Rosetta Code, https://rosettacode.org/wiki/Conway%27s_Game_of_Life#C
-
-# License / Copyright
-
-If not stated otherwise in specific source code files, everything here is:
-
-Copyright (C) 2016-2019, Lukas F. Hartmann <lukas@mntre.com>
-MNT Research GmbH, Berlin
-https://mntre.com
+Unless a file carries a narrower notice or a third-party license, this
+repository is distributed under:
 
 SPDX-License-Identifier: GPL-3.0-or-later
 https://spdx.org/licenses/GPL-3.0-or-later.html
