@@ -93,6 +93,12 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "zz9k-view");
   ok &= expect_contains(source, "zz9k-dtprobe");
   ok &= expect_contains(source, "MultiView");
+  ok &= expect_contains(source, "copy Storage/DataTypes/ZZ9000-JPEG#? TO DEVS:DataTypes/");
+  ok &= expect_contains(source, "copy Storage/DataTypes/ZZ9000-PNG#? TO DEVS:DataTypes/");
+  ok &= expect_contains(source, "AddDataTypes DEVS:DataTypes/ZZ9000-JPEG");
+  ok &= expect_contains(source, "AddDataTypes DEVS:DataTypes/ZZ9000-PNG");
+  ok &= expect_contains(source, "AddDataTypes LIST");
+  ok &= expect_contains(source, "DataType descriptors are activated from `Storage/DataTypes`");
   ok &= expect_contains(source, "zz9k-mp3 --stats");
   ok &= expect_contains(source, "zz9k-mpega-smoke --trace --null-api-check");
   ok &= expect_contains(source, "Expected pass signal");

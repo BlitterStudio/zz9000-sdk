@@ -96,6 +96,17 @@ Failure routing:
 
 ## Image, Viewer, And DataTypes
 
+If the package was installed with descriptors still inactive, activate the
+validated DataType descriptors before the MultiView/browser checks:
+
+```text
+copy Storage/DataTypes/ZZ9000-JPEG#? TO DEVS:DataTypes/
+copy Storage/DataTypes/ZZ9000-PNG#? TO DEVS:DataTypes/
+AddDataTypes DEVS:DataTypes/ZZ9000-JPEG
+AddDataTypes DEVS:DataTypes/ZZ9000-PNG
+AddDataTypes LIST
+```
+
 ```text
 zz9k-jpeg Work:Pictures/test.jpg
 zz9k-jpeg --fb --hold 200 Work:Pictures/test.jpg
@@ -114,6 +125,8 @@ Expected pass signal:
 - JPEG and PNG decode paths complete without SDK status errors.
 - Framebuffer and viewer windows show the image, survive close/resize where the
   command opens a resizable viewer, and restore visible RTG contents.
+- DataType descriptors are activated from `Storage/DataTypes`, and
+  `AddDataTypes LIST` shows `ZZ9000-JPEG` and `ZZ9000-PNG`.
 - DataTypes clients display JPEG and PNG through `zz9k-picture.datatype`.
 
 Failure routing:
