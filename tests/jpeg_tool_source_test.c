@@ -48,6 +48,55 @@ static char *read_file(const char *path)
   return data;
 }
 
+static char *read_image_window_helper(const char *path)
+{
+  char *source;
+  char *header_path;
+  char *header;
+  char *combined;
+  size_t path_len;
+  size_t header_len;
+  size_t source_len;
+
+  source = read_file(path);
+  if (!source) {
+    return 0;
+  }
+
+  path_len = strlen(path);
+  if (path_len < 2U || strcmp(path + path_len - 2U, ".c") != 0) {
+    return source;
+  }
+
+  header_path = (char *)malloc(path_len + 1U);
+  if (!header_path) {
+    return source;
+  }
+  memcpy(header_path, path, path_len + 1U);
+  header_path[path_len - 1U] = 'h';
+
+  header = read_file(header_path);
+  free(header_path);
+  if (!header) {
+    return source;
+  }
+
+  header_len = strlen(header);
+  source_len = strlen(source);
+  combined = (char *)malloc(header_len + 1U + source_len + 1U);
+  if (!combined) {
+    free(header);
+    return source;
+  }
+
+  memcpy(combined, header, header_len);
+  combined[header_len] = '\n';
+  memcpy(combined + header_len + 1U, source, source_len + 1U);
+  free(header);
+  free(source);
+  return combined;
+}
+
 static int expect_contains(const char *source, const char *needle)
 {
   if (strstr(source, needle)) {
@@ -85,7 +134,7 @@ int main(int argc, char **argv)
     printf("failed to read %s\n", argv[1]);
     return 2;
   }
-  helper = read_file(argv[2]);
+  helper = read_image_window_helper(argv[2]);
   if (!helper) {
     printf("failed to read %s\n", argv[2]);
     free(source);
@@ -149,15 +198,22 @@ int main(int argc, char **argv)
   ok &= expect_contains(helper, "WA_SmartRefresh, TRUE");
   ok &= expect_contains(helper, "WLayer->ClipRect");
   ok &= expect_contains(helper, "clip_rect->obscured");
+  ok &= expect_contains(helper, "typedef struct ZZ9KImageWindowEvent");
+  ok &= expect_contains(helper, "zz9k_image_window_poll_event");
+  ok &= expect_contains(helper, "IDCMP_VANILLAKEY");
+  ok &= expect_contains(helper, "IDCMP_RAWKEY");
+  ok &= expect_contains(helper, "SetWindowTitles");
+  ok &= expect_contains(helper, "zz9k_image_window_set_title");
   ok &= expect_contains(helper,
                         "idcmp = (ULONG)(IDCMP_CLOSEWINDOW | "
-                        "IDCMP_REFRESHWINDOW);");
+                        "IDCMP_REFRESHWINDOW |\n"
+                        "\t\t\tIDCMP_VANILLAKEY | IDCMP_RAWKEY);");
   ok &= expect_contains(helper,
                         "if (config->resizable) {\n"
                         "\t\tidcmp |= IDCMP_NEWSIZE;");
   ok &= expect_contains(helper,
                         "if (klass == IDCMP_REFRESHWINDOW) {\n"
-                        "\t\t\t*changed = 1;\n"
+                        "\t\t\tevent->changed = 1;\n"
                         "\t\t} else if (ui->resizable && "
                         "klass == IDCMP_NEWSIZE) {");
   ok &= expect_contains(helper, "WA_IDCMP, idcmp");

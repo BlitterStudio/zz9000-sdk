@@ -631,7 +631,8 @@ int zz9k_image_window_open(const ZZ9KSurface *framebuffer,
 		return 0;
 	}
 
-	idcmp = (ULONG)(IDCMP_CLOSEWINDOW | IDCMP_REFRESHWINDOW);
+	idcmp = (ULONG)(IDCMP_CLOSEWINDOW | IDCMP_REFRESHWINDOW |
+			IDCMP_VANILLAKEY | IDCMP_RAWKEY);
 	if (config->resizable) {
 		idcmp |= IDCMP_NEWSIZE;
 	}
@@ -710,43 +711,73 @@ int zz9k_image_window_open(const ZZ9KSurface *framebuffer,
 }
 #endif /* ZZ9K_IMAGE_WINDOW_NO_UI */
 
-int zz9k_image_window_poll(ZZ9KImageWindow *ui,
-                           const ZZ9KSurface *framebuffer,
-                           int *changed,
-                           int *closed)
+int zz9k_image_window_poll_event(ZZ9KImageWindow *ui,
+                                 const ZZ9KSurface *framebuffer,
+                                 ZZ9KImageWindowEvent *event)
 {
 #if ZZ9K_IMAGE_WINDOW_AMIGA
 	struct IntuiMessage *msg;
 
-	if (!ui || !ui->window || !framebuffer || !changed || !closed)
+	if (!ui || !ui->window || !framebuffer || !event)
 		return 0;
-	*changed = 0;
-	*closed = 0;
+	memset(event, 0, sizeof(*event));
 	while ((msg = (struct IntuiMessage *)GetMsg(ui->window->UserPort)) != 0) {
 		ULONG klass = msg->Class;
+		uint32_t code = (uint32_t)msg->Code;
 
 		if (klass == IDCMP_CLOSEWINDOW) {
-			*closed = 1;
+			event->closed = 1;
 		} else if (klass == IDCMP_REFRESHWINDOW) {
-			*changed = 1;
+			event->changed = 1;
 		} else if (ui->resizable && klass == IDCMP_NEWSIZE) {
-			*changed = 1;
+			event->changed = 1;
+		} else if (klass == IDCMP_VANILLAKEY) {
+			event->vanilla_key = code;
+		} else if (klass == IDCMP_RAWKEY && (code & 0x80U) == 0U) {
+			event->raw_key = code & 0x7fU;
 		}
 		ReplyMsg((struct Message *)msg);
 	}
-	if (*changed &&
+	if (event->changed &&
 	    !zz9k_image_window_inner_rect(framebuffer, ui, &ui->inner)) {
 		return 0;
 	}
 	return 1;
 #else
-	if (!ui || !framebuffer || !changed || !closed)
+	if (!ui || !framebuffer || !event)
 		return 0;
 	(void)ui;
 	(void)framebuffer;
-	*changed = 0;
-	*closed = 0;
+	memset(event, 0, sizeof(*event));
 	return 1;
+#endif
+}
+
+int zz9k_image_window_poll(ZZ9KImageWindow *ui,
+                           const ZZ9KSurface *framebuffer,
+                           int *changed,
+                           int *closed)
+{
+	ZZ9KImageWindowEvent event;
+
+	if (!changed || !closed)
+		return 0;
+	if (!zz9k_image_window_poll_event(ui, framebuffer, &event))
+		return 0;
+	*changed = event.changed;
+	*closed = event.closed;
+	return 1;
+}
+
+void zz9k_image_window_set_title(ZZ9KImageWindow *ui, const char *title)
+{
+#if ZZ9K_IMAGE_WINDOW_AMIGA
+	if (ui && ui->window && title) {
+		SetWindowTitles(ui->window, (CONST_STRPTR)title, (CONST_STRPTR)-1);
+	}
+#else
+	(void)ui;
+	(void)title;
 #endif
 }
 

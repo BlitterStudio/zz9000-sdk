@@ -54,6 +54,13 @@ typedef struct ZZ9KImageWindow {
 #endif
 } ZZ9KImageWindow;
 
+typedef struct ZZ9KImageWindowEvent {
+	int changed;
+	int closed;
+	uint32_t vanilla_key;
+	uint32_t raw_key;
+} ZZ9KImageWindowEvent;
+
 uint32_t zz9k_image_window_scale_slice_rows(void);
 
 uint32_t zz9k_image_window_count_scale_slices(
@@ -175,6 +182,12 @@ int zz9k_image_window_poll(ZZ9KImageWindow *ui,
                            const ZZ9KSurface *framebuffer,
                            int *changed,
                            int *closed);
+
+int zz9k_image_window_poll_event(ZZ9KImageWindow *ui,
+                                 const ZZ9KSurface *framebuffer,
+                                 ZZ9KImageWindowEvent *event);
+
+void zz9k_image_window_set_title(ZZ9KImageWindow *ui, const char *title);
 
 void zz9k_image_window_close(ZZ9KImageWindow *ui);
 
