@@ -39,11 +39,11 @@
 
 #define ZZ9K_PICTURE_DATATYPE_NAME "zz9k-picture.datatype"
 #define ZZ9K_PICTURE_DATATYPE_VERSION 42
-#define ZZ9K_PICTURE_DATATYPE_REVISION 135
+#define ZZ9K_PICTURE_DATATYPE_REVISION 139
 #define ZZ9K_PICTURE_DATATYPE_ID_STRING \
-  "$VER: zz9k-picture.datatype 42.135 (03.06.2026) ZZ9000 SDK"
+  "$VER: zz9k-picture.datatype 42.139 (03.06.2026) ZZ9000 SDK"
 #define ZZ9K_PICTURE_BUILD_MARKER \
-  "metadata: build 2026-06-03 png-alpha-rgb-compat-rollback-v135"
+  "metadata: build 2026-06-03 datatype-v43-rgb-helper-v139"
 #define ZZ9K_PICTURE_OBJECT_NAME_BYTES 128U
 #define ZZ9K_PICTURE_SMALL_PLACEHOLDER_SIZE 64U
 #define ZZ9K_PICTURE_RGB_BYTES_PER_PIXEL 3U
@@ -61,6 +61,7 @@
 #define ZZ9K_PICTURE_FORCE_DATATYPE_V47_TRUECOLOR 0
 #define ZZ9K_PICTURE_FORCE_DATATYPE_V47_DIRECT 0
 #define ZZ9K_PICTURE_FORCE_DATATYPE_V43_WRITEPIXELS 1
+#define ZZ9K_PICTURE_FORCE_REFERENCE_V43_WRITEPIXELS 1
 #define ZZ9K_PICTURE_FORCE_ALPHA_RGB_COMPAT 1
 #define ZZ9K_PICTURE_ENABLE_PNG_ALPHA_EXPERIMENTS 0
 #define ZZ9K_PICTURE_TRACE_ENABLED 0
@@ -563,33 +564,56 @@ static ZZ9KPictureRenderMode zz9k_picture_render_mode_from_env(
   return ZZ9K_PICTURE_RENDER_MODE_OFF;
 }
 
-static ZZ9KPictureRenderMode zz9k_picture_render_mode(void)
+static int zz9k_picture_read_render_mode_env(
+    ZZ9KPictureRenderMode *render_mode)
 {
-#if ZZ9K_PICTURE_FORCE_DATATYPE_V47_TRUECOLOR || \
-    ZZ9K_PICTURE_FORCE_DATATYPE_V47_DIRECT || \
-    ZZ9K_PICTURE_FORCE_DATATYPE_V43_WRITEPIXELS
-  return ZZ9K_PICTURE_RENDER_MODE_DATATYPE;
-#else
-  char value[16];
+  char value[32];
   BPTR file;
   LONG length;
 
-  if (!DOSBase) {
-    return ZZ9K_PICTURE_RENDER_MODE_DATATYPE;
+  if (!render_mode || !DOSBase) {
+    return 0;
   }
 
   file = Open((CONST_STRPTR)ZZ9K_PICTURE_RENDER_MODE_ENV_PATH, MODE_OLDFILE);
   if (!file) {
-    return ZZ9K_PICTURE_RENDER_MODE_DATATYPE;
+    return 0;
   }
 
   length = Read(file, value, (LONG)(sizeof(value) - 1U));
   Close(file);
   if (length <= 0) {
-    return ZZ9K_PICTURE_RENDER_MODE_DATATYPE;
+    return 0;
   }
   value[length] = '\0';
-  return zz9k_picture_render_mode_from_env(value, length);
+  *render_mode = zz9k_picture_render_mode_from_env(value, length);
+  return 1;
+}
+
+static int zz9k_picture_forced_render_mode_allows_env(
+    ZZ9KPictureRenderMode render_mode)
+{
+  return render_mode == ZZ9K_PICTURE_RENDER_MODE_REFERENCE ||
+         render_mode == ZZ9K_PICTURE_RENDER_MODE_REFERENCE_NOLAYOUT;
+}
+
+static ZZ9KPictureRenderMode zz9k_picture_render_mode(void)
+{
+  ZZ9KPictureRenderMode render_mode;
+
+#if ZZ9K_PICTURE_FORCE_DATATYPE_V47_TRUECOLOR || \
+    ZZ9K_PICTURE_FORCE_DATATYPE_V47_DIRECT || \
+    ZZ9K_PICTURE_FORCE_DATATYPE_V43_WRITEPIXELS
+  if (zz9k_picture_read_render_mode_env(&render_mode) &&
+      zz9k_picture_forced_render_mode_allows_env(render_mode)) {
+    return render_mode;
+  }
+  return ZZ9K_PICTURE_RENDER_MODE_DATATYPE;
+#else
+  if (zz9k_picture_read_render_mode_env(&render_mode)) {
+    return render_mode;
+  }
+  return ZZ9K_PICTURE_RENDER_MODE_DATATYPE;
 #endif
 }
 
@@ -2446,7 +2470,40 @@ static void zz9k_picture_fill_reference_pattern(uint8_t *pixel_data,
   }
 }
 
-static int zz9k_picture_write_v43_reference_rows(
+static int zz9k_picture_write_v43_rgb_buffer(Class *cl,
+                                             Object *object,
+                                             uint8_t *pixel_data,
+                                             uint32_t left,
+                                             uint32_t top,
+                                             uint32_t width,
+                                             uint32_t height,
+                                             uint32_t row_bytes)
+{
+  struct pdtBlitPixelArray pixels;
+
+  if (!cl || !object || !pixel_data || width == 0U || height == 0U ||
+      row_bytes == 0U) {
+    SetIoErr(DTERROR_INVALID_DATA);
+    return 0;
+  }
+
+  memset(&pixels, 0, sizeof(pixels));
+  pixels.MethodID = PDTM_WRITEPIXELARRAY;
+  pixels.pbpa_PixelData = pixel_data;
+  pixels.pbpa_PixelFormat = PBPAFMT_RGB;
+  pixels.pbpa_PixelArrayMod = row_bytes;
+  pixels.pbpa_Left = left;
+  pixels.pbpa_Top = top;
+  pixels.pbpa_Width = width;
+  pixels.pbpa_Height = height;
+  if (DoSuperMethodA(cl, object, (Msg)&pixels) == 0UL) {
+    SetIoErr(DTERROR_INVALID_DATA);
+    return 0;
+  }
+  return 1;
+}
+
+static int zz9k_picture_write_v43_reference_pattern(
     Class *cl,
     Object *object,
     ZZ9KPictureInstance *instance,
@@ -2454,11 +2511,9 @@ static int zz9k_picture_write_v43_reference_rows(
     uint32_t width,
     uint32_t height)
 {
-  struct pdtBlitPixelArray pixels;
-  uint8_t *row_pixels;
+  uint8_t *pixel_data;
   uint32_t row_bytes;
-  uint32_t row;
-  ULONG method_result;
+  uint32_t pixel_bytes;
 
   if (!cl || !object || !instance || width == 0U || height == 0U ||
       width > 65535U || height > 65535U) {
@@ -2468,42 +2523,32 @@ static int zz9k_picture_write_v43_reference_rows(
   }
 
   if (!zz9k_picture_min_row_bytes(
-          width, ZZ9K_PICTURE_RGB_BYTES_PER_PIXEL, &row_bytes)) {
+          width, ZZ9K_PICTURE_RGB_BYTES_PER_PIXEL, &row_bytes) ||
+      !zz9k_picture_accumulate_surface_bytes(
+          height, row_bytes, &pixel_bytes) ||
+      pixel_bytes > ZZ9K_PICTURE_MAX_SURFACE_BYTES) {
     zz9k_picture_trace("metadata: reference pixel size invalid");
     SetIoErr(ERROR_NO_FREE_STORE);
     return 0;
   }
 
-  zz9k_picture_trace("metadata: v43 reference before row alloc");
-  row_pixels = (uint8_t *)AllocMem((ULONG)row_bytes, MEMF_PUBLIC);
-  if (!row_pixels) {
+  zz9k_picture_trace("metadata: v43 reference before pixel alloc");
+  pixel_data = (uint8_t *)AllocMem((ULONG)pixel_bytes, MEMF_PUBLIC);
+  if (!pixel_data) {
     zz9k_picture_trace("metadata: reference pixel alloc failed");
     SetIoErr(ERROR_NO_FREE_STORE);
     return 0;
   }
 
-  zz9k_picture_trace("metadata: v43 reference before row writes");
-  for (row = 0U; row < height; row++) {
-    zz9k_picture_fill_reference_row(row_pixels, width, row);
-    memset(&pixels, 0, sizeof(pixels));
-    pixels.MethodID = PDTM_WRITEPIXELARRAY;
-    pixels.pbpa_PixelData = row_pixels;
-    pixels.pbpa_PixelFormat = PBPAFMT_RGB;
-    pixels.pbpa_PixelArrayMod = row_bytes;
-    pixels.pbpa_Left = 0;
-    pixels.pbpa_Top = row;
-    pixels.pbpa_Width = width;
-    pixels.pbpa_Height = 1;
-    method_result = DoSuperMethodA(cl, object, (Msg)&pixels);
-    if (method_result == 0UL) {
-      zz9k_picture_trace("metadata: reference pixel write failed");
-      FreeMem(row_pixels, (ULONG)row_bytes);
-      SetIoErr(DTERROR_INVALID_DATA);
-      return 0;
-    }
+  zz9k_picture_fill_reference_pattern(pixel_data, width, height, row_bytes);
+  zz9k_picture_trace("metadata: v43 reference full buffer ready");
+  if (!zz9k_picture_write_v43_rgb_buffer(
+          cl, object, pixel_data, 0U, 0U, width, height, row_bytes)) {
+    zz9k_picture_trace("metadata: reference pixel write failed");
+    FreeMem(pixel_data, (ULONG)pixel_bytes);
+    return 0;
   }
-  FreeMem(row_pixels, (ULONG)row_bytes);
-  zz9k_picture_trace("metadata: v43 reference row writes done");
+  zz9k_picture_trace("metadata: v43 reference pixel write done");
 
   (void)SetDTAttrs(
       object, 0, 0,
@@ -2511,6 +2556,8 @@ static int zz9k_picture_write_v43_reference_rows(
       DTA_NominalVert, height,
       DTA_ObjName, (ULONG)zz9k_picture_object_name(codec),
       TAG_END);
+  instance->reference_pixels = pixel_data;
+  instance->reference_pixel_bytes = pixel_bytes;
   instance->source_ready = 0;
   zz9k_picture_trace("metadata: v43 reference final attrs ready");
   return 1;
@@ -2527,7 +2574,7 @@ static int zz9k_picture_set_v43_reference_pattern(Class *cl,
   if (!zz9k_picture_prepare_v43_reference_header(object, width, height)) {
     return 0;
   }
-  return zz9k_picture_write_v43_reference_rows(
+  return zz9k_picture_write_v43_reference_pattern(
       cl, object, instance, codec, width, height);
 }
 
@@ -2551,6 +2598,9 @@ static int zz9k_picture_set_reference_v43_attrs(Object *object,
       DTA_NominalVert, height,
       PDTA_ModeID, 0,
       PDTA_SourceMode, PMODE_V43,
+      PDTA_DestMode, PMODE_V43,
+      PDTA_SubClassRendersAll, FALSE,
+      PDTA_Remap, TRUE,
       DTA_ObjName, (ULONG)zz9k_picture_object_name(codec),
       TAG_END);
   zz9k_picture_trace("metadata: v43 reference attrs ready");
@@ -2573,7 +2623,7 @@ static int zz9k_picture_set_v43_attrs_reference_pattern(
           object, codec, width, height)) {
     return 0;
   }
-  return zz9k_picture_write_v43_reference_rows(
+  return zz9k_picture_write_v43_reference_pattern(
       cl, object, instance, codec, width, height);
 }
 
@@ -3650,9 +3700,7 @@ static int zz9k_picture_write_rgb_tile_to_object(
     ZZ9KPictureDatatypeTarget *target,
     uint32_t tile_stride)
 {
-  struct pdtBlitPixelArray pixels;
   uint32_t min_row_bytes;
-  ULONG method_result;
 
   if (!tile || !tile->data || !result || !target || !target->object ||
       !target->cl || target->output_format != ZZ9K_SURFACE_FORMAT_RGB888 ||
@@ -3668,17 +3716,10 @@ static int zz9k_picture_write_rgb_tile_to_object(
     return 0;
   }
 
-  memset(&pixels, 0, sizeof(pixels));
-  pixels.MethodID = PDTM_WRITEPIXELARRAY;
-  pixels.pbpa_PixelData = (APTR)tile->data;
-  pixels.pbpa_PixelFormat = PBPAFMT_RGB;
-  pixels.pbpa_PixelArrayMod = tile_stride;
-  pixels.pbpa_Left = result->tile_x;
-  pixels.pbpa_Top = result->tile_y;
-  pixels.pbpa_Width = result->tile_width;
-  pixels.pbpa_Height = result->tile_height;
-  method_result = DoSuperMethodA(target->cl, target->object, (Msg)&pixels);
-  if (method_result == 0UL) {
+  if (!zz9k_picture_write_v43_rgb_buffer(
+      target->cl, target->object, (uint8_t *)tile->data,
+      result->tile_x, result->tile_y,
+      result->tile_width, result->tile_height, tile_stride)) {
     zz9k_picture_trace("decode: datatype writepixelarray failed");
     return 0;
   }

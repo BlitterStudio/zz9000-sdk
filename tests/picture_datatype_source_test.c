@@ -109,12 +109,12 @@ int main(int argc, char **argv)
       source, "Copyright (C) 2024-2026, Dimitris Panokostas / BlitterStudio");
   ok &= expect_contains(source, "\"zz9k-picture.datatype\"");
   ok &= expect_contains(source, "ZZ9K_PICTURE_DATATYPE_VERSION 42");
-  ok &= expect_contains(source, "ZZ9K_PICTURE_DATATYPE_REVISION 135");
-  ok &= expect_contains(source, "$VER: zz9k-picture.datatype 42.135");
+  ok &= expect_contains(source, "ZZ9K_PICTURE_DATATYPE_REVISION 139");
+  ok &= expect_contains(source, "$VER: zz9k-picture.datatype 42.139");
   ok &= expect_contains(source, "ZZ9K_PICTURE_BUILD_MARKER");
   ok &= expect_contains(
       source,
-      "\"metadata: build 2026-06-03 png-alpha-rgb-compat-rollback-v135\"");
+      "\"metadata: build 2026-06-03 datatype-v43-rgb-helper-v139\"");
   ok &= expect_contains(source, "ZZ9K_PICTURE_FORCE_ALPHA_RGB_COMPAT 1");
   ok &= expect_contains(source, "ZZ9K_PICTURE_OBJECT_NAME_BYTES 128U");
   ok &= expect_contains(source, "char object_name[ZZ9K_PICTURE_OBJECT_NAME_BYTES];");
@@ -137,7 +137,27 @@ int main(int argc, char **argv)
   ok &= expect_contains(
       source, "ZZ9K_PICTURE_FORCE_DATATYPE_V43_WRITEPIXELS 1");
   ok &= expect_contains(
+      source, "ZZ9K_PICTURE_FORCE_REFERENCE_V43_WRITEPIXELS 1");
+  ok &= expect_contains(
       source, "ZZ9K_PICTURE_ENABLE_PNG_ALPHA_EXPERIMENTS 0");
+  ok &= expect_contains(source, "zz9k_picture_read_render_mode_env");
+  ok &= expect_contains(source, "char value[32];");
+  ok &= expect_contains(source, "zz9k_picture_forced_render_mode_allows_env");
+  ok &= expect_contains(
+      source,
+      "if (zz9k_picture_read_render_mode_env(&render_mode) &&\n"
+      "      zz9k_picture_forced_render_mode_allows_env(render_mode)) {\n"
+      "    return render_mode;\n"
+      "  }\n"
+      "  return ZZ9K_PICTURE_RENDER_MODE_DATATYPE;");
+  ok &= expect_not_contains(
+      source,
+      "#if ZZ9K_PICTURE_FORCE_DATATYPE_V47_TRUECOLOR || \\\n"
+      "    ZZ9K_PICTURE_FORCE_DATATYPE_V47_DIRECT || \\\n"
+      "    ZZ9K_PICTURE_FORCE_DATATYPE_V43_WRITEPIXELS\n"
+      "  return ZZ9K_PICTURE_RENDER_MODE_DATATYPE;\n"
+      "#else\n"
+      "  char value[16];");
   ok &= expect_not_contains(source, "aros");
   ok &= expect_not_contains(source, "AROS");
   ok &= expect_not_contains(source, "Aros");
@@ -345,7 +365,9 @@ int main(int argc, char **argv)
   ok &= expect_not_contains(source, "\"decode: png rgba scratch alloc failed\"");
   ok &= expect_contains(source, "pixels.pbpa_PixelFormat = PBPAFMT_RGB;");
   ok &= expect_contains(source, "pixels.pbpa_PixelFormat = pixel_format;");
-  ok &= expect_contains(source, "pixels.pbpa_PixelArrayMod = tile_stride;");
+  ok &= expect_contains(
+      source,
+      "result->tile_width, result->tile_height, tile_stride))");
   ok &= expect_contains(source, "pixels.pbpa_PixelArrayMod = 0;");
   ok &= expect_contains(source, "pixels.pbpa_Height = 1;");
   ok &= expect_contains(source, "\"decode: datatype alpha transparent rgb cleared\"");
@@ -555,8 +577,10 @@ int main(int argc, char **argv)
       source, "\"metadata: v47 indexed buffer rejected\"");
   ok &= expect_contains(source, "\"metadata: v43 reference before header\"");
   ok &= expect_contains(source, "\"metadata: v43 reference header ready\"");
-  ok &= expect_contains(source, "\"metadata: v43 reference before row alloc\"");
-  ok &= expect_contains(source, "\"metadata: v43 reference before row writes\"");
+  ok &= expect_contains(
+      source, "\"metadata: v43 reference before pixel alloc\"");
+  ok &= expect_contains(
+      source, "\"metadata: v43 reference full buffer ready\"");
   ok &= expect_contains(source, "\"metadata: v43 reference before attrs\"");
   ok &= expect_contains(
       source, "\"metadata: v43 reference attrs ready\"");
@@ -565,16 +589,52 @@ int main(int argc, char **argv)
       "static int zz9k_picture_set_reference_v43_attrs");
   ok &= expect_contains(
       source,
+      "DTA_ErrorNumber, 0,\n"
+      "      DTA_NominalHoriz, width,\n"
+      "      DTA_NominalVert, height,\n"
+      "      PDTA_ModeID, 0,\n"
+      "      PDTA_SourceMode, PMODE_V43,\n"
+      "      PDTA_DestMode, PMODE_V43,\n"
+      "      PDTA_SubClassRendersAll, FALSE,\n"
+      "      PDTA_Remap, TRUE,\n"
+      "      DTA_ObjName");
+  ok &= expect_contains(
+      source,
       "      DTA_ErrorNumber, 0,\n"
       "      DTA_NominalHoriz, width,\n"
       "      DTA_NominalVert, height,\n"
       "      PDTA_ModeID, 0,\n"
       "      PDTA_SourceMode, PMODE_V43,\n"
+      "      PDTA_DestMode, PMODE_V43,\n"
+      "      PDTA_SubClassRendersAll, FALSE,\n"
+      "      PDTA_Remap, TRUE,\n"
       "      DTA_ObjName, (ULONG)zz9k_picture_object_name(codec),");
-  ok &= expect_contains(source, "\"metadata: v43 reference row writes done\"");
+  ok &= expect_contains(source, "zz9k_picture_write_v43_reference_pattern");
+  ok &= expect_contains(source, "zz9k_picture_write_v43_rgb_buffer");
+  ok &= expect_contains(
+      source,
+      "if (!zz9k_picture_write_v43_rgb_buffer(\n"
+      "          cl, object, pixel_data, 0U, 0U, width, height, row_bytes))");
+  ok &= expect_contains(
+      source,
+      "if (!zz9k_picture_write_v43_rgb_buffer(\n"
+      "      target->cl, target->object, (uint8_t *)tile->data,\n"
+      "      result->tile_x, result->tile_y,\n"
+      "      result->tile_width, result->tile_height, tile_stride))");
+  ok &= expect_not_contains(
+      source,
+      "pixels.pbpa_PixelData = (APTR)tile->data;\n"
+      "  pixels.pbpa_PixelFormat = PBPAFMT_RGB;\n"
+      "  pixels.pbpa_PixelArrayMod = tile_stride;");
+  ok &= expect_not_contains(source,
+                            "zz9k_picture_write_v43_reference_rows");
+  ok &= expect_contains(
+      source, "\"metadata: v43 reference full buffer ready\"");
+  ok &= expect_contains(
+      source, "\"metadata: v43 reference pixel write done\"");
   ok &= expect_contains(source, "\"metadata: v43 reference final attrs ready\"");
   ok &= expect_contains(source, "DoSuperMethodA(cl, object, (Msg)&pixels)");
-  ok &= expect_contains(source, "pixels.pbpa_Height = 1;");
+  ok &= expect_contains(source, "pixels.pbpa_Height = height;");
   ok &= expect_contains(source, "\"metadata: obtain pixel buffer tag\"");
   ok &= expect_contains(source, "\"metadata: obtain pixel buffer method\"");
   ok &= expect_contains(source, "\"metadata: v47 request format\"");
