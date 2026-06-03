@@ -50,6 +50,15 @@ The package is written to `build/package/amigaos3`. It contains:
 - examples under `Examples`
 - `MANIFEST.sha256` with SHA-256 checksums for every packaged file
 
+SDK v2 requires the matching unreleased SDK-service firmware. After installing
+the SDK package and booting that firmware, run this hardware smoke check:
+
+```text
+zz9k-services --check-release
+```
+
+The command should end with `release check ok`.
+
 For most application-side helper code, include `zz9k/sdk.h`; it pulls in the
 stable SDK v2 ABI, host/request/reply types, and helper headers. Include
 `proto/zz9k.h` as well when calling `zz9k.library` from AmigaOS.

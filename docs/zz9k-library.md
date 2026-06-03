@@ -70,9 +70,12 @@ printf("surface format: %s\n", zz9k_surface_format_text(surface.format));
 printf("service: %s\n", zz9k_service_text(ZZ9K_SERVICE_IMAGE));
 ```
 
+SDK v2 is paired with the new SDK-service firmware. The pre-service firmware is
+not a supported runtime for SDK v2 tools or `zz9k.library`, because the mailbox
+service registry did not exist before this release pair.
+
 Use `zz9k_known_service_count()` / `zz9k_known_service_id()` to enumerate the
-SDK-known built-in service IDs when probing firmware that does not yet provide
-the explicit service discovery capability.
+SDK-known built-in service IDs when checking the firmware service registry.
 
 Capability helpers live in `zz9k/caps.h` and are also header-only:
 
@@ -102,13 +105,28 @@ Use `zz9k_known_capability_count()` / `zz9k_known_capability_bit()` and
 `zz9k_known_service_flag_count()` / `zz9k_known_service_flag()` when a tool
 needs to enumerate all SDK-known bits without maintaining its own table.
 Use `zz9k_service_capability_mask()` and
-`zz9k_service_advertised_by_capabilities()` when fallback service discovery
-needs to derive advertised services from an older firmware capability bitmask.
+`zz9k_service_advertised_by_capabilities()` when a diagnostic wants to compare
+global firmware capabilities with explicit service descriptors.
 The reserved built-in service families now have explicit capability ownership:
 core/mailbox, memory, surface, gfx, image, audio, codec, storage, crypto,
 diagnostics, and module loading. Firmware should only advertise a service when
 the matching capability bit is set and `ZZ9KQueryService()` can return a stable
 descriptor for it.
+
+For release-pair hardware validation, run:
+
+```text
+zz9k-services --check-release
+```
+
+The command requires service discovery, queries the expected SDK v2 services,
+checks required capabilities, service flags, service version major, opcode base,
+and opcode count, and exits nonzero if the SDK and firmware do not match the
+current release contract. A matching firmware ends with:
+
+```text
+release check ok
+```
 
 Compression helpers live in `zz9k/compression.h`. They build the low-level
 shared-buffer descriptors used by archive and datatype tools without turning
