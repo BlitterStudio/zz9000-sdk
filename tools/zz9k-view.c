@@ -169,7 +169,8 @@ static int zz9k_view_present_image(ZZ9KContext *ctx,
 
 	if (!zz9k_picture_viewer_format_title(
 		    title, sizeof(title), index + 1U, count, image)) {
-		printf("zz9k-view: could not format window title\n");
+		printf("zz9k-view: could not format window title for '%s'\n",
+		       image && image->path ? image->path : "");
 		return 0;
 	}
 	zz9k_image_window_set_title(ui, title);
@@ -183,24 +184,50 @@ static int zz9k_view_present_image(ZZ9KContext *ctx,
 	return 1;
 }
 
-static int zz9k_view_load_initial(ZZ9KContext *ctx,
-                                  const ZZ9KSurface *framebuffer,
-                                  const ZZ9KPictureViewerArgs *args,
-                                  ZZ9KPictureViewerImage *image,
-                                  uint32_t *index)
+static int zz9k_view_open_window(const ZZ9KSurface *framebuffer,
+                                 const ZZ9KPictureViewerImage *image,
+                                 ZZ9KImageWindow *ui);
+
+static int zz9k_view_startup_image(ZZ9KContext *ctx,
+                                   const ZZ9KSurface *framebuffer,
+                                   const ZZ9KPictureViewerArgs *args,
+                                   ZZ9KImageWindow *ui,
+                                   int *window_open,
+                                   ZZ9KPictureViewerImage *image,
+                                   uint32_t *index)
 {
+	ZZ9KPictureViewerImage candidate;
 	uint32_t i;
 
-	if (!args || !image || !index)
+	if (!args || !ui || !window_open || !image || !index)
 		return 0;
 
 	for (i = 0U; i < args->file_count; i++) {
+		zz9k_picture_viewer_image_init(&candidate);
 		if (zz9k_view_decode_image(ctx, framebuffer, args->files[i],
-		                           image)) {
-			*index = i;
-			return 1;
+		                           &candidate)) {
+			if (!*window_open) {
+				if (!zz9k_view_open_window(framebuffer, &candidate,
+				                           ui)) {
+					printf("zz9k-view: failed to open image "
+					       "window for '%s'\n", args->files[i]);
+					zz9k_picture_viewer_image_free(ctx,
+					                               &candidate);
+					continue;
+				}
+				*window_open = 1;
+			}
+			if (zz9k_view_present_image(ctx, framebuffer, ui,
+			                            &candidate, i,
+			                            args->file_count)) {
+				*image = candidate;
+				*index = i;
+				return 1;
+			}
+			printf("zz9k-view: decoded '%s' but could not render it; "
+			       "trying next image\n", args->files[i]);
 		}
-		zz9k_picture_viewer_image_free(ctx, image);
+		zz9k_picture_viewer_image_free(ctx, &candidate);
 	}
 
 	printf("zz9k-view: no displayable images found\n");
@@ -344,17 +371,8 @@ int main(int argc, char **argv)
 		goto cleanup;
 	}
 
-	if (!zz9k_view_load_initial(ctx, &framebuffer, &args, &image,
-	                           &current_index)) {
-		goto cleanup;
-	}
-	if (!zz9k_view_open_window(&framebuffer, &image, &ui)) {
-		printf("zz9k-view: failed to open image window\n");
-		goto cleanup;
-	}
-	window_open = 1;
-	if (!zz9k_view_present_image(ctx, &framebuffer, &ui, &image,
-	                             current_index, args.file_count)) {
+	if (!zz9k_view_startup_image(ctx, &framebuffer, &args, &ui,
+	                             &window_open, &image, &current_index)) {
 		goto cleanup;
 	}
 

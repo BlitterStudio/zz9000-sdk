@@ -18,6 +18,10 @@ m68k-amigaos-gcc $LIBCFLAGS -c amiga/src/zz9k_library_resident.c -o build/m68k/z
 m68k-amigaos-gcc $CFLAGS -Itools -c tools/zz9k-fb-common.c -o build/m68k/zz9k-fb-common.o
 m68k-amigaos-gcc $CFLAGS -Itools -c tools/zz9k-image-window.c -o build/m68k/zz9k-image-window.o
 m68k-amigaos-gcc $CFLAGS -Itools -c tools/zz9k-picture-viewer.c -o build/m68k/zz9k-picture-viewer.o
+m68k-amigaos-gcc $CFLAGS -Itools -DZZ9K_JPEG_NO_MAIN=1 \
+  -c tools/zz9k-jpeg.c -o build/m68k/zz9k-jpeg-view.o
+m68k-amigaos-gcc $CFLAGS -Itools -DZZ9K_PNG_NO_MAIN=1 \
+  -c tools/zz9k-png.c -o build/m68k/zz9k-png-view.o
 m68k-amigaos-gcc $CFLAGS -Itools -DZZ9K_IMAGE_WINDOW_NO_UI=1 \
   -ffunction-sections -fdata-sections \
   -c tools/zz9k-image-window.c -o build/m68k/zz9k-image-window-resident.o
@@ -72,7 +76,7 @@ m68k-amigaos-gcc $CFLAGS build/m68k/zz9k_host.o tools/zz9k-mp3.c -o build/zz9k-m
 m68k-amigaos-gcc $LIBCFLAGS tools/zz9k-mpega-smoke.c -o build/zz9k-mpega-smoke
 m68k-amigaos-gcc $CFLAGS -Itools build/m68k/zz9k_host.o build/m68k/zz9k-fb-common.o build/m68k/zz9k-image-window.o build/m68k/zz9k-picture-viewer.o tools/zz9k-jpeg.c -o build/zz9k-jpeg
 m68k-amigaos-gcc $CFLAGS -Itools build/m68k/zz9k_host.o build/m68k/zz9k-fb-common.o build/m68k/zz9k-image-window.o build/m68k/zz9k-picture-viewer.o tools/zz9k-png.c -o build/zz9k-png
-m68k-amigaos-gcc $CFLAGS tools/zz9k-view.c -o build/zz9k-view
+m68k-amigaos-gcc $CFLAGS -Itools build/m68k/zz9k_host.o build/m68k/zz9k-fb-common.o build/m68k/zz9k-image-window.o build/m68k/zz9k-picture-viewer.o build/m68k/zz9k-jpeg-view.o build/m68k/zz9k-png-view.o tools/zz9k-view.c -o build/zz9k-view
 m68k-amigaos-gcc $LIBCFLAGS tools/zz9k-dtprobe.c -o build/zz9k-dtprobe
 m68k-amigaos-gcc -noixemul -nostartfiles -Os -s -Iinclude -Ihost/include -Iamiga/include -Itools \
   build/m68k/zz9k_host.o build/m68k/zz9k-fb-common.o \
