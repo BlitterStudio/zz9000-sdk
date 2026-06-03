@@ -560,16 +560,21 @@ framebuffer rectangle is backed up with ARM surface-copy operations unless
 from that backup surface. Static non-interlaced PNG files are supported; APNG,
 interlaced PNG, and tile output are still rejected.
 
-`zz9k-view` is a small packaged launcher for real-hardware viewer testing. It
-detects JPEG or PNG from the file header and runs the matching tool in `--view`
-mode:
+`zz9k-view` is the standalone ZZ9000 viewer for the SDK v2 image path. It
+accepts one or more JPEG or PNG files, opens one resizable Intuition window,
+decodes the current image into an ARM-local surface, and redraws the fitted
+image through visible layer clips with sliced `ZZ9KScaleImageClipped()` jobs:
 
 ```sh
-zz9k-view Work:Pictures/test.jpg
-zz9k-view Work:Pictures/test.png
+zz9k-view Work:Pictures/test.jpg Work:Pictures/test.png
 ```
 
-These CLI tools are hardware smoke tests. Final DataType/viewer code must
+Use Space/Right/Down for next image navigation, Left/Up/Backspace for previous,
+`r` to redraw/refit, and `q`, Esc, or the close gadget to exit. The lower-level
+`zz9k-jpeg --view` and `zz9k-png --view` commands remain useful codec smoke
+paths; `zz9k-view` is the user-facing demo viewer.
+
+These CLI tools are hardware smoke tests. User-facing viewer and DataType output should
 enumerate visible layer or damage clip regions and submit clipped scale bands
 for those regions only, so refresh, occlusion, and window stacking semantics
 match Intuition/Layers instead of the diagnostic framebuffer rectangle model.

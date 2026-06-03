@@ -91,6 +91,12 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "zz9k-jpeg");
   ok &= expect_contains(source, "zz9k-png");
   ok &= expect_contains(source, "zz9k-view");
+  ok &= expect_contains(source,
+                        "zz9k-view Work:Pictures/test.jpg Work:Pictures/test.png");
+  ok &= expect_contains(source,
+                        "next/previous keys navigate between the images");
+  ok &= expect_contains(source,
+                        "resize and occlusion redraw through visible clips");
   ok &= expect_contains(source, "zz9k-dtprobe");
   ok &= expect_contains(source, "MultiView");
   ok &= expect_contains(source, "copy Storage/DataTypes/ZZ9000-JPEG#? TO DEVS:DataTypes/");

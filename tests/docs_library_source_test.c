@@ -103,7 +103,7 @@ int main(int argc, char **argv)
   ok &= expect_contains(source,
                         "shared image-window helper requests refresh events");
   ok &= expect_contains(source,
-                        "Final DataType/viewer code must");
+                        "User-facing viewer and DataType output should");
   ok &= expect_contains(source,
                         "enumerate visible layer or damage clip regions");
   ok &= expect_contains(source,
@@ -114,8 +114,14 @@ int main(int argc, char **argv)
                         "obscured clip rectangles");
   ok &= expect_contains(source,
                         "visible image restore");
-  ok &= expect_contains(source, "zz9k-view Work:Pictures/test.jpg");
-  ok &= expect_contains(source, "waits for the viewer window to close");
+  ok &= expect_contains(source,
+                        "zz9k-view Work:Pictures/test.jpg Work:Pictures/test.png");
+  ok &= expect_contains(source, "standalone ZZ9000 viewer");
+  ok &= expect_contains(source, "Space/Right/Down");
+  ok &= expect_contains(source, "visible layer clips");
+  ok &= expect_not_contains(
+      source,
+      "detects JPEG or PNG from the file header and runs the matching tool");
   ok &= expect_contains(source, "Library revision 17 adds a resident event dispatcher");
   ok &= expect_contains(source, "ZZ9K_LIBRARY_MIN_REVISION_EVENT_DISPATCHER");
   ok &= expect_contains(source, "zz9k/event_wait.h");

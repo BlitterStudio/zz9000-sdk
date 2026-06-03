@@ -112,8 +112,7 @@ zz9k-jpeg Work:Pictures/test.jpg
 zz9k-jpeg --fb --hold 200 Work:Pictures/test.jpg
 zz9k-png Work:Pictures/test.png
 zz9k-png --fb --hold 200 Work:Pictures/test.png
-zz9k-view Work:Pictures/test.jpg
-zz9k-view Work:Pictures/test.png
+zz9k-view Work:Pictures/test.jpg Work:Pictures/test.png
 zz9k-dtprobe --client Work:Pictures/test.jpg
 zz9k-dtprobe --client Work:Pictures/test.png
 MultiView Work:Pictures/test.jpg
@@ -123,8 +122,10 @@ MultiView Work:Pictures/test.png
 Expected pass signal:
 
 - JPEG and PNG decode paths complete without SDK status errors.
-- Framebuffer and viewer windows show the image, survive close/resize where the
-  command opens a resizable viewer, and restore visible RTG contents.
+- `zz9k-view` opens one resizable viewer window, displays each image, and the
+  next/previous keys navigate between the images.
+- Viewer resize and occlusion redraw through visible clips without corrupting
+  surrounding RTG contents.
 - DataType descriptors are activated from `Storage/DataTypes`, and
   `AddDataTypes LIST` shows `ZZ9000-JPEG` and `ZZ9000-PNG`.
 - DataTypes clients display JPEG and PNG through `zz9k-picture.datatype`.
