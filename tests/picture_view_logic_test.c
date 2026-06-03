@@ -25,6 +25,8 @@ int main(void)
 	};
 	char *empty_argv[1] = {"zz9k-view"};
 	char *option_argv[2] = {"zz9k-view", "--resize"};
+	char *null_file_argv[2] = {"zz9k-view", 0};
+	char *empty_file_argv[2] = {"zz9k-view", ""};
 	ZZ9KPictureViewerArgs args;
 	ZZ9KPictureViewerImage image;
 	char title[128];
@@ -61,11 +63,30 @@ int main(void)
 		printf("accepted unsupported viewer option\n");
 		return 6;
 	}
+	if (zz9k_picture_viewer_parse_args(2, 0, &args)) {
+		printf("accepted null viewer argv\n");
+		return 11;
+	}
+	if (zz9k_picture_viewer_parse_args(4, viewer_argv, 0)) {
+		printf("accepted null viewer args output\n");
+		return 12;
+	}
+	if (zz9k_picture_viewer_parse_args(2, null_file_argv, &args)) {
+		printf("accepted null viewer file arg\n");
+		return 13;
+	}
+	if (zz9k_picture_viewer_parse_args(2, empty_file_argv, &args)) {
+		printf("accepted empty viewer file arg\n");
+		return 14;
+	}
 
 	if (strcmp(zz9k_picture_viewer_basename("Work:Pictures/test.jpg"),
 	           "test.jpg") != 0 ||
 	    strcmp(zz9k_picture_viewer_basename("SYS:Prefs/alpha test.png"),
 	           "alpha test.png") != 0 ||
+	    strcmp(zz9k_picture_viewer_basename(
+		           "Work:Pictures\\nested\\test.png"),
+	           "test.png") != 0 ||
 	    strcmp(zz9k_picture_viewer_basename("plain.jpg"),
 	           "plain.jpg") != 0) {
 		printf("did not format viewer basenames\n");
@@ -87,6 +108,8 @@ int main(void)
 
 	if (zz9k_picture_viewer_next_index(2U, 3U) != 0U ||
 	    zz9k_picture_viewer_previous_index(0U, 3U) != 2U ||
+	    zz9k_picture_viewer_next_index(0U, 0U) != 0U ||
+	    zz9k_picture_viewer_previous_index(0U, 0U) != 0U ||
 	    zz9k_picture_viewer_next_index(0U, 1U) != 0U ||
 	    zz9k_picture_viewer_previous_index(0U, 1U) != 0U) {
 		printf("did not wrap viewer navigation\n");
@@ -97,13 +120,27 @@ int main(void)
 	        ZZ9K_PICTURE_VIEWER_ACTION_QUIT ||
 	    zz9k_picture_viewer_action_from_keys('Q', 0U) !=
 	        ZZ9K_PICTURE_VIEWER_ACTION_QUIT ||
+	    zz9k_picture_viewer_action_from_keys(0x1bU, 0U) !=
+	        ZZ9K_PICTURE_VIEWER_ACTION_QUIT ||
+	    zz9k_picture_viewer_action_from_keys(0U, 0x45U) !=
+	        ZZ9K_PICTURE_VIEWER_ACTION_QUIT ||
 	    zz9k_picture_viewer_action_from_keys(' ', 0U) !=
+	        ZZ9K_PICTURE_VIEWER_ACTION_NEXT ||
+	    zz9k_picture_viewer_action_from_keys(0U, 0x4dU) !=
 	        ZZ9K_PICTURE_VIEWER_ACTION_NEXT ||
 	    zz9k_picture_viewer_action_from_keys(0U, 0x4eU) !=
 	        ZZ9K_PICTURE_VIEWER_ACTION_NEXT ||
+	    zz9k_picture_viewer_action_from_keys(0x08U, 0U) !=
+	        ZZ9K_PICTURE_VIEWER_ACTION_PREVIOUS ||
+	    zz9k_picture_viewer_action_from_keys(0U, 0x41U) !=
+	        ZZ9K_PICTURE_VIEWER_ACTION_PREVIOUS ||
+	    zz9k_picture_viewer_action_from_keys(0U, 0x4cU) !=
+	        ZZ9K_PICTURE_VIEWER_ACTION_PREVIOUS ||
 	    zz9k_picture_viewer_action_from_keys(0U, 0x4fU) !=
 	        ZZ9K_PICTURE_VIEWER_ACTION_PREVIOUS ||
 	    zz9k_picture_viewer_action_from_keys('r', 0U) !=
+	        ZZ9K_PICTURE_VIEWER_ACTION_REDRAW ||
+	    zz9k_picture_viewer_action_from_keys('R', 0U) !=
 	        ZZ9K_PICTURE_VIEWER_ACTION_REDRAW ||
 	    zz9k_picture_viewer_action_from_keys('x', 0U) !=
 	        ZZ9K_PICTURE_VIEWER_ACTION_NONE) {
