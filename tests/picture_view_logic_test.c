@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#define ZZ9K_VIEW_NO_MAIN 1
+#include "../tools/zz9k-view.c"
 #include "../tools/zz9k-picture-viewer.h"
 
 #include <stdint.h>
@@ -29,6 +31,7 @@ int main(void)
 	char *empty_file_argv[2] = {"zz9k-view", ""};
 	ZZ9KPictureViewerArgs args;
 	ZZ9KPictureViewerImage image;
+	char command[128];
 	char title[128];
 
 	if (zz9k_picture_viewer_detect_codec(jpeg_header, sizeof(jpeg_header)) !=
@@ -46,6 +49,48 @@ int main(void)
 	    ZZ9K_PICTURE_VIEWER_CODEC_UNKNOWN) {
 		printf("accepted unknown picture header\n");
 		return 3;
+	}
+	if (zz9k_view_detect_codec(jpeg_header, sizeof(jpeg_header)) !=
+	    ZZ9K_VIEW_CODEC_JPEG) {
+		printf("launcher did not detect JPEG header\n");
+		return 15;
+	}
+	if (zz9k_view_detect_codec(png_header, sizeof(png_header)) !=
+	    ZZ9K_VIEW_CODEC_PNG) {
+		printf("launcher did not detect PNG header\n");
+		return 16;
+	}
+	if (zz9k_view_detect_codec(unknown_header, sizeof(unknown_header)) !=
+	    ZZ9K_VIEW_CODEC_UNKNOWN) {
+		printf("launcher accepted unknown picture header\n");
+		return 17;
+	}
+	if (!zz9k_view_build_command(ZZ9K_VIEW_CODEC_JPEG,
+	                             "Work:Pictures/Test Image.jpg",
+	                             command, sizeof(command)) ||
+	    strcmp(command,
+	           "zz9k-jpeg --view \"Work:Pictures/Test Image.jpg\"") != 0) {
+		printf("launcher did not build JPEG view command: %s\n", command);
+		return 18;
+	}
+	if (!zz9k_view_build_command(ZZ9K_VIEW_CODEC_PNG,
+	                             "Work:Pictures/Test.png",
+	                             command, sizeof(command)) ||
+	    strcmp(command, "zz9k-png --view \"Work:Pictures/Test.png\"") != 0) {
+		printf("launcher did not build PNG view command: %s\n", command);
+		return 19;
+	}
+	if (zz9k_view_build_command(ZZ9K_VIEW_CODEC_UNKNOWN,
+	                            "Work:Pictures/Test.bin",
+	                            command, sizeof(command))) {
+		printf("launcher accepted unknown codec command\n");
+		return 20;
+	}
+	if (zz9k_view_build_command(ZZ9K_VIEW_CODEC_JPEG,
+	                            "Work:Bad\"Name.jpg",
+	                            command, sizeof(command))) {
+		printf("launcher accepted unquotable path\n");
+		return 21;
 	}
 
 	memset(&args, 0, sizeof(args));

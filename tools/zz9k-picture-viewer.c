@@ -162,7 +162,8 @@ void zz9k_picture_viewer_image_free(ZZ9KContext *ctx,
 {
 	if (!image)
 		return;
-	if (ctx && image->surface_allocated && image->surface.handle != 0U)
+	if (ctx && image->surface_allocated && image->surface.handle != 0U &&
+	    image->surface.handle != ZZ9K_INVALID_HANDLE)
 		zz9k_free_surface(ctx, image->surface.handle);
 	zz9k_picture_viewer_image_init(image);
 }
