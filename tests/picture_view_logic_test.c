@@ -4,15 +4,71 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-#define ZZ9K_VIEW_NO_MAIN 1
-#include "../tools/zz9k-view.c"
 #include "../tools/zz9k-picture-viewer.h"
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
-int main(void)
+static char *read_file(const char *path)
+{
+	FILE *file;
+	long length;
+	char *data;
+
+	file = fopen(path, "rb");
+	if (!file)
+		return 0;
+	if (fseek(file, 0, SEEK_END) != 0) {
+		fclose(file);
+		return 0;
+	}
+	length = ftell(file);
+	if (length < 0) {
+		fclose(file);
+		return 0;
+	}
+	if (fseek(file, 0, SEEK_SET) != 0) {
+		fclose(file);
+		return 0;
+	}
+
+	data = (char *)malloc((size_t)length + 1U);
+	if (!data) {
+		fclose(file);
+		return 0;
+	}
+	if (fread(data, 1U, (size_t)length, file) != (size_t)length) {
+		free(data);
+		fclose(file);
+		return 0;
+	}
+
+	data[length] = '\0';
+	fclose(file);
+	return data;
+}
+
+static int expect_contains(const char *source, const char *needle)
+{
+	if (strstr(source, needle))
+		return 1;
+
+	printf("missing %s\n", needle);
+	return 0;
+}
+
+static int expect_not_contains(const char *source, const char *needle)
+{
+	if (!strstr(source, needle))
+		return 1;
+
+	printf("unexpected %s\n", needle);
+	return 0;
+}
+
+int main(int argc, char **argv)
 {
 	uint8_t jpeg_header[4] = {0xff, 0xd8, 0xff, 0xe0};
 	uint8_t png_header[8] = {
@@ -31,8 +87,14 @@ int main(void)
 	char *empty_file_argv[2] = {"zz9k-view", ""};
 	ZZ9KPictureViewerArgs args;
 	ZZ9KPictureViewerImage image;
-	char command[128];
 	char title[128];
+	char *source;
+	int ok;
+
+	if (argc != 2) {
+		printf("usage: %s <tools/zz9k-view.c>\n", argv[0]);
+		return 2;
+	}
 
 	if (zz9k_picture_viewer_detect_codec(jpeg_header, sizeof(jpeg_header)) !=
 	    ZZ9K_PICTURE_VIEWER_CODEC_JPEG) {
@@ -49,48 +111,6 @@ int main(void)
 	    ZZ9K_PICTURE_VIEWER_CODEC_UNKNOWN) {
 		printf("accepted unknown picture header\n");
 		return 3;
-	}
-	if (zz9k_view_detect_codec(jpeg_header, sizeof(jpeg_header)) !=
-	    ZZ9K_VIEW_CODEC_JPEG) {
-		printf("launcher did not detect JPEG header\n");
-		return 15;
-	}
-	if (zz9k_view_detect_codec(png_header, sizeof(png_header)) !=
-	    ZZ9K_VIEW_CODEC_PNG) {
-		printf("launcher did not detect PNG header\n");
-		return 16;
-	}
-	if (zz9k_view_detect_codec(unknown_header, sizeof(unknown_header)) !=
-	    ZZ9K_VIEW_CODEC_UNKNOWN) {
-		printf("launcher accepted unknown picture header\n");
-		return 17;
-	}
-	if (!zz9k_view_build_command(ZZ9K_VIEW_CODEC_JPEG,
-	                             "Work:Pictures/Test Image.jpg",
-	                             command, sizeof(command)) ||
-	    strcmp(command,
-	           "zz9k-jpeg --view \"Work:Pictures/Test Image.jpg\"") != 0) {
-		printf("launcher did not build JPEG view command: %s\n", command);
-		return 18;
-	}
-	if (!zz9k_view_build_command(ZZ9K_VIEW_CODEC_PNG,
-	                             "Work:Pictures/Test.png",
-	                             command, sizeof(command)) ||
-	    strcmp(command, "zz9k-png --view \"Work:Pictures/Test.png\"") != 0) {
-		printf("launcher did not build PNG view command: %s\n", command);
-		return 19;
-	}
-	if (zz9k_view_build_command(ZZ9K_VIEW_CODEC_UNKNOWN,
-	                            "Work:Pictures/Test.bin",
-	                            command, sizeof(command))) {
-		printf("launcher accepted unknown codec command\n");
-		return 20;
-	}
-	if (zz9k_view_build_command(ZZ9K_VIEW_CODEC_JPEG,
-	                            "Work:Bad\"Name.jpg",
-	                            command, sizeof(command))) {
-		printf("launcher accepted unquotable path\n");
-		return 21;
 	}
 
 	memset(&args, 0, sizeof(args));
@@ -192,6 +212,27 @@ int main(void)
 		printf("did not map viewer keys\n");
 		return 10;
 	}
+
+	source = read_file(argv[1]);
+	if (!source) {
+		printf("failed to read %s\n", argv[1]);
+		return 22;
+	}
+
+	ok = 1;
+	ok &= expect_not_contains(source, "system(");
+	ok &= expect_not_contains(source, "zz9k_view_build_command");
+	ok &= expect_not_contains(source, "zz9k-jpeg --view");
+	ok &= expect_not_contains(source, "zz9k-png --view");
+	ok &= expect_contains(source, "zz9k_jpeg_decode_viewer_image");
+	ok &= expect_contains(source, "zz9k_png_decode_viewer_image");
+	ok &= expect_contains(source, "zz9k_image_window_poll_event");
+	ok &= expect_contains(source, "zz9k_picture_viewer_render_image");
+	ok &= expect_contains(source, "zz9k_image_window_set_title");
+
+	free(source);
+	if (!ok)
+		return 23;
 
 	return 0;
 }

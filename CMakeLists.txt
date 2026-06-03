@@ -849,7 +849,9 @@ target_include_directories(picture_view_logic_test
 
 target_link_libraries(picture_view_logic_test PRIVATE zz9k_picture_viewer)
 
-add_test(NAME picture_view_logic_test COMMAND picture_view_logic_test)
+add_test(NAME picture_view_logic_test
+  COMMAND picture_view_logic_test
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools/zz9k-view.c)
 
 add_executable(picture_datatype_source_test
   tests/picture_datatype_source_test.c
@@ -1057,6 +1059,15 @@ target_link_libraries(zz9k_png_view_backend PUBLIC zz9k_host zz9k_fb_common zz9k
 
 add_executable(zz9k_view
   tools/zz9k-view.c
+)
+
+target_link_libraries(zz9k_view PRIVATE
+  zz9k_host
+  zz9k_fb_common
+  zz9k_image_window
+  zz9k_picture_viewer
+  zz9k_jpeg_view_backend
+  zz9k_png_view_backend
 )
 
 add_executable(zz9k_surface_info
