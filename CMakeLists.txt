@@ -1029,7 +1029,15 @@ add_executable(zz9k_jpeg
   tools/zz9k-jpeg.c
 )
 
-target_link_libraries(zz9k_jpeg PRIVATE zz9k_host zz9k_fb_common zz9k_image_window)
+target_link_libraries(zz9k_jpeg PRIVATE zz9k_host zz9k_fb_common zz9k_image_window zz9k_picture_viewer)
+
+add_library(zz9k_jpeg_view_backend STATIC
+  tools/zz9k-jpeg.c
+)
+
+target_compile_definitions(zz9k_jpeg_view_backend PRIVATE ZZ9K_JPEG_NO_MAIN=1)
+
+target_link_libraries(zz9k_jpeg_view_backend PUBLIC zz9k_host zz9k_fb_common zz9k_image_window zz9k_picture_viewer)
 
 add_executable(zz9k_png
   tools/zz9k-png.c

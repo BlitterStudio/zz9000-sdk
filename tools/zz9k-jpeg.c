@@ -1,5 +1,6 @@
 #include "zz9k-fb-common.h"
 #include "zz9k-image-window.h"
+#include "zz9k-jpeg-view.h"
 #include "zz9k/caps.h"
 #include "zz9k/host.h"
 #include "zz9k/image.h"
@@ -2150,6 +2151,216 @@ cleanup:
 	if (staging_allocated)
 		zz9k_free_shared(ctx, staging.handle);
 	return rc;
+}
+
+int zz9k_jpeg_decode_viewer_image(ZZ9KContext *ctx,
+                                  const ZZ9KSurface *framebuffer,
+                                  const char *path,
+                                  ZZ9KPictureViewerImage *image)
+{
+	ZZ9KJpegInput input;
+	ZZ9KSharedBuffer staging;
+	ZZ9KSurface decoded_surface;
+	ZZ9KImageSessionBeginDesc begin;
+	ZZ9KImageSessionResult result;
+	ZZ9KRect output_rect;
+	FILE *file = 0;
+	uint32_t tiles = 0U;
+	uint32_t tile_output_bytes = 0U;
+	uint32_t output_width = 0U;
+	uint32_t output_height = 0U;
+	uint32_t decode_width = 0U;
+	uint32_t decode_height = 0U;
+	uint32_t begin_flags = 0U;
+	uint32_t output_format = 0U;
+	uint32_t decode_pitch = 0U;
+	uint32_t expected_output_pitch = 0U;
+	uint32_t expected_output_bytes = 0U;
+	uint32_t session = 0U;
+	int staging_allocated = 0;
+	int decoded_surface_allocated = 0;
+	int session_open = 0;
+	int success = 0;
+	int status;
+
+	if (!image) {
+		printf("zz9k-view: missing JPEG viewer image output\n");
+		return 0;
+	}
+	zz9k_picture_viewer_image_init(image);
+
+	if (!ctx || !framebuffer || !path || path[0] == '\0' ||
+	    framebuffer->width == 0U || framebuffer->height == 0U) {
+		printf("zz9k-view: invalid JPEG viewer decode request\n");
+		return 0;
+	}
+
+	memset(&input, 0, sizeof(input));
+	memset(&staging, 0, sizeof(staging));
+	memset(&decoded_surface, 0, sizeof(decoded_surface));
+	memset(&begin, 0, sizeof(begin));
+	memset(&result, 0, sizeof(result));
+
+	if (!zz9k_jpeg_load_file(path, &input)) {
+		printf("zz9k-view: failed to load JPEG metadata for '%s'\n", path);
+		goto cleanup;
+	}
+	input.use_framebuffer = 1;
+	input.resize_framebuffer = 1;
+	input.view_framebuffer = 1;
+	input.restore_framebuffer = 1;
+	input.fit_framebuffer = 1;
+	input.prefer_surface_backup = 1;
+
+	status = zz9k_alloc_shared(ctx, ZZ9K_JPEG_STAGING_BYTES, 16U, 0,
+	                          &staging);
+	if (status != ZZ9K_STATUS_OK) {
+		printf("zz9k-view: JPEG staging alloc failed: %s (%d)\n",
+		       zz9k_status_name(status), status);
+		goto cleanup;
+	}
+	staging_allocated = 1;
+
+	if (!zz9k_jpeg_choose_decode_surface_size(
+		    &input, framebuffer->width, framebuffer->height,
+		    &decode_width, &decode_height)) {
+		printf("zz9k-view: could not choose JPEG decode surface size\n");
+		goto cleanup;
+	}
+
+	output_format = framebuffer->format;
+	if (!zz9k_surface_is_native_rtg_format(output_format)) {
+		printf("zz9k-view: framebuffer is not native RTG "
+		       "(framebuffer %lu x %lu format=%lu)\n",
+		       (unsigned long)framebuffer->width,
+		       (unsigned long)framebuffer->height,
+		       (unsigned long)framebuffer->format);
+		goto cleanup;
+	}
+	if (!zz9k_surface_min_pitch(decode_width, output_format,
+	                            &decode_pitch)) {
+		printf("zz9k-view: invalid JPEG decode surface pitch\n");
+		goto cleanup;
+	}
+	status = zz9k_alloc_surface_ex(ctx, decode_width, decode_height,
+	                               output_format,
+	                               ZZ9K_SURFACE_FLAG_ARM_LOCAL,
+	                               decode_pitch, &decoded_surface);
+	if (status != ZZ9K_STATUS_OK) {
+		printf("zz9k-view: JPEG decode surface alloc failed: %s (%d)\n",
+		       zz9k_status_name(status), status);
+		goto cleanup;
+	}
+	decoded_surface_allocated = 1;
+
+	if (decode_width != input.width || decode_height != input.height) {
+		begin_flags = ZZ9K_IMAGE_DECODE_FLAG_FIT |
+			      ZZ9K_IMAGE_DECODE_FLAG_PRESERVE_ASPECT;
+	}
+	output_rect.x = 0U;
+	output_rect.y = 0U;
+	output_rect.w = decode_width;
+	output_rect.h = decode_height;
+	if (!zz9k_image_build_surface_session_begin_desc(
+		    &begin, ZZ9K_IMAGE_CODEC_JPEG, decoded_surface.handle,
+		    &output_rect, output_format, begin_flags)) {
+		printf("zz9k-view: could not build JPEG stream begin descriptor\n");
+		goto cleanup;
+	}
+
+	status = zz9k_image_session_begin(ctx, &begin, &result);
+	if (status != ZZ9K_STATUS_OK) {
+		printf("zz9k-view: JPEG stream begin failed: %s (%d)\n",
+		       zz9k_status_name(status), status);
+		goto cleanup;
+	}
+	session = result.session;
+	session_open = 1;
+	if (session == 0U ||
+	    result.state != ZZ9K_IMAGE_SESSION_STATE_NEED_INPUT) {
+		printf("zz9k-view: unexpected JPEG stream begin result\n");
+		goto cleanup;
+	}
+
+	file = fopen(path, "rb");
+	if (!file) {
+		printf("zz9k-view: failed to open '%s'\n", path);
+		goto cleanup;
+	}
+	if (!zz9k_jpeg_feed_stream(ctx, file, &input, &staging, session,
+	                           &tiles, &tile_output_bytes, &result)) {
+		printf("zz9k-view: JPEG stream feed failed for '%s'\n", path);
+		goto cleanup;
+	}
+
+	if (result.image_width != input.width ||
+	    result.image_height != input.height ||
+	    result.output_format != output_format) {
+		printf("zz9k-view: unexpected JPEG stream result %lu x %lu "
+		       "format=%lu\n",
+		       (unsigned long)result.image_width,
+		       (unsigned long)result.image_height,
+		       (unsigned long)result.output_format);
+		goto cleanup;
+	}
+	if (result.tile_width == 0U || result.tile_height == 0U ||
+	    result.tile_width > decoded_surface.width ||
+	    result.tile_height > decoded_surface.height) {
+		printf("zz9k-view: unexpected JPEG surface output %lu x %lu "
+		       "for surface %lu x %lu\n",
+		       (unsigned long)result.tile_width,
+		       (unsigned long)result.tile_height,
+		       (unsigned long)decoded_surface.width,
+		       (unsigned long)decoded_surface.height);
+		goto cleanup;
+	}
+	output_width = result.tile_width;
+	output_height = result.tile_height;
+	if (!zz9k_surface_layout(output_width, output_height, output_format,
+	                         &expected_output_pitch,
+	                         &expected_output_bytes)) {
+		printf("zz9k-view: JPEG decoded output is too large\n");
+		goto cleanup;
+	}
+	if (result.bytes_written != expected_output_bytes) {
+		printf("zz9k-view: unexpected JPEG output bytes=%lu expected=%lu\n",
+		       (unsigned long)result.bytes_written,
+		       (unsigned long)expected_output_bytes);
+		goto cleanup;
+	}
+
+	success = 1;
+
+cleanup:
+	if (file)
+		fclose(file);
+	if (session_open) {
+		status = zz9k_image_session_close(ctx, session, 0U);
+		if (status != ZZ9K_STATUS_OK) {
+			printf("zz9k-view: JPEG stream close failed: %s (%d)\n",
+			       zz9k_status_name(status), status);
+			success = 0;
+		}
+	}
+	if (success) {
+		image->codec = ZZ9K_PICTURE_VIEWER_CODEC_JPEG;
+		image->path = path;
+		image->width = output_width;
+		image->height = output_height;
+		image->surface = decoded_surface;
+		image->surface_allocated = 1;
+		decoded_surface_allocated = 0;
+	}
+	if (decoded_surface_allocated)
+		zz9k_free_surface(ctx, decoded_surface.handle);
+	if (staging_allocated)
+		zz9k_free_shared(ctx, staging.handle);
+	if (!success)
+		zz9k_picture_viewer_image_init(image);
+	(void)tiles;
+	(void)tile_output_bytes;
+	(void)expected_output_pitch;
+	return success;
 }
 
 #ifndef ZZ9K_JPEG_NO_MAIN

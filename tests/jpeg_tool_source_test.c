@@ -163,6 +163,7 @@ int main(int argc, char **argv)
   ok &= expect_not_contains(source, "shared_decode_surface");
   ok &= expect_not_contains(source, "top_pad");
   ok &= expect_contains(source, "zz9k-image-window.h");
+  ok &= expect_contains(source, "#include \"zz9k-jpeg-view.h\"");
   ok &= expect_contains(source, "zz9k_image_window_visible_clips");
   ok &= expect_contains(source, "--view");
   ok &= expect_contains(source, "showing until close");
@@ -182,6 +183,9 @@ int main(int argc, char **argv)
                         "zz9k_surface_min_pitch(width, output_format, &row_bytes)");
   ok &= expect_contains(source,
                         "zz9k_jpeg_choose_tile_rows(jpeg_input->width,");
+  ok &= expect_contains(source, "zz9k_jpeg_decode_viewer_image");
+  ok &= expect_contains(source, "ZZ9KPictureViewerImage");
+  ok &= expect_contains(source, "ZZ9K_PICTURE_VIEWER_CODEC_JPEG");
   ok &= expect_contains(source, "output_bpp");
   ok &= expect_not_contains(source, "zz9k_jpeg_output_bytes");
   ok &= expect_not_contains(source, "uint32_t bytes_per_pixel");
