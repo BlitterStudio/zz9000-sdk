@@ -912,21 +912,21 @@ skipped deliberately, while unknown file metadata properties are rejected rather
 than silently accepted. 7z member names are decoded from UTF-16, backslash
 separators are normalized to `/`, current-directory path components such as
 leading `./` and embedded `/./` are stripped, and duplicate slash separators
-are collapsed before the common path-safety checks run. Non-Copy
-multi-substream folders are detected and listed with their substream names and
-sizes, but test/extract refuses them with a specific unsupported-layout
-diagnostic because splitting a decoded solid-like stream into file ranges is not
-implemented yet. 7z archive-root metadata entries such as `./` are skipped and
-do not consume output entry slots. A single-folder 7z LZMA2 stream with one file,
-one pack stream, and the normal 1-byte LZMA2 property is offloaded through the
-LZMA2 codec service. If the LZMA2 feed/stream path reports `no-memory` while
+are collapsed before the common path-safety checks run. Simple compressed
+multi-substream Deflate/LZMA/LZMA2 folders are listed with their substream
+names and sizes; on the file-backed `t`/`x` path, `zz9k-archive` decodes the
+folder once with `decompress-feed`, splits the decoded bytes across the listed
+entries, and validates each substream CRC when the archive provides one. 7z
+archive-root metadata entries such as `./` are skipped and do not consume
+output entry slots. A single-folder 7z LZMA2 stream with one file, one pack
+stream, and the normal 1-byte LZMA2 property is offloaded through the LZMA2
+codec service. If the LZMA2 feed/stream path reports `no-memory` while
 allocating the ARM-side dictionary, `zz9k-archive` falls back to a one-shot
 LZMA2 decode for entries whose decoded output fits in the SDK shared heap; that
 one-shot firmware path uses the decoded output buffer as the dictionary. Larger
 entries with large LZMA2 dictionary properties still require enough ARM heap for
-the streaming dictionary. Solid compressed blocks, multi-coder/filter chains,
-encrypted streams, and non-Copy multi-substream extraction remain future parser
-layers.
+the streaming dictionary. Multi-coder/filter chains, encrypted streams, and more
+complex 7z solid layouts remain future parser layers.
 
 7z LZMA no-memory diagnostics are printed on failed test or extract jobs. The
 tool reports the packed size, requested output size, parsed dictionary size, and

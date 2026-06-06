@@ -2,9 +2,12 @@
 
 Copyright (C) 2024-2026, Dimitris Panokostas / BlitterStudio
 
-`zz9k-picture.datatype 42.139` is the validated SDK v2 DataType candidate for
+`zz9k-picture.datatype 42.146` is the validated SDK v2 DataType candidate for
 the current package. It is packaged as a side-by-side subclass of the system
 `picture.datatype` and must not replace `Classes/DataTypes/picture.datatype`.
+OS3.1 remains the minimum target: the class opens against
+`picture.datatype` v39 and dynamically uses newer superclass features only
+when they are available.
 
 The class binary installs as:
 
@@ -64,28 +67,60 @@ The `--draw-window` mode opens a temporary public-screen window, runs layout
 if needed, adds the datatype object to that window, refreshes it, and hashes
 the actual screen pixels over a capped diagnostic rectangle.
 
-Current PNG alpha handling deliberately keeps the v43 picture object contract
-opaque while the OS3/v47 true-alpha subclass contract is still under
-investigation. For the current release-candidate build, alpha-containing PNGs are
-forced back through the RGB888 tile path after clearing the visible alpha
-contract. This is the known stable path, but it can expose hidden RGB from
-fully transparent source pixels; it is not a final solution for browser
-page-background transparency.
-
 Hardware testing confirmed the `42.135` rollback no longer crashes, and the
 follow-up benchmark run showed no regressions. The failed `42.133`/`42.134`
 experiments show that requesting RGBA8888 firmware tiles and then writing RGB
 rows through an otherwise opaque v43 object is not a safe compatibility path.
-The next transparent-PNG attempt should either wait for a confirmed OS3/v47
-alpha contract or add a firmware/API path that supplies RGB and transparency
-data without asking the current opaque v43 datatype route to process RGBA
-tiles.
+After checking the TGAdt/JFIFdt44 reference datatype sources, `42.140` adds two
+opt-in diagnostic render modes for hardware validation. Use `alphareference`
+for the normal layout path and `alphareferencenolayout` for the layout-skip
+probe:
 
-The current source uses neutral v43 `PDTM_WRITEPIXELARRAY` helper names and
-keeps the previously tried true-alpha/direct-buffer branches behind the disabled
-`ZZ9K_PICTURE_ENABLE_PNG_ALPHA_EXPERIMENTS` guard. Those branches are retained
-only as local experiment scaffolding; they are not active in the release
-candidate.
+```text
+echo alphareference > ENV:ZZ9K_PICTURE_RENDER_MODE
+echo alphareferencenolayout > ENV:ZZ9K_PICTURE_RENDER_MODE
+```
+
+These modes publish a generated RGBA reference picture through the v43
+`PDTM_WRITEPIXELARRAY` path with `bmh_Masking = mskHasAlpha`, `PBPAFMT_RGBA`,
+`PDTA_Remap` disabled, and `PDTA_AlphaChannel` set. They are intended to verify
+the newer picture.datatype alpha contract on OS3.2 without changing normal
+JPEG/PNG decode behavior.
+
+The `42.146` path keeps that validated real transparent PNG decode contract
+and disables the JPEG v47 RGB direct path. On `picture.datatype v47`, JPEG and
+PNG both use the validated v43 `PDTM_WRITEPIXELARRAY` path. PNG stays on
+`PDTM_WRITEPIXELARRAY`; alpha PNGs keep their alpha state, request `RGBA8888`
+tiles from the SDK image service, prepare the v43 picture object with
+`bmh_Masking = mskHasAlpha`, and write `PBPAFMT_RGBA` pixels through the
+superclass.
+
+The earlier direct attempts remain documented as regressions: `42.142` showed
+black JPEG output and slower BGRA conversion behavior, and `42.143` was worse
+with JPEG decode around 7 seconds plus incorrect repeated grayscale-looking
+output. `42.145` avoids those paths by refusing indexed, grey, RGBA, ARGB, and
+conversion-based direct buffers for JPEG.
+That benchmark path produced correct-enough output for timing but averaged
+about 2.57 seconds, well slower than the previous v43 write-pixel baseline, so
+the JPEG v47 RGB direct path is disabled in `42.146` with
+`ZZ9K_PICTURE_ENABLE_JPEG_DATATYPE_V47_RGB_DIRECT` set to 0.
+
+On `picture.datatype v39-v42`, the class now decodes into a
+legacy 8-bit remapped bitmap instead of aborting PNG decode. That OS3.1 fallback uses a
+216-color palette, publishes a normal `PDTA_BitMap`, and degrades transparent
+PNG alpha to a transparent palette index because the v43/v47 alpha contracts
+are not available there.
+
+Hardware validation passed with real transparent PNGs in MultiView and a
+browser client. The alpha path is now the active validated DataType route, not a
+diagnostic-only experiment.
+
+The current source uses neutral v43 `PDTM_WRITEPIXELARRAY` helper names,
+keeps the previously tried PNG surface experiments behind the disabled
+`ZZ9K_PICTURE_ENABLE_PNG_ALPHA_EXPERIMENTS` guard, keeps the broad v47 direct
+probe disabled, keeps the narrow JPEG RGB direct probe disabled after the
+2.57-second `42.145` benchmark, and enables only the v43 write-pixel path plus
+the OS3.1 bitmap fallback in the release candidate.
 
 Both descriptors use the `zz9k-picture` base name, `pict` group, binary magic
 masks for JPEG and PNG, and priority `10` for the eventual active path.

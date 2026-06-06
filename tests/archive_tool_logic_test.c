@@ -10,7 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define ZZ9K_ARCHIVE_TEST_7Z_UNSUPPORTED_SPLIT_FLAG 0x40000000UL
+#define ZZ9K_ARCHIVE_TEST_7Z_SPLIT_SUBSTREAM_FLAG 0x40000000UL
 
 static int write_test_file(const char *path,
                            const uint8_t *data,
@@ -2915,7 +2915,7 @@ static int test_7z_copy_multi_substream_list(void)
   return 0;
 }
 
-static int test_7z_deflate_multi_substream_lists_as_unsupported_split(void)
+static int test_7z_deflate_multi_substream_is_file_backed_split(void)
 {
   const uint8_t hello[5] = { 'h', 'e', 'l', 'l', 'o' };
   const uint8_t bye[3] = { 'b', 'y', 'e' };
@@ -2936,33 +2936,132 @@ static int test_7z_deflate_multi_substream_lists_as_unsupported_split(void)
   if (strcmp(entries[0].name, "hello.txt") != 0) return 3;
   if (entries[0].method != ZZ9K_ARCHIVE_7Z_METHOD_DEFLATE) return 4;
   if (entries[0].data_offset != 32U) return 5;
+  if (entries[0].decoded_offset != 0U) return 20;
   if (entries[0].compressed_size != 10U) return 6;
   if (entries[0].uncompressed_size != sizeof(hello)) return 7;
   if (entries[0].crc32 !=
       zz9k_archive_crc32(0U, hello, sizeof(hello))) return 8;
   if ((entries[0].flags & ZZ9K_ARCHIVE_ENTRY_FLAG_CRC32) == 0U) return 9;
   if ((entries[0].flags &
-       ZZ9K_ARCHIVE_TEST_7Z_UNSUPPORTED_SPLIT_FLAG) == 0U) {
+       ZZ9K_ARCHIVE_TEST_7Z_SPLIT_SUBSTREAM_FLAG) == 0U) {
     return 10;
   }
   if (strcmp(entries[1].name, "bye.txt") != 0) return 11;
   if (entries[1].method != ZZ9K_ARCHIVE_7Z_METHOD_DEFLATE) return 12;
   if (entries[1].data_offset != 32U) return 13;
+  if (entries[1].decoded_offset != sizeof(hello)) return 21;
   if (entries[1].compressed_size != 10U) return 14;
   if (entries[1].uncompressed_size != sizeof(bye)) return 15;
   if (entries[1].crc32 !=
       zz9k_archive_crc32(0U, bye, sizeof(bye))) return 16;
   if ((entries[1].flags & ZZ9K_ARCHIVE_ENTRY_FLAG_CRC32) == 0U) return 17;
   if ((entries[1].flags &
-       ZZ9K_ARCHIVE_TEST_7Z_UNSUPPORTED_SPLIT_FLAG) == 0U) {
+       ZZ9K_ARCHIVE_TEST_7Z_SPLIT_SUBSTREAM_FLAG) == 0U) {
     return 18;
   }
-  if (zz9k_archive_7z_file_can_handle_entries(
+  if (!zz9k_archive_7z_file_can_handle_entries(
           entries, count, archive_len, &needs_deflate,
           &needs_lzma, &needs_lzma2)) {
     return 19;
   }
+  if (!needs_deflate || needs_lzma || needs_lzma2) return 22;
   return 0;
+}
+
+static int test_7z_split_writer_extracts_decoded_substreams(void)
+{
+  const char *output_dir = "archive_tool_7z_split_out";
+  const char *hello_path = "archive_tool_7z_split_out/hello.txt";
+  const char *bye_path = "archive_tool_7z_split_out/bye.txt";
+  const uint8_t decoded[8] = {
+    'h', 'e', 'l', 'l', 'o', 'b', 'y', 'e'
+  };
+  uint8_t archive[256];
+  uint8_t actual[5];
+  ZZ9KArchiveEntry entries[3];
+  ZZ9KArchive7zSplitWriter writer;
+  FILE *file = 0;
+  uint32_t archive_len;
+  uint32_t count;
+  int rc = 0;
+
+  remove(hello_path);
+  remove(bye_path);
+  remove(output_dir);
+  make_7z_deflate_two_file_substream(archive, &archive_len);
+  memset(entries, 0, sizeof(entries));
+  if (!zz9k_archive_7z_list(archive, archive_len, entries, 3U, &count)) {
+    return 1;
+  }
+  if (count != 2U) return 2;
+  if (zz9k_archive_7z_split_group_count(entries, count, 0U) != 2U) {
+    return 3;
+  }
+
+  zz9k_archive_7z_split_writer_init(&writer, output_dir, entries, count, 1);
+  if (!zz9k_archive_7z_split_writer_chunk(&writer, decoded, 2U) ||
+      !zz9k_archive_7z_split_writer_chunk(&writer, decoded + 2U, 4U) ||
+      !zz9k_archive_7z_split_writer_chunk(&writer, decoded + 6U, 2U) ||
+      !zz9k_archive_7z_split_writer_finish(&writer)) {
+    rc = 4;
+    goto out;
+  }
+
+  file = fopen(hello_path, "rb");
+  if (!file) {
+    rc = 5;
+    goto out;
+  }
+  if (fread(actual, 1U, 5U, file) != 5U ||
+      memcmp(actual, "hello", 5U) != 0) {
+    rc = 6;
+    goto out;
+  }
+  fclose(file);
+  file = fopen(bye_path, "rb");
+  if (!file) {
+    rc = 7;
+    goto out;
+  }
+  if (fread(actual, 1U, 3U, file) != 3U ||
+      memcmp(actual, "bye", 3U) != 0) {
+    rc = 8;
+    goto out;
+  }
+
+out:
+  if (file) {
+    fclose(file);
+  }
+  zz9k_archive_7z_split_writer_cleanup(&writer);
+  remove(hello_path);
+  remove(bye_path);
+  remove(output_dir);
+  return rc;
+}
+
+static int test_7z_split_writer_rejects_substream_crc_mismatch(void)
+{
+  const uint8_t decoded[8] = {
+    'h', 'e', 'x', 'l', 'o', 'b', 'y', 'e'
+  };
+  uint8_t archive[256];
+  ZZ9KArchiveEntry entries[3];
+  ZZ9KArchive7zSplitWriter writer;
+  uint32_t archive_len;
+  uint32_t count;
+  int ok;
+
+  make_7z_deflate_two_file_substream(archive, &archive_len);
+  memset(entries, 0, sizeof(entries));
+  if (!zz9k_archive_7z_list(archive, archive_len, entries, 3U, &count)) {
+    return 1;
+  }
+  zz9k_archive_7z_split_writer_init(&writer, "", entries, count, 0);
+  ok = zz9k_archive_7z_split_writer_chunk(
+      &writer, decoded, sizeof(decoded));
+  zz9k_archive_7z_split_writer_cleanup(&writer);
+  return ok ? 2 : 0;
 }
 
 static int test_7z_rejects_bad_start_header_crc(void)
@@ -5792,11 +5891,23 @@ int main(void)
     printf("test_7z_copy_multi_substream_list failed: %d\n", rc);
     return 310 + rc;
   }
-  rc = test_7z_deflate_multi_substream_lists_as_unsupported_split();
+  rc = test_7z_deflate_multi_substream_is_file_backed_split();
   if (rc) {
-    printf("test_7z_deflate_multi_substream_lists_as_unsupported_split "
+    printf("test_7z_deflate_multi_substream_is_file_backed_split "
            "failed: %d\n", rc);
     return 315 + rc;
+  }
+  rc = test_7z_split_writer_extracts_decoded_substreams();
+  if (rc) {
+    printf("test_7z_split_writer_extracts_decoded_substreams failed: %d\n",
+           rc);
+    return 320 + rc;
+  }
+  rc = test_7z_split_writer_rejects_substream_crc_mismatch();
+  if (rc) {
+    printf("test_7z_split_writer_rejects_substream_crc_mismatch failed: %d\n",
+           rc);
+    return 325 + rc;
   }
   rc = test_7z_rejects_bad_start_header_crc();
   if (rc) {

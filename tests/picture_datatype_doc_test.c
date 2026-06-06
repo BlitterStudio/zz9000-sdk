@@ -75,8 +75,28 @@ int main(int argc, char **argv)
   }
 
   ok = 1;
-  ok &= expect_contains(source, "zz9k-picture.datatype 42.139");
+  ok &= expect_contains(source, "zz9k-picture.datatype 42.146");
   ok &= expect_contains(source, "validated SDK v2 DataType candidate");
+  ok &= expect_contains(source, "OS3.1");
+  ok &= expect_contains(source, "picture.datatype v39-v42");
+  ok &= expect_contains(source, "picture.datatype v47");
+  ok &= expect_contains(source, "JPEG v47 RGB direct path is disabled");
+  ok &= expect_contains(source, "42.145");
+  ok &= expect_contains(source, "2.57 seconds");
+  ok &= expect_contains(source, "JPEG and");
+  ok &= expect_contains(source, "PNG both use the validated v43");
+  ok &= expect_contains(source, "ZZ9K_PICTURE_ENABLE_JPEG_DATATYPE_V47_RGB_DIRECT");
+  ok &= expect_contains(source, "42.143");
+  ok &= expect_contains(source, "7 seconds");
+  ok &= expect_contains(source, "legacy 8-bit remapped bitmap");
+  ok &= expect_contains(source, "`alphareference`");
+  ok &= expect_contains(source, "`alphareferencenolayout`");
+  ok &= expect_contains(source, "TGAdt/JFIFdt44");
+  ok &= expect_contains(source, "real transparent PNG decode");
+  ok &= expect_contains(source, "MultiView and a");
+  ok &= expect_contains(source, "browser client");
+  ok &= expect_contains(source, "`PBPAFMT_RGBA`");
+  ok &= expect_contains(source, "`bmh_Masking = mskHasAlpha`");
   ok &= expect_contains(source, "packaged inactive under `Storage/DataTypes`");
   ok &= expect_contains(
       source, "copy Storage/DataTypes/ZZ9000-JPEG#? TO DEVS:DataTypes/");

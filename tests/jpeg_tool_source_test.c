@@ -210,16 +210,14 @@ int main(int argc, char **argv)
   ok &= expect_contains(helper, "zz9k_image_window_set_title");
   ok &= expect_contains(helper,
                         "idcmp = (ULONG)(IDCMP_CLOSEWINDOW | "
-                        "IDCMP_REFRESHWINDOW |\n"
-                        "\t\t\tIDCMP_VANILLAKEY | IDCMP_RAWKEY);");
+                        "IDCMP_REFRESHWINDOW |");
+  ok &= expect_contains(helper, "IDCMP_VANILLAKEY | IDCMP_RAWKEY);");
+  ok &= expect_contains(helper, "if (config->resizable) {");
+  ok &= expect_contains(helper, "idcmp |= IDCMP_NEWSIZE;");
+  ok &= expect_contains(helper, "if (klass == IDCMP_REFRESHWINDOW) {");
+  ok &= expect_contains(helper, "event->changed = 1;");
   ok &= expect_contains(helper,
-                        "if (config->resizable) {\n"
-                        "\t\tidcmp |= IDCMP_NEWSIZE;");
-  ok &= expect_contains(helper,
-                        "if (klass == IDCMP_REFRESHWINDOW) {\n"
-                        "\t\t\tevent->changed = 1;\n"
-                        "\t\t} else if (ui->resizable && "
-                        "klass == IDCMP_NEWSIZE) {");
+                        "} else if (ui->resizable && klass == IDCMP_NEWSIZE) {");
   ok &= expect_contains(helper, "WA_IDCMP, idcmp");
   ok &= expect_not_contains(helper, "WA_GimmeZeroZero");
   ok &= expect_not_contains(helper, "layer->bounds");

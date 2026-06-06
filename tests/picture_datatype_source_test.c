@@ -109,13 +109,13 @@ int main(int argc, char **argv)
       source, "Copyright (C) 2024-2026, Dimitris Panokostas / BlitterStudio");
   ok &= expect_contains(source, "\"zz9k-picture.datatype\"");
   ok &= expect_contains(source, "ZZ9K_PICTURE_DATATYPE_VERSION 42");
-  ok &= expect_contains(source, "ZZ9K_PICTURE_DATATYPE_REVISION 139");
-  ok &= expect_contains(source, "$VER: zz9k-picture.datatype 42.139");
+  ok &= expect_contains(source, "ZZ9K_PICTURE_DATATYPE_REVISION 146");
+  ok &= expect_contains(source, "$VER: zz9k-picture.datatype 42.146");
   ok &= expect_contains(source, "ZZ9K_PICTURE_BUILD_MARKER");
   ok &= expect_contains(
       source,
-      "\"metadata: build 2026-06-03 datatype-v43-rgb-helper-v139\"");
-  ok &= expect_contains(source, "ZZ9K_PICTURE_FORCE_ALPHA_RGB_COMPAT 1");
+      "\"metadata: build 2026-06-06 datatype-v43-os31-v146\"");
+  ok &= expect_contains(source, "ZZ9K_PICTURE_FORCE_ALPHA_RGB_COMPAT 0");
   ok &= expect_contains(source, "ZZ9K_PICTURE_OBJECT_NAME_BYTES 128U");
   ok &= expect_contains(source, "char object_name[ZZ9K_PICTURE_OBJECT_NAME_BYTES];");
   ok &= expect_contains(source, "zz9k_picture_capture_object_name");
@@ -135,7 +135,13 @@ int main(int argc, char **argv)
   ok &= expect_contains(
       source, "ZZ9K_PICTURE_FORCE_DATATYPE_V47_DIRECT 0");
   ok &= expect_contains(
-      source, "ZZ9K_PICTURE_FORCE_DATATYPE_V43_WRITEPIXELS 1");
+      source, "ZZ9K_PICTURE_FORCE_DATATYPE_V43_WRITEPIXELS 0");
+  ok &= expect_contains(
+      source, "ZZ9K_PICTURE_DYNAMIC_DATATYPE_FEATURES 1");
+  ok &= expect_contains(
+      source, "ZZ9K_PICTURE_ENABLE_DATATYPE_V47_DIRECT 0");
+  ok &= expect_contains(
+      source, "ZZ9K_PICTURE_ENABLE_JPEG_DATATYPE_V47_RGB_DIRECT 0");
   ok &= expect_contains(
       source, "ZZ9K_PICTURE_FORCE_REFERENCE_V43_WRITEPIXELS 1");
   ok &= expect_contains(
@@ -145,8 +151,7 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "zz9k_picture_forced_render_mode_allows_env");
   ok &= expect_contains(
       source,
-      "if (zz9k_picture_read_render_mode_env(&render_mode) &&\n"
-      "      zz9k_picture_forced_render_mode_allows_env(render_mode)) {\n"
+      "if (zz9k_picture_read_render_mode_env(&render_mode)) {\n"
       "    return render_mode;\n"
       "  }\n"
       "  return ZZ9K_PICTURE_RENDER_MODE_DATATYPE;");
@@ -204,10 +209,19 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "zz9k_picture_prepare_v43_reference_header");
   ok &= expect_contains(source, "zz9k_picture_fill_reference_row");
   ok &= expect_contains(source, "zz9k_picture_fill_reference_pattern");
+  ok &= expect_contains(source, "zz9k_picture_set_v43_alpha_reference_pattern");
+  ok &= expect_contains(source, "zz9k_picture_set_alpha_reference_v43_attrs");
+  ok &= expect_contains(source, "zz9k_picture_prepare_v43_alpha_reference_header");
+  ok &= expect_contains(source, "zz9k_picture_fill_alpha_reference_row");
+  ok &= expect_contains(source, "zz9k_picture_fill_alpha_reference_pattern");
+  ok &= expect_contains(source, "zz9k_picture_write_v43_rgba_buffer");
   ok &= expect_contains(source, "zz9k_picture_superclass_version");
   ok &= expect_contains(source, "ZZ9K_PICTURE_RENDER_MODE_DATATYPE");
   ok &= expect_contains(source, "ZZ9K_PICTURE_RENDER_MODE_REFERENCE");
   ok &= expect_contains(source, "ZZ9K_PICTURE_RENDER_MODE_REFERENCE_NOLAYOUT");
+  ok &= expect_contains(source, "ZZ9K_PICTURE_RENDER_MODE_ALPHA_REFERENCE");
+  ok &= expect_contains(
+      source, "ZZ9K_PICTURE_RENDER_MODE_ALPHA_REFERENCE_NOLAYOUT");
   ok &= expect_contains(source, "zz9k_picture_trace_u32");
   ok &= expect_contains(source, "zz9k_picture_trace_hex");
   ok &= expect_contains(source, "zz9k_picture_trace_pixel_buffer");
@@ -267,7 +281,7 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "zz9k_picture_try_png_local_surface");
   ok &= expect_not_contains(source, "zz9k_picture_try_png_datatype_surface");
   ok &= expect_contains(source, "zz9k_picture_feed_stream_to_datatype");
-  ok &= expect_contains(source, "zz9k_picture_copy_bgra_tile_to_rgb_pixels");
+  ok &= expect_not_contains(source, "zz9k_picture_copy_bgra_tile_to_rgb_pixels");
   ok &= expect_not_contains(source, "zz9k_picture_matte_alpha_white");
   ok &= expect_not_contains(source, "zz9k_picture_bgra_to_rgb_matte");
   ok &= expect_contains(source, "zz9k_picture_bgra_to_rgb");
@@ -325,13 +339,42 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "zz9k_surface_build_copy_desc");
   ok &= expect_contains(source, "zz9k_copy_surface");
   ok &= expect_contains(source, "\"metadata: datatype rgb888 tiles\"");
+  ok &= expect_contains(source, "\"metadata: datatype direct rgb888 tiles\"");
+  ok &= expect_contains(
+      source,
+      "\"metadata: datatype direct rgb888 unavailable; v43 fallback\"");
   ok &= expect_contains(source, "\"metadata: datatype bgra fallback tiles\"");
+  ok &= expect_contains(source, "zz9k_picture_direct_pixels_prefer_rgb888_tiles");
+  ok &= expect_contains(
+      source,
+      "direct_pixels->pbpa_PixelFormat == PBPAFMT_RGB");
+  ok &= expect_contains(
+      source,
+      "if (target.direct &&\n"
+      "      !zz9k_picture_direct_pixels_prefer_rgb888_tiles(\n"
+      "          &image_service, target.direct_pixels))");
+  ok &= expect_contains(
+      source,
+      "target.direct = 0U;\n"
+      "    target.direct_pixels = 0;");
   ok &= expect_not_contains(source, "zz9k_picture_write_full_rgb_to_object");
   ok &= expect_not_contains(source, "\"metadata: datatype full buffer ready\"");
   ok &= expect_not_contains(source, "\"decode: datatype before full buffer alloc\"");
   ok &= expect_not_contains(source, "\"decode: datatype full pixels written\"");
   ok &= expect_contains(source, "zz9k_picture_write_bgra_tile_to_object");
   ok &= expect_contains(source, "zz9k_picture_write_argb_tile_to_object");
+  ok &= expect_contains(
+      source,
+      "target->output_format == ZZ9K_SURFACE_FORMAT_RGB888 &&\n"
+      "      target->direct_pixels->pbpa_PixelFormat == PBPAFMT_RGB");
+  ok &= expect_contains(
+      source,
+      "zz9k_picture_copy_raw_tile_to_direct_pixels(\n"
+      "            tile, result, target->direct_pixels, tile_stride)");
+  ok &= expect_not_contains(
+      source,
+      "zz9k_picture_copy_bgra_tile_to_rgb_pixels(\n"
+      "              tile, result, target->direct_pixels, tile_stride)");
   ok &= expect_contains(source, "result->tile_x > target->width");
   ok &= expect_contains(source, "result->tile_height > (target->height - result->tile_y)");
   ok &= expect_contains(source, "zz9k_picture_choose_tile_layout");
@@ -435,10 +478,15 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "zz9k_picture_finalize_datatype_v43_attrs");
   ok &= expect_contains(
       source,
-      "if (!zz9k_picture_finalize_datatype_v43_attrs(object, instance)) {\n"
-      "      failure = \"metadata: datatype final attrs failed\";\n"
-      "      ok = 0;\n"
-      "    }");
+      "if (target.legacy_bitmap) {\n"
+      "      if (!zz9k_picture_publish_legacy_bitmap(\n"
+      "              object, instance, target.legacy_bitmap)) {\n"
+      "        failure = \"metadata: datatype legacy bitmap publish failed\";\n"
+      "        ok = 0;\n"
+      "      } else {\n"
+      "        target.legacy_bitmap = 0;\n"
+      "      }\n"
+      "    } else if (!zz9k_picture_finalize_datatype_v43_attrs(");
   ok &= expect_contains(
       source,
       "if (decode_lock_held) {\n"
@@ -448,7 +496,7 @@ int main(int argc, char **argv)
       "    FreeMem(scratch_pixels, (ULONG)scratch_bytes);\n"
       "  }\n"
       "  if (ok) {\n"
-      "    if (!zz9k_picture_finalize_datatype_v43_attrs(object, instance))");
+      "    if (target.legacy_bitmap) {");
   ok &= expect_contains(
       source,
       "      DTA_NominalHoriz, instance->width,\n"
@@ -459,21 +507,21 @@ int main(int argc, char **argv)
   ok &= expect_contains(
       source,
       "if (png_has_alpha) {\n"
-      "#if ZZ9K_PICTURE_FORCE_ALPHA_RGB_COMPAT || \\\n"
-      "    !ZZ9K_PICTURE_ENABLE_PNG_ALPHA_EXPERIMENTS\n"
       "    zz9k_picture_trace_source(\n"
-      "        \"metadata: datatype png alpha rgb compatibility path\");");
+      "        \"metadata: datatype png alpha v43 rgba path\");");
   ok &= expect_contains(
       source, "\"metadata: datatype png alpha surface path\"");
-  ok &= expect_contains(
+  ok &= expect_not_contains(
       source, "\"metadata: datatype png alpha rgb compatibility path\"");
   ok &= expect_contains(
+      source, "\"metadata: datatype png alpha v43 rgba path\"");
+  ok &= expect_contains(
       source,
-      "#else\n"
+      "#if ZZ9K_PICTURE_ENABLE_PNG_ALPHA_EXPERIMENTS\n"
       "    zz9k_picture_trace_source(\n"
       "        \"metadata: datatype png alpha surface path\");\n"
       "    if (!zz9k_picture_decode_png_to_datatype_pixels(");
-  ok &= expect_contains(
+  ok &= expect_not_contains(
       source,
       "    png_has_alpha = 0;\n"
       "    instance->png_has_alpha = 0U;\n"
@@ -499,6 +547,22 @@ int main(int argc, char **argv)
       source, "\"metadata: png datatype classic bitmap prepare\"");
   ok &= expect_contains(
       source, "\"decode: datatype alpha bitmap written\"");
+  ok &= expect_contains(source, "zz9k_picture_write_png_alpha_tile_to_object");
+  ok &= expect_contains(
+      source,
+      "return zz9k_picture_write_png_alpha_tile_to_object(\n"
+      "        tile, result, target, tile_stride);");
+  ok &= expect_contains(
+      source,
+      "if (has_alpha) {\n"
+      "    *output_format = ZZ9K_SURFACE_FORMAT_RGBA8888;\n"
+      "    *output_bpp = ZZ9K_PICTURE_RGBA_BYTES_PER_PIXEL;\n"
+      "    zz9k_picture_trace(\"metadata: datatype png rgba alpha tiles\");");
+  ok &= expect_not_contains(
+      source,
+      "#if ZZ9K_PICTURE_ENABLE_PNG_ALPHA_EXPERIMENTS\n"
+      "  if (has_alpha) {\n"
+      "    *output_format = ZZ9K_SURFACE_FORMAT_RGBA8888;");
   ok &= expect_contains(source, "int *opaque_alpha_out");
   ok &= expect_contains(source, "int png_alpha_opaque");
   ok &= expect_contains(
@@ -635,6 +699,40 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "\"metadata: v43 reference final attrs ready\"");
   ok &= expect_contains(source, "DoSuperMethodA(cl, object, (Msg)&pixels)");
   ok &= expect_contains(source, "pixels.pbpa_Height = height;");
+  ok &= expect_contains(source,
+                        "\"metadata: v43 alpha reference before header\"");
+  ok &= expect_contains(source,
+                        "\"metadata: v43 alpha reference header ready\"");
+  ok &= expect_contains(source,
+                        "\"metadata: v43 alpha reference before attrs\"");
+  ok &= expect_contains(source,
+                        "\"metadata: v43 alpha reference attrs ready\"");
+  ok &= expect_contains(source,
+                        "\"metadata: v43 alpha reference full buffer ready\"");
+  ok &= expect_contains(source,
+                        "\"metadata: v43 alpha reference pixel write done\"");
+  ok &= expect_contains(source,
+                        "\"metadata: v43 alpha reference final attrs ready\"");
+  ok &= expect_contains(source,
+                        "static int zz9k_picture_set_alpha_reference_v43_attrs");
+  ok &= expect_contains(
+      source,
+      "      PDTA_ModeID, 0,\n"
+      "      PDTA_SourceMode, PMODE_V43,\n"
+      "      PDTA_DestMode, PMODE_V43,\n"
+      "      PDTA_SubClassRendersAll, FALSE,\n"
+      "      PDTA_Remap, FALSE,\n"
+      "      PDTA_AlphaChannel, TRUE,\n");
+  ok &= expect_contains(source, "header->bmh_Depth = 32;");
+  ok &= expect_contains(source, "header->bmh_Masking = mskHasAlpha;");
+  ok &= expect_contains(source, "pixels.pbpa_PixelFormat = PBPAFMT_RGBA;");
+  ok &= expect_contains(source,
+      "if (!zz9k_picture_write_v43_rgba_buffer(\n"
+      "          cl, object, pixel_data, 0U, 0U, width, height, row_bytes))");
+  ok &= expect_contains(source,
+      "if (zz9k_picture_alpha_reference_mode(render_mode))");
+  ok &= expect_contains(source,
+      "zz9k_picture_set_v43_alpha_reference_pattern(");
   ok &= expect_contains(source, "\"metadata: obtain pixel buffer tag\"");
   ok &= expect_contains(source, "\"metadata: obtain pixel buffer method\"");
   ok &= expect_contains(source, "\"metadata: v47 request format\"");
@@ -664,6 +762,15 @@ int main(int argc, char **argv)
       "\"metadata: datatype png alpha unsupported; aborting safely\"");
   ok &= expect_contains(source, "\"metadata: png datatype v43 prepare begin\"");
   ok &= expect_contains(source, "\"metadata: png datatype v43 prepare ready\"");
+  ok &= expect_contains(
+      source,
+      "if (has_alpha) {\n"
+      "    if (!zz9k_picture_prepare_v43_alpha_reference_header(\n"
+      "            object, instance->width, instance->height))");
+  ok &= expect_contains(
+      source,
+      "    if (!zz9k_picture_set_alpha_reference_v43_attrs(\n"
+      "            object, instance->codec, instance->width, instance->height))");
   ok &= expect_not_contains(source, "zz9k_picture_png_interlace_supported");
   ok &= expect_contains(source, "\"metadata: png v47 direct pixels ready\"");
   ok &= expect_contains(source, "\"metadata: png v47 direct pixels unavailable\"");
@@ -783,39 +890,18 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "\"decode: datatype result tile height\"");
   ok &= expect_contains(source, "\"decode: datatype before tile copy\"");
   ok &= expect_contains(source, "\"decode: datatype tile copy ok\"");
-  ok &= expect_contains(source, "int direct_trace");
-  ok &= expect_contains(source, "result->tile_x == 0U && result->tile_y == 0U");
-  ok &= expect_contains(source, "\"decode: datatype direct copy begin\"");
-  ok &= expect_contains(source, "\"decode: datatype direct tile data\"");
-  ok &= expect_contains(source, "\"decode: datatype direct tile length\"");
-  ok &= expect_contains(source, "\"decode: datatype direct tile stride\"");
-  ok &= expect_contains(source, "\"decode: datatype direct pixel data\"");
-  ok &= expect_contains(source, "\"decode: datatype direct pixel format\"");
-  ok &= expect_contains(source, "\"decode: datatype direct pixel mod\"");
-  ok &= expect_contains(source, "\"decode: datatype direct bytes per pixel\"");
   ok &= expect_contains(source, "zz9k_picture_accumulate_byte_offset");
   ok &= expect_contains(source, "src_row += tile_stride;");
   ok &= expect_contains(source, "dst_row += (uint32_t)pixels->pbpa_PixelArrayMod;");
-  ok &= expect_contains(source, "\"decode: datatype direct before offsets\"");
-  ok &= expect_contains(source, "\"decode: datatype direct row offset\"");
-  ok &= expect_contains(source, "\"decode: datatype direct x offset\"");
-  ok &= expect_contains(source, "\"decode: datatype direct before row pointers\"");
-  ok &= expect_contains(source, "\"decode: datatype direct row pointers ready\"");
-  ok &= expect_contains(source, "\"decode: datatype direct row\"");
-  ok &= expect_contains(source, "\"decode: datatype direct row src\"");
-  ok &= expect_contains(source, "\"decode: datatype direct row dst\"");
-  ok &= expect_contains(source, "\"decode: datatype direct before first luma\"");
-  ok &= expect_contains(source, "\"decode: datatype direct first luma\"");
-  ok &= expect_contains(source, "\"decode: datatype direct before first write\"");
-  ok &= expect_contains(source, "\"decode: datatype direct first write ok\"");
-  ok &= expect_contains(source, "\"decode: datatype direct row ok\"");
+  ok &= expect_not_contains(source, "\"decode: datatype direct before first luma\"");
+  ok &= expect_not_contains(source, "zz9k_picture_bgra_to_luma");
   ok &= expect_contains(source, "\"stream: datatype chunk offset\"");
   ok &= expect_contains(source, "\"stream: datatype chunk capacity\"");
   ok &= expect_contains(source, "\"stream: datatype before file read\"");
   ok &= expect_contains(source, "\"stream: datatype file read bytes\"");
   ok &= expect_contains(source, "\"stream: datatype before shared byte copy\"");
   ok &= expect_contains(source, "\"stream: datatype shared byte copy ok\"");
-  ok &= expect_contains(source, "\"decode: datatype tile copied\"");
+  ok &= expect_not_contains(source, "\"decode: datatype tile copied\"");
   ok &= expect_contains(source, "\"decode: datatype tile written\"");
   ok &= expect_contains(source, "\"decode: datatype final png tile\"");
   ok &= expect_contains(source, "ZZ9K_IMAGE_SESSION_RESULT_PARTIAL");
@@ -835,6 +921,38 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "\"metadata: picture.datatype v47+ path\"");
   ok &= expect_contains(source, "\"metadata: picture.datatype v43 path\"");
   ok &= expect_contains(source, "\"metadata: picture.datatype legacy bitmap path\"");
+  ok &= expect_not_contains(
+      source,
+      "if (version < 43U) {\n"
+      "    return 0;\n"
+      "  }");
+  ok &= expect_contains(
+      source, "static int zz9k_picture_try_jpeg_datatype_v47_rgb_direct");
+  ok &= expect_contains(
+      source, "static int zz9k_picture_try_datatype_v43_writepixelarray");
+  ok &= expect_contains(
+      source, "static int zz9k_picture_prepare_legacy_bitmap");
+  ok &= expect_contains(
+      source, "static int zz9k_picture_decode_to_legacy_bitmap");
+  ok &= expect_contains(
+      source, "\"metadata: datatype jpeg v47 rgb direct path\"");
+  ok &= expect_contains(
+      source, "\"metadata: datatype jpeg v47 rgb unavailable; v43 fallback\"");
+  ok &= expect_contains(
+      source, "\"metadata: datatype v47 png uses v43 writepixelarray\"");
+  ok &= expect_contains(
+      source,
+      "#if ZZ9K_PICTURE_ENABLE_JPEG_DATATYPE_V47_RGB_DIRECT\n"
+      "  if (version >= 47U &&\n"
+      "      instance->codec == ZZ9K_PICTURE_CODEC_JPEG");
+  ok &= expect_contains(
+      source, "\"metadata: datatype dynamic v43 writepixelarray path\"");
+  ok &= expect_contains(
+      source, "\"metadata: datatype dynamic legacy bitmap path\"");
+  ok &= expect_contains(
+      source, "\"metadata: datatype legacy bitmap ready\"");
+  ok &= expect_contains(source, "WritePixelLine8(");
+  ok &= expect_contains(source, "mskHasTransparentColor");
   ok &= expect_contains(
       source, "\"metadata: obtained pixel buffer unavailable\"");
   ok &= expect_not_contains(
@@ -885,9 +1003,9 @@ int main(int argc, char **argv)
       "return result != 0UL &&\n"
       "         zz9k_picture_pixel_buffer_format_usable(pixels, pixel_format) &&\n"
       "         zz9k_picture_pixel_buffer_valid(");
-  ok &= expect_contains(source, "luma = zz9k_picture_bgra_to_luma(src);");
-  ok &= expect_contains(source, "dst[0] = luma;");
-  ok &= expect_contains(source, "dst[0] = src[3];");
+  ok &= expect_not_contains(source, "luma = zz9k_picture_bgra_to_luma(src);");
+  ok &= expect_not_contains(source, "dst[0] = luma;");
+  ok &= expect_not_contains(source, "dst[0] = src[3];");
   ok &= expect_contains(source, "dst[3] = src[3];");
   ok &= expect_contains(
       source,
@@ -983,11 +1101,24 @@ int main(int argc, char **argv)
   ok &= expect_contains(source,
       "zz9k_picture_render_mode_matches(value, length, \"referencenolayout\")");
   ok &= expect_contains(source,
+      "zz9k_picture_render_mode_matches(value, length, \"alphareference\")");
+  ok &= expect_contains(source,
+      "zz9k_picture_render_mode_matches(\n"
+      "          value, length, \"alphareferencenolayout\")");
+  ok &= expect_contains(source,
       "render_mode == ZZ9K_PICTURE_RENDER_MODE_REFERENCE");
   ok &= expect_contains(source,
       "render_mode == ZZ9K_PICTURE_RENDER_MODE_REFERENCE_NOLAYOUT");
   ok &= expect_contains(source,
+      "render_mode == ZZ9K_PICTURE_RENDER_MODE_ALPHA_REFERENCE");
+  ok &= expect_contains(source,
+      "render_mode == ZZ9K_PICTURE_RENDER_MODE_ALPHA_REFERENCE_NOLAYOUT");
+  ok &= expect_contains(source,
       "zz9k_picture_reference_mode(render_mode)");
+  ok &= expect_contains(source,
+      "zz9k_picture_alpha_reference_mode(render_mode)");
+  ok &= expect_contains(source,
+      "zz9k_picture_reference_nolayout_mode(render_mode)");
   ok &= expect_contains(source, "uint8_t *reference_pixels;");
   ok &= expect_contains(source, "uint32_t reference_pixel_bytes;");
   ok &= expect_contains(source, "instance->reference_pixels = pixel_data;");

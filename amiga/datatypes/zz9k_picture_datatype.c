@@ -39,14 +39,15 @@
 
 #define ZZ9K_PICTURE_DATATYPE_NAME "zz9k-picture.datatype"
 #define ZZ9K_PICTURE_DATATYPE_VERSION 42
-#define ZZ9K_PICTURE_DATATYPE_REVISION 139
+#define ZZ9K_PICTURE_DATATYPE_REVISION 146
 #define ZZ9K_PICTURE_DATATYPE_ID_STRING \
-  "$VER: zz9k-picture.datatype 42.139 (03.06.2026) ZZ9000 SDK"
+  "$VER: zz9k-picture.datatype 42.146 (06.06.2026) ZZ9000 SDK"
 #define ZZ9K_PICTURE_BUILD_MARKER \
-  "metadata: build 2026-06-03 datatype-v43-rgb-helper-v139"
+  "metadata: build 2026-06-06 datatype-v43-os31-v146"
 #define ZZ9K_PICTURE_OBJECT_NAME_BYTES 128U
 #define ZZ9K_PICTURE_SMALL_PLACEHOLDER_SIZE 64U
 #define ZZ9K_PICTURE_RGB_BYTES_PER_PIXEL 3U
+#define ZZ9K_PICTURE_RGBA_BYTES_PER_PIXEL 4U
 #define ZZ9K_PICTURE_BGRA_BYTES_PER_PIXEL 4U
 #define ZZ9K_PICTURE_TILE_MAX_ROWS 32U
 #define ZZ9K_PICTURE_TILE_TARGET_BYTES (128UL * 1024UL)
@@ -60,9 +61,12 @@
 #define ZZ9K_PICTURE_RENDER_HARDWARE 1
 #define ZZ9K_PICTURE_FORCE_DATATYPE_V47_TRUECOLOR 0
 #define ZZ9K_PICTURE_FORCE_DATATYPE_V47_DIRECT 0
-#define ZZ9K_PICTURE_FORCE_DATATYPE_V43_WRITEPIXELS 1
+#define ZZ9K_PICTURE_FORCE_DATATYPE_V43_WRITEPIXELS 0
+#define ZZ9K_PICTURE_DYNAMIC_DATATYPE_FEATURES 1
+#define ZZ9K_PICTURE_ENABLE_DATATYPE_V47_DIRECT 0
+#define ZZ9K_PICTURE_ENABLE_JPEG_DATATYPE_V47_RGB_DIRECT 0
 #define ZZ9K_PICTURE_FORCE_REFERENCE_V43_WRITEPIXELS 1
-#define ZZ9K_PICTURE_FORCE_ALPHA_RGB_COMPAT 1
+#define ZZ9K_PICTURE_FORCE_ALPHA_RGB_COMPAT 0
 #define ZZ9K_PICTURE_ENABLE_PNG_ALPHA_EXPERIMENTS 0
 #define ZZ9K_PICTURE_TRACE_ENABLED 0
 #define ZZ9K_PICTURE_TRACE_RESET_ENABLED 0
@@ -136,6 +140,8 @@ typedef enum ZZ9KPictureRenderMode {
   ZZ9K_PICTURE_RENDER_MODE_V43SMALL,
   ZZ9K_PICTURE_RENDER_MODE_REFERENCE,
   ZZ9K_PICTURE_RENDER_MODE_REFERENCE_NOLAYOUT,
+  ZZ9K_PICTURE_RENDER_MODE_ALPHA_REFERENCE,
+  ZZ9K_PICTURE_RENDER_MODE_ALPHA_REFERENCE_NOLAYOUT,
   ZZ9K_PICTURE_RENDER_MODE_DECODE,
   ZZ9K_PICTURE_RENDER_MODE_SUBCLASS,
   ZZ9K_PICTURE_RENDER_MODE_SUPER,
@@ -186,6 +192,8 @@ typedef struct ZZ9KPictureDatatypeTarget {
   Object *object;
   Class *cl;
   struct pdtBlitPixelArray *direct_pixels;
+  struct BitMap *legacy_bitmap;
+  struct BitMap *legacy_line_bitmap;
   ZZ9KPictureInstance *instance;
   uint8_t *scratch_pixels;
   uint32_t width;
@@ -195,6 +203,7 @@ typedef struct ZZ9KPictureDatatypeTarget {
   uint32_t output_bpp;
   uint32_t tiles_written;
   uint8_t direct;
+  uint8_t legacy_has_alpha;
 } ZZ9KPictureDatatypeTarget;
 
 typedef struct ZZ9KPictureStreamInput {
@@ -501,6 +510,13 @@ static ZZ9KPictureRenderMode zz9k_picture_render_mode_from_env(
   if (zz9k_picture_render_mode_matches(value, length, "referencenolayout")) {
     return ZZ9K_PICTURE_RENDER_MODE_REFERENCE_NOLAYOUT;
   }
+  if (zz9k_picture_render_mode_matches(value, length, "alphareference")) {
+    return ZZ9K_PICTURE_RENDER_MODE_ALPHA_REFERENCE;
+  }
+  if (zz9k_picture_render_mode_matches(
+          value, length, "alphareferencenolayout")) {
+    return ZZ9K_PICTURE_RENDER_MODE_ALPHA_REFERENCE_NOLAYOUT;
+  }
   if (zz9k_picture_render_mode_matches(value, length, "decode")) {
     return ZZ9K_PICTURE_RENDER_MODE_DECODE;
   }
@@ -594,27 +610,19 @@ static int zz9k_picture_forced_render_mode_allows_env(
     ZZ9KPictureRenderMode render_mode)
 {
   return render_mode == ZZ9K_PICTURE_RENDER_MODE_REFERENCE ||
-         render_mode == ZZ9K_PICTURE_RENDER_MODE_REFERENCE_NOLAYOUT;
+         render_mode == ZZ9K_PICTURE_RENDER_MODE_REFERENCE_NOLAYOUT ||
+         render_mode == ZZ9K_PICTURE_RENDER_MODE_ALPHA_REFERENCE ||
+         render_mode == ZZ9K_PICTURE_RENDER_MODE_ALPHA_REFERENCE_NOLAYOUT;
 }
 
 static ZZ9KPictureRenderMode zz9k_picture_render_mode(void)
 {
   ZZ9KPictureRenderMode render_mode;
 
-#if ZZ9K_PICTURE_FORCE_DATATYPE_V47_TRUECOLOR || \
-    ZZ9K_PICTURE_FORCE_DATATYPE_V47_DIRECT || \
-    ZZ9K_PICTURE_FORCE_DATATYPE_V43_WRITEPIXELS
-  if (zz9k_picture_read_render_mode_env(&render_mode) &&
-      zz9k_picture_forced_render_mode_allows_env(render_mode)) {
-    return render_mode;
-  }
-  return ZZ9K_PICTURE_RENDER_MODE_DATATYPE;
-#else
   if (zz9k_picture_read_render_mode_env(&render_mode)) {
     return render_mode;
   }
   return ZZ9K_PICTURE_RENDER_MODE_DATATYPE;
-#endif
 }
 
 static void zz9k_picture_source_reset(ZZ9KPictureSource *source)
@@ -1462,7 +1470,7 @@ static int zz9k_picture_set_v47_direct_attrs(Object *object,
       DTA_VertUnit, 1,
       PDTA_SourceMode, PMODE_V43,
       PDTA_DestMode, PMODE_V43,
-      PDTA_SubClassRendersAll, FALSE,
+      PDTA_SubClassRendersAll, TRUE,
       PDTA_Remap, TRUE,
       DTA_ObjName, (ULONG)zz9k_picture_object_name(codec),
       TAG_END);
@@ -1950,6 +1958,157 @@ static int zz9k_picture_set_placeholder_header(Object *object,
   return 1;
 }
 
+static uint8_t zz9k_picture_legacy_lut8_component(uint8_t value)
+{
+  return (uint8_t)(((uint32_t)value * 5U + 127U) / 255U);
+}
+
+static ULONG zz9k_picture_legacy_lut8_creg(uint8_t value)
+{
+  return ((ULONG)value << 24) |
+         ((ULONG)value << 16) |
+         ((ULONG)value << 8) |
+         (ULONG)value;
+}
+
+static int zz9k_picture_prepare_legacy_lut8_palette(
+    Object *object,
+    ZZ9KPictureInstance *instance)
+{
+  uint32_t index;
+
+  if (!object || !instance) {
+    return 0;
+  }
+
+  for (index = 0U; index < 256U; index++) {
+    uint8_t red;
+    uint8_t green;
+    uint8_t blue;
+
+    if (index == 0U || index > 216U) {
+      red = 0U;
+      green = 0U;
+      blue = 0U;
+    } else {
+      uint32_t entry;
+
+      entry = index - 1U;
+      red = (uint8_t)((entry / 36U) * 51U);
+      green = (uint8_t)(((entry / 6U) % 6U) * 51U);
+      blue = (uint8_t)((entry % 6U) * 51U);
+    }
+
+    instance->lut_colors[index].red = red;
+    instance->lut_colors[index].green = green;
+    instance->lut_colors[index].blue = blue;
+    instance->lut_cregs[(index * 3U) + 0U] =
+        zz9k_picture_legacy_lut8_creg(red);
+    instance->lut_cregs[(index * 3U) + 1U] =
+        zz9k_picture_legacy_lut8_creg(green);
+    instance->lut_cregs[(index * 3U) + 2U] =
+        zz9k_picture_legacy_lut8_creg(blue);
+  }
+
+  (void)SetDTAttrs(
+      object, 0, 0,
+      PDTA_NumColors, 256,
+      PDTA_ColorRegisters, (ULONG)instance->lut_colors,
+      PDTA_CRegs, (ULONG)instance->lut_cregs,
+      TAG_END);
+  zz9k_picture_trace("metadata: datatype legacy lut8 palette ready");
+  return 1;
+}
+
+static int zz9k_picture_prepare_legacy_bitmap(
+    Object *object,
+    ZZ9KPictureInstance *instance,
+    int has_alpha,
+    struct BitMap **bitmap_out,
+    struct BitMap **line_bitmap_out)
+{
+  struct BitMapHeader *header;
+  struct BitMap *bitmap;
+  struct BitMap *line_bitmap;
+
+  if (!GfxBase || !object || !instance || !bitmap_out ||
+      !line_bitmap_out || instance->width == 0U ||
+      instance->height == 0U) {
+    return 0;
+  }
+  *bitmap_out = 0;
+  *line_bitmap_out = 0;
+
+  if (!zz9k_picture_set_placeholder_header(
+          object, instance->width, instance->height, 8, 256) ||
+      !zz9k_picture_prepare_legacy_lut8_palette(object, instance)) {
+    return 0;
+  }
+
+  header = 0;
+  if (GetDTAttrs(object, PDTA_BitMapHeader, (ULONG)&header, TAG_END) < 1 ||
+      !header) {
+    zz9k_picture_trace("metadata: datatype legacy header unavailable");
+    SetIoErr(ERROR_OBJECT_NOT_FOUND);
+    return 0;
+  }
+
+  header->bmh_Depth = 8;
+  header->bmh_Masking = has_alpha ? mskHasTransparentColor : mskNone;
+  header->bmh_Transparent = 0;
+  header->bmh_Compression = cmpNone;
+
+  bitmap = AllocBitMap(
+      instance->width, instance->height, 8,
+      BMF_CLEAR | BMF_DISPLAYABLE, 0);
+  if (!bitmap) {
+    zz9k_picture_trace("metadata: datatype legacy bitmap alloc failed");
+    SetIoErr(ERROR_NO_FREE_STORE);
+    return 0;
+  }
+
+  line_bitmap = AllocBitMap(instance->width, 1, 8, BMF_CLEAR, 0);
+  if (!line_bitmap) {
+    FreeBitMap(bitmap);
+    zz9k_picture_trace("metadata: datatype legacy line bitmap alloc failed");
+    SetIoErr(ERROR_NO_FREE_STORE);
+    return 0;
+  }
+
+  *bitmap_out = bitmap;
+  *line_bitmap_out = line_bitmap;
+  zz9k_picture_trace("metadata: datatype legacy bitmap ready");
+  return 1;
+}
+
+static int zz9k_picture_publish_legacy_bitmap(
+    Object *object,
+    const ZZ9KPictureInstance *instance,
+    struct BitMap *bitmap)
+{
+  if (!object || !instance || !bitmap) {
+    return 0;
+  }
+
+  (void)SetDTAttrs(
+      object, 0, 0,
+      DTA_NominalHoriz, instance->width,
+      DTA_NominalVert, instance->height,
+      DTA_TotalHoriz, instance->width,
+      DTA_TotalVert, instance->height,
+      DTA_HorizUnit, 1,
+      DTA_VertUnit, 1,
+      PDTA_ModeID, 0,
+      PDTA_BitMap, (ULONG)bitmap,
+      PDTA_FreeSourceBitMap, TRUE,
+      PDTA_Remap, TRUE,
+      PDTA_AlphaChannel, FALSE,
+      DTA_ObjName, (ULONG)zz9k_picture_object_name(instance->codec),
+      TAG_END);
+  zz9k_picture_trace("metadata: datatype legacy bitmap published");
+  return 1;
+}
+
 static int zz9k_picture_set_placeholder_bitmap(Object *object,
                                                ZZ9KPictureCodec codec,
                                                uint32_t width,
@@ -2121,7 +2280,23 @@ static int zz9k_picture_set_capped_placeholder_best(Object *object,
 static int zz9k_picture_reference_mode(ZZ9KPictureRenderMode render_mode)
 {
   return render_mode == ZZ9K_PICTURE_RENDER_MODE_REFERENCE ||
-         render_mode == ZZ9K_PICTURE_RENDER_MODE_REFERENCE_NOLAYOUT;
+         render_mode == ZZ9K_PICTURE_RENDER_MODE_REFERENCE_NOLAYOUT ||
+         render_mode == ZZ9K_PICTURE_RENDER_MODE_ALPHA_REFERENCE ||
+         render_mode == ZZ9K_PICTURE_RENDER_MODE_ALPHA_REFERENCE_NOLAYOUT;
+}
+
+static int zz9k_picture_alpha_reference_mode(
+    ZZ9KPictureRenderMode render_mode)
+{
+  return render_mode == ZZ9K_PICTURE_RENDER_MODE_ALPHA_REFERENCE ||
+         render_mode == ZZ9K_PICTURE_RENDER_MODE_ALPHA_REFERENCE_NOLAYOUT;
+}
+
+static int zz9k_picture_reference_nolayout_mode(
+    ZZ9KPictureRenderMode render_mode)
+{
+  return render_mode == ZZ9K_PICTURE_RENDER_MODE_REFERENCE_NOLAYOUT ||
+         render_mode == ZZ9K_PICTURE_RENDER_MODE_ALPHA_REFERENCE_NOLAYOUT;
 }
 
 static int zz9k_picture_set_reference_attrs(Object *object,
@@ -2187,6 +2362,42 @@ static int zz9k_picture_prepare_v43_reference_header(Object *object,
   header->bmh_PageWidth = (WORD)width;
   header->bmh_PageHeight = (WORD)height;
   zz9k_picture_trace("metadata: v43 reference header ready");
+  return 1;
+}
+
+static int zz9k_picture_prepare_v43_alpha_reference_header(Object *object,
+                                                           uint32_t width,
+                                                           uint32_t height)
+{
+  struct BitMapHeader *header;
+
+  if (!object || width == 0U || height == 0U ||
+      width > 65535U || height > 65535U) {
+    zz9k_picture_trace("metadata: reference invalid dimensions");
+    SetIoErr(DTERROR_INVALID_DATA);
+    return 0;
+  }
+
+  zz9k_picture_trace("metadata: v43 alpha reference before header");
+  header = 0;
+  if (GetDTAttrs(object, PDTA_BitMapHeader, (ULONG)&header, TAG_END) < 1 ||
+      !header) {
+    zz9k_picture_trace("metadata: v43 alpha reference header unavailable");
+    SetIoErr(ERROR_OBJECT_NOT_FOUND);
+    return 0;
+  }
+
+  header->bmh_Width = (UWORD)width;
+  header->bmh_Height = (UWORD)height;
+  header->bmh_Depth = 32;
+  header->bmh_Masking = mskHasAlpha;
+  header->bmh_Compression = cmpNone;
+  header->bmh_Pad = 0;
+  header->bmh_XAspect = 1;
+  header->bmh_YAspect = 1;
+  header->bmh_PageWidth = (WORD)width;
+  header->bmh_PageHeight = (WORD)height;
+  zz9k_picture_trace("metadata: v43 alpha reference header ready");
   return 1;
 }
 
@@ -2470,6 +2681,64 @@ static void zz9k_picture_fill_reference_pattern(uint8_t *pixel_data,
   }
 }
 
+static void zz9k_picture_fill_alpha_reference_row(uint8_t *dst,
+                                                  uint32_t width,
+                                                  uint32_t row)
+{
+  uint32_t col;
+  uint8_t red;
+  uint8_t green;
+  uint8_t alpha;
+
+  if (!dst || width == 0U) {
+    return;
+  }
+
+  red = 0U;
+  green = (uint8_t)(row * 5U);
+  for (col = 0U; col < width; col++) {
+    if ((((row >> 5) ^ (col >> 5)) & 1U) != 0U) {
+      dst[0] = red;
+      dst[1] = 255U;
+      dst[2] = green;
+    } else {
+      dst[0] = 32U;
+      dst[1] = green;
+      dst[2] = (uint8_t)(255U - red);
+    }
+
+    if (row < 32U && col < 32U) {
+      alpha = 0U;
+    } else if ((((row >> 4) ^ (col >> 4)) & 1U) != 0U) {
+      alpha = 96U;
+    } else {
+      alpha = 255U;
+    }
+    dst[3] = alpha;
+    dst += ZZ9K_PICTURE_RGBA_BYTES_PER_PIXEL;
+    red = (uint8_t)(red + 3U);
+  }
+}
+
+static void zz9k_picture_fill_alpha_reference_pattern(uint8_t *pixel_data,
+                                                      uint32_t width,
+                                                      uint32_t height,
+                                                      uint32_t pitch)
+{
+  uint32_t row;
+  uint8_t *row_ptr;
+
+  if (!pixel_data || width == 0U || height == 0U || pitch == 0U) {
+    return;
+  }
+
+  row_ptr = pixel_data;
+  for (row = 0U; row < height; row++) {
+    zz9k_picture_fill_alpha_reference_row(row_ptr, width, row);
+    row_ptr += pitch;
+  }
+}
+
 static int zz9k_picture_write_v43_rgb_buffer(Class *cl,
                                              Object *object,
                                              uint8_t *pixel_data,
@@ -2491,6 +2760,39 @@ static int zz9k_picture_write_v43_rgb_buffer(Class *cl,
   pixels.MethodID = PDTM_WRITEPIXELARRAY;
   pixels.pbpa_PixelData = pixel_data;
   pixels.pbpa_PixelFormat = PBPAFMT_RGB;
+  pixels.pbpa_PixelArrayMod = row_bytes;
+  pixels.pbpa_Left = left;
+  pixels.pbpa_Top = top;
+  pixels.pbpa_Width = width;
+  pixels.pbpa_Height = height;
+  if (DoSuperMethodA(cl, object, (Msg)&pixels) == 0UL) {
+    SetIoErr(DTERROR_INVALID_DATA);
+    return 0;
+  }
+  return 1;
+}
+
+static int zz9k_picture_write_v43_rgba_buffer(Class *cl,
+                                              Object *object,
+                                              uint8_t *pixel_data,
+                                              uint32_t left,
+                                              uint32_t top,
+                                              uint32_t width,
+                                              uint32_t height,
+                                              uint32_t row_bytes)
+{
+  struct pdtBlitPixelArray pixels;
+
+  if (!cl || !object || !pixel_data || width == 0U || height == 0U ||
+      row_bytes == 0U) {
+    SetIoErr(DTERROR_INVALID_DATA);
+    return 0;
+  }
+
+  memset(&pixels, 0, sizeof(pixels));
+  pixels.MethodID = PDTM_WRITEPIXELARRAY;
+  pixels.pbpa_PixelData = pixel_data;
+  pixels.pbpa_PixelFormat = PBPAFMT_RGBA;
   pixels.pbpa_PixelArrayMod = row_bytes;
   pixels.pbpa_Left = left;
   pixels.pbpa_Top = top;
@@ -2607,6 +2909,37 @@ static int zz9k_picture_set_reference_v43_attrs(Object *object,
   return 1;
 }
 
+static int zz9k_picture_set_alpha_reference_v43_attrs(
+    Object *object,
+    ZZ9KPictureCodec codec,
+    uint32_t width,
+    uint32_t height)
+{
+  if (!object || width == 0U || height == 0U ||
+      width > 65535U || height > 65535U) {
+    zz9k_picture_trace("metadata: reference invalid dimensions");
+    SetIoErr(DTERROR_INVALID_DATA);
+    return 0;
+  }
+
+  zz9k_picture_trace("metadata: v43 alpha reference before attrs");
+  (void)SetDTAttrs(
+      object, 0, 0,
+      DTA_ErrorNumber, 0,
+      DTA_NominalHoriz, width,
+      DTA_NominalVert, height,
+      PDTA_ModeID, 0,
+      PDTA_SourceMode, PMODE_V43,
+      PDTA_DestMode, PMODE_V43,
+      PDTA_SubClassRendersAll, FALSE,
+      PDTA_Remap, FALSE,
+      PDTA_AlphaChannel, TRUE,
+      DTA_ObjName, (ULONG)zz9k_picture_object_name(codec),
+      TAG_END);
+  zz9k_picture_trace("metadata: v43 alpha reference attrs ready");
+  return 1;
+}
+
 static int zz9k_picture_set_v43_attrs_reference_pattern(
     Class *cl,
     Object *object,
@@ -2624,6 +2957,88 @@ static int zz9k_picture_set_v43_attrs_reference_pattern(
     return 0;
   }
   return zz9k_picture_write_v43_reference_pattern(
+      cl, object, instance, codec, width, height);
+}
+
+static int zz9k_picture_write_v43_alpha_reference_pattern(
+    Class *cl,
+    Object *object,
+    ZZ9KPictureInstance *instance,
+    ZZ9KPictureCodec codec,
+    uint32_t width,
+    uint32_t height)
+{
+  uint8_t *pixel_data;
+  uint32_t row_bytes;
+  uint32_t pixel_bytes;
+
+  if (!cl || !object || !instance || width == 0U || height == 0U ||
+      width > 65535U || height > 65535U) {
+    zz9k_picture_trace("metadata: reference invalid dimensions");
+    SetIoErr(DTERROR_INVALID_DATA);
+    return 0;
+  }
+
+  if (!zz9k_picture_min_row_bytes(
+          width, ZZ9K_PICTURE_RGBA_BYTES_PER_PIXEL, &row_bytes) ||
+      !zz9k_picture_accumulate_surface_bytes(
+          height, row_bytes, &pixel_bytes) ||
+      pixel_bytes > ZZ9K_PICTURE_MAX_SURFACE_BYTES) {
+    zz9k_picture_trace("metadata: reference pixel size invalid");
+    SetIoErr(ERROR_NO_FREE_STORE);
+    return 0;
+  }
+
+  zz9k_picture_trace("metadata: v43 alpha reference before pixel alloc");
+  pixel_data = (uint8_t *)AllocMem((ULONG)pixel_bytes, MEMF_PUBLIC);
+  if (!pixel_data) {
+    zz9k_picture_trace("metadata: reference pixel alloc failed");
+    SetIoErr(ERROR_NO_FREE_STORE);
+    return 0;
+  }
+
+  zz9k_picture_fill_alpha_reference_pattern(
+      pixel_data, width, height, row_bytes);
+  zz9k_picture_trace("metadata: v43 alpha reference full buffer ready");
+  if (!zz9k_picture_write_v43_rgba_buffer(
+          cl, object, pixel_data, 0U, 0U, width, height, row_bytes)) {
+    zz9k_picture_trace("metadata: reference pixel write failed");
+    FreeMem(pixel_data, (ULONG)pixel_bytes);
+    return 0;
+  }
+  zz9k_picture_trace("metadata: v43 alpha reference pixel write done");
+
+  (void)SetDTAttrs(
+      object, 0, 0,
+      DTA_NominalHoriz, width,
+      DTA_NominalVert, height,
+      DTA_ObjName, (ULONG)zz9k_picture_object_name(codec),
+      TAG_END);
+  instance->reference_pixels = pixel_data;
+  instance->reference_pixel_bytes = pixel_bytes;
+  instance->source_ready = 0;
+  zz9k_picture_trace("metadata: v43 alpha reference final attrs ready");
+  return 1;
+}
+
+static int zz9k_picture_set_v43_alpha_reference_pattern(
+    Class *cl,
+    Object *object,
+    ZZ9KPictureInstance *instance,
+    ZZ9KPictureCodec codec,
+    uint32_t width,
+    uint32_t height)
+{
+  zz9k_picture_trace("metadata: reference pattern begin");
+  if (!zz9k_picture_prepare_v43_alpha_reference_header(
+          object, width, height)) {
+    return 0;
+  }
+  if (!zz9k_picture_set_alpha_reference_v43_attrs(
+          object, codec, width, height)) {
+    return 0;
+  }
+  return zz9k_picture_write_v43_alpha_reference_pattern(
       cl, object, instance, codec, width, height);
 }
 
@@ -2667,6 +3082,18 @@ static int zz9k_picture_prepare_png_datatype_v43(
   }
 
   zz9k_picture_trace("metadata: png datatype v43 prepare begin");
+  if (has_alpha) {
+    if (!zz9k_picture_prepare_v43_alpha_reference_header(
+            object, instance->width, instance->height)) {
+      return 0;
+    }
+    if (!zz9k_picture_set_alpha_reference_v43_attrs(
+            object, instance->codec, instance->width, instance->height)) {
+      return 0;
+    }
+    zz9k_picture_trace("metadata: png datatype v43 prepare ready");
+    return 1;
+  }
   if (!zz9k_picture_prepare_v43_reference_header(
           object, instance->width, instance->height)) {
     return 0;
@@ -2675,10 +3102,7 @@ static int zz9k_picture_prepare_png_datatype_v43(
           object, instance->codec, instance->width, instance->height)) {
     return 0;
   }
-  if (has_alpha && !zz9k_picture_mark_alpha_header(object)) {
-    return 0;
-  }
-  if (!has_alpha && !zz9k_picture_clear_alpha_header(object)) {
+  if (!zz9k_picture_clear_alpha_header(object)) {
     return 0;
   }
   zz9k_picture_trace("metadata: png datatype v43 prepare ready");
@@ -2744,6 +3168,86 @@ static int zz9k_picture_prepare_datatype_v47_truecolor(
     return 0;
   }
   zz9k_picture_trace("metadata: datatype v47 truecolor prepare ready");
+  return 1;
+}
+
+static int zz9k_picture_jpeg_v47_rgb_buffer_valid(
+    const struct pdtBlitPixelArray *pixels,
+    uint32_t width,
+    uint32_t height)
+{
+  uint32_t min_row_bytes;
+
+  if (!pixels || !pixels->pbpa_PixelData ||
+      pixels->pbpa_PixelFormat != PBPAFMT_RGB ||
+      pixels->pbpa_PixelArrayMod == 0UL) {
+    zz9k_picture_trace("metadata: jpeg v47 rgb buffer invalid");
+    return 0;
+  }
+  if ((pixels->pbpa_Width != 0UL && pixels->pbpa_Width < width) ||
+      (pixels->pbpa_Height != 0UL && pixels->pbpa_Height < height)) {
+    zz9k_picture_trace("metadata: jpeg v47 rgb dimensions invalid");
+    return 0;
+  }
+  if (!zz9k_picture_min_row_bytes(
+          width, ZZ9K_PICTURE_RGB_BYTES_PER_PIXEL, &min_row_bytes) ||
+      pixels->pbpa_PixelArrayMod < min_row_bytes) {
+    zz9k_picture_trace("metadata: jpeg v47 rgb stride invalid");
+    return 0;
+  }
+
+  zz9k_picture_trace("metadata: jpeg v47 rgb buffer accepted");
+  return 1;
+}
+
+static int zz9k_picture_prepare_jpeg_datatype_v47_rgb_direct(
+    Object *object,
+    ZZ9KPictureInstance *instance,
+    struct pdtBlitPixelArray *pixels)
+{
+  ULONG set_result;
+  ULONG error;
+
+  if (!object || !instance || !pixels ||
+      instance->codec != ZZ9K_PICTURE_CODEC_JPEG ||
+      instance->width == 0U || instance->height == 0U) {
+    return 0;
+  }
+
+  zz9k_picture_trace("metadata: jpeg v47 rgb direct prepare begin");
+  if (!zz9k_picture_prepare_v43_reference_header(
+          object, instance->width, instance->height)) {
+    return 0;
+  }
+
+  error = 0UL;
+  zz9k_picture_init_pixel_request(
+      pixels, instance->width, instance->height, PBPAFMT_RGB);
+  pixels->pbpa_PixelData = 0;
+  set_result = SetDTAttrs(
+      object, 0, 0,
+      DTA_ErrorNumber, (ULONG)&error,
+      PDTA_SourceMode, PMODE_V43,
+      PDTA_ModeID, 0,
+      DTA_NominalHoriz, instance->width,
+      DTA_NominalVert, instance->height,
+      DTA_ObjName, (ULONG)zz9k_picture_object_name(instance->codec),
+      PDTA_ObtainPixelBuffer, (ULONG)pixels,
+      PDTA_SubClassRendersAll, TRUE,
+      TAG_END);
+  zz9k_picture_trace_u32(
+      "metadata: jpeg v47 rgb setattrs result", (uint32_t)set_result);
+  zz9k_picture_trace_u32(
+      "metadata: jpeg v47 rgb setattrs error", (uint32_t)error);
+  zz9k_picture_trace_pixel_buffer(pixels);
+  if (error != 0UL ||
+      !zz9k_picture_jpeg_v47_rgb_buffer_valid(
+          pixels, instance->width, instance->height)) {
+    zz9k_picture_trace("metadata: jpeg v47 rgb direct unavailable");
+    return 0;
+  }
+
+  zz9k_picture_trace("metadata: jpeg v47 rgb direct prepare ready");
   return 1;
 }
 
@@ -3072,9 +3576,20 @@ static int zz9k_picture_require_stream_service(
       service.opcode_count, service.flags, ZZ9K_SCALE_BILINEAR);
 }
 
+static int zz9k_picture_direct_pixels_prefer_rgb888_tiles(
+    const ZZ9KServiceInfo *image_service,
+    const struct pdtBlitPixelArray *direct_pixels)
+{
+  return image_service &&
+         direct_pixels &&
+         direct_pixels->pbpa_PixelFormat == PBPAFMT_RGB &&
+         zz9k_has_service_flag(image_service->flags,
+                               ZZ9K_SERVICE_FLAG_IMAGE_RGB888_OUTPUT);
+}
+
 static int zz9k_picture_choose_datatype_tile_format(
     const ZZ9KServiceInfo *image_service,
-    int direct,
+    const struct pdtBlitPixelArray *direct_pixels,
     uint32_t *output_format,
     uint32_t *output_bpp)
 {
@@ -3082,7 +3597,15 @@ static int zz9k_picture_choose_datatype_tile_format(
     return 0;
   }
 
-  if (!direct && image_service &&
+  if (zz9k_picture_direct_pixels_prefer_rgb888_tiles(
+          image_service, direct_pixels)) {
+    *output_format = ZZ9K_SURFACE_FORMAT_RGB888;
+    *output_bpp = ZZ9K_PICTURE_RGB_BYTES_PER_PIXEL;
+    zz9k_picture_trace("metadata: datatype direct rgb888 tiles");
+    return 1;
+  }
+
+  if (!direct_pixels && image_service &&
       zz9k_has_service_flag(image_service->flags,
                             ZZ9K_SERVICE_FLAG_IMAGE_RGB888_OUTPUT)) {
     *output_format = ZZ9K_SURFACE_FORMAT_RGB888;
@@ -3099,7 +3622,7 @@ static int zz9k_picture_choose_datatype_tile_format(
 
 static int zz9k_picture_choose_png_datatype_tile_format(
     const ZZ9KServiceInfo *image_service,
-    int direct,
+    const struct pdtBlitPixelArray *direct_pixels,
     int has_alpha,
     uint32_t *output_format,
     uint32_t *output_bpp)
@@ -3107,18 +3630,14 @@ static int zz9k_picture_choose_png_datatype_tile_format(
   if (!output_format || !output_bpp) {
     return 0;
   }
-#if ZZ9K_PICTURE_ENABLE_PNG_ALPHA_EXPERIMENTS
   if (has_alpha) {
     *output_format = ZZ9K_SURFACE_FORMAT_RGBA8888;
-    *output_bpp = ZZ9K_PICTURE_BGRA_BYTES_PER_PIXEL;
+    *output_bpp = ZZ9K_PICTURE_RGBA_BYTES_PER_PIXEL;
     zz9k_picture_trace("metadata: datatype png rgba alpha tiles");
     return 1;
   }
-#else
-  (void)has_alpha;
-#endif
   return zz9k_picture_choose_datatype_tile_format(
-      image_service, direct, output_format, output_bpp);
+      image_service, direct_pixels, output_format, output_bpp);
 }
 
 static int zz9k_picture_require_framebuffer(
@@ -3756,16 +4275,64 @@ static void zz9k_picture_bgra_to_rgba(const volatile uint8_t *src,
   dst[3] = src[3];
 }
 
-static uint8_t zz9k_picture_bgra_to_luma(const volatile uint8_t *src)
+static uint8_t zz9k_picture_rgb_to_legacy_lut8_index(uint8_t red,
+                                                     uint8_t green,
+                                                     uint8_t blue)
 {
-  uint32_t luma;
-  uint8_t rgb[3];
+  uint8_t red_level;
+  uint8_t green_level;
+  uint8_t blue_level;
 
-  zz9k_picture_bgra_to_rgb(src, rgb);
-  luma = ((uint32_t)rgb[0] * 77U) +
-         ((uint32_t)rgb[1] * 150U) +
-         ((uint32_t)rgb[2] * 29U);
-  return (uint8_t)(luma >> 8);
+  red_level = zz9k_picture_legacy_lut8_component(red);
+  green_level = zz9k_picture_legacy_lut8_component(green);
+  blue_level = zz9k_picture_legacy_lut8_component(blue);
+  return (uint8_t)(1U + ((uint32_t)red_level * 36U) +
+                   ((uint32_t)green_level * 6U) +
+                   (uint32_t)blue_level);
+}
+
+static uint8_t zz9k_picture_surface_pixel_to_legacy_lut8_index(
+    volatile uint8_t *src,
+    uint32_t output_format,
+    int has_alpha)
+{
+  uint8_t red;
+  uint8_t green;
+  uint8_t blue;
+  uint8_t alpha;
+
+  if (!src) {
+    return 0U;
+  }
+
+  alpha = 255U;
+  if (output_format == ZZ9K_SURFACE_FORMAT_RGB888) {
+    red = src[0];
+    green = src[1];
+    blue = src[2];
+  } else if (output_format == ZZ9K_SURFACE_FORMAT_RGBA8888) {
+    red = src[0];
+    green = src[1];
+    blue = src[2];
+    alpha = src[3];
+  } else if (output_format == ZZ9K_SURFACE_FORMAT_ARGB8888) {
+    alpha = src[0];
+    red = src[1];
+    green = src[2];
+    blue = src[3];
+  } else if (output_format == ZZ9K_SURFACE_FORMAT_BGRA8888) {
+    blue = src[0];
+    green = src[1];
+    red = src[2];
+    alpha = src[3];
+  } else {
+    return 0U;
+  }
+
+  if (has_alpha && alpha < 128U) {
+    return 0U;
+  }
+  return zz9k_picture_rgb_to_legacy_lut8_index(red, green, blue);
 }
 
 static int zz9k_picture_accumulate_byte_offset(uint32_t count,
@@ -3791,135 +4358,73 @@ static int zz9k_picture_accumulate_byte_offset(uint32_t count,
   return 1;
 }
 
-static int zz9k_picture_copy_bgra_tile_to_rgb_pixels(
+static int zz9k_picture_write_legacy_bitmap_tile(
     const ZZ9KSharedBuffer *tile,
     const ZZ9KImageSessionResult *result,
-    const struct pdtBlitPixelArray *pixels,
+    ZZ9KPictureDatatypeTarget *target,
     uint32_t tile_stride)
 {
-  uint32_t row;
-  uint32_t col;
+  struct RastPort rast_port;
+  struct RastPort line_rast_port;
+  uint8_t *row_pixels;
   uint32_t bytes_per_pixel;
-  uint32_t dst_row_offset;
-  uint32_t dst_x_offset;
-  volatile uint8_t *src_row;
-  uint8_t *dst_row;
-  int direct_trace;
+  uint32_t src_min_row_bytes;
+  uint32_t row;
 
-  if (!tile || !tile->data || !result || !pixels ||
-      !pixels->pbpa_PixelData ||
-      pixels->pbpa_PixelArrayMod == 0UL ||
+  if (!tile || !tile->data || !result || !target ||
+      !target->legacy_bitmap || !target->legacy_line_bitmap ||
       result->tile_width == 0U || result->tile_height == 0U ||
-      result->tile_x > pixels->pbpa_Width ||
-      result->tile_y > pixels->pbpa_Height ||
-      result->tile_width > (pixels->pbpa_Width - result->tile_x) ||
-      result->tile_height > (pixels->pbpa_Height - result->tile_y)) {
+      result->tile_x > target->width ||
+      result->tile_y > target->height ||
+      result->tile_width > (target->width - result->tile_x) ||
+      result->tile_height > (target->height - result->tile_y)) {
     return 0;
   }
 
-  bytes_per_pixel =
-      zz9k_picture_pbpa_bytes_per_pixel(pixels->pbpa_PixelFormat);
-  if (bytes_per_pixel == 0U) {
+  bytes_per_pixel = zz9k_surface_bytes_per_pixel(target->output_format);
+  if (bytes_per_pixel == 0U ||
+      !zz9k_picture_min_row_bytes(
+          result->tile_width, bytes_per_pixel, &src_min_row_bytes) ||
+      tile_stride < src_min_row_bytes) {
     return 0;
-  }
-  direct_trace = result->tile_x == 0U && result->tile_y == 0U;
-  if (direct_trace) {
-    zz9k_picture_trace("decode: datatype direct copy begin");
-    zz9k_picture_trace_u32(
-        "decode: datatype direct tile data",
-        (uint32_t)(uintptr_t)tile->data);
-    zz9k_picture_trace_u32(
-        "decode: datatype direct tile length", tile->length);
-    zz9k_picture_trace_u32(
-        "decode: datatype direct tile stride", tile_stride);
-    zz9k_picture_trace_u32(
-        "decode: datatype direct pixel data",
-        (uint32_t)(uintptr_t)pixels->pbpa_PixelData);
-    zz9k_picture_trace_u32(
-        "decode: datatype direct pixel format",
-        (uint32_t)pixels->pbpa_PixelFormat);
-    zz9k_picture_trace_u32(
-        "decode: datatype direct pixel mod",
-        (uint32_t)pixels->pbpa_PixelArrayMod);
-    zz9k_picture_trace_u32(
-        "decode: datatype direct bytes per pixel", bytes_per_pixel);
-    zz9k_picture_trace("decode: datatype direct before offsets");
-  }
-  if (!zz9k_picture_accumulate_byte_offset(
-          result->tile_y, (uint32_t)pixels->pbpa_PixelArrayMod,
-          &dst_row_offset) ||
-      !zz9k_picture_accumulate_byte_offset(
-          result->tile_x, bytes_per_pixel, &dst_x_offset)) {
-    return 0;
-  }
-  if (direct_trace) {
-    zz9k_picture_trace_u32(
-        "decode: datatype direct row offset", dst_row_offset);
-    zz9k_picture_trace_u32(
-        "decode: datatype direct x offset", dst_x_offset);
-    zz9k_picture_trace("decode: datatype direct before row pointers");
   }
 
-  src_row = (volatile uint8_t *)tile->data;
-  dst_row = (uint8_t *)pixels->pbpa_PixelData +
-            dst_row_offset + dst_x_offset;
-  if (direct_trace) {
-    zz9k_picture_trace("decode: datatype direct row pointers ready");
+  row_pixels = (uint8_t *)AllocMem((ULONG)result->tile_width, MEMF_PUBLIC);
+  if (!row_pixels) {
+    zz9k_picture_trace("decode: datatype legacy bitmap row alloc failed");
+    return 0;
   }
+
+  InitRastPort(&rast_port);
+  InitRastPort(&line_rast_port);
+  rast_port.BitMap = target->legacy_bitmap;
+  line_rast_port.BitMap = target->legacy_line_bitmap;
   for (row = 0U; row < result->tile_height; row++) {
     volatile uint8_t *src;
-    uint8_t *dst;
+    uint32_t col;
 
-    src = src_row;
-    dst = dst_row;
-    if (direct_trace) {
-      zz9k_picture_trace_u32("decode: datatype direct row", row);
-      zz9k_picture_trace_u32(
-          "decode: datatype direct row src", (uint32_t)(uintptr_t)src);
-      zz9k_picture_trace_u32(
-          "decode: datatype direct row dst", (uint32_t)(uintptr_t)dst);
-    }
+    src = (volatile uint8_t *)tile->data + (row * tile_stride);
     for (col = 0U; col < result->tile_width; col++) {
-      if (pixels->pbpa_PixelFormat == PBPAFMT_LUT8 ||
-          pixels->pbpa_PixelFormat == PBPAFMT_GREY8) {
-        uint8_t luma;
+      row_pixels[col] =
+          zz9k_picture_surface_pixel_to_legacy_lut8_index(
+              src, target->output_format, target->legacy_has_alpha);
+      src += bytes_per_pixel;
+    }
 
-        if (direct_trace && row == 0U && col == 0U) {
-          zz9k_picture_trace(
-              "decode: datatype direct before first luma");
-        }
-        luma = zz9k_picture_bgra_to_luma(src);
-        if (direct_trace && row == 0U && col == 0U) {
-          zz9k_picture_trace_u32(
-              "decode: datatype direct first luma", (uint32_t)luma);
-          zz9k_picture_trace(
-              "decode: datatype direct before first write");
-        }
-        dst[0] = luma;
-        if (direct_trace && row == 0U && col == 0U) {
-          zz9k_picture_trace("decode: datatype direct first write ok");
-        }
-      } else if (pixels->pbpa_PixelFormat == PBPAFMT_ARGB) {
-        dst[0] = src[3];
-        dst[1] = src[2];
-        dst[2] = src[1];
-        dst[3] = src[0];
-      } else if (pixels->pbpa_PixelFormat == PBPAFMT_RGBA) {
-        zz9k_picture_bgra_to_rgba(src, dst);
-      } else {
-        zz9k_picture_bgra_to_rgb(src, dst);
-      }
-      src += ZZ9K_PICTURE_BGRA_BYTES_PER_PIXEL;
-      dst += bytes_per_pixel;
-    }
-    if (direct_trace) {
-      zz9k_picture_trace_u32("decode: datatype direct row ok", row);
-    }
-    src_row += tile_stride;
-    dst_row += (uint32_t)pixels->pbpa_PixelArrayMod;
+    WritePixelLine8(
+        &rast_port,
+        result->tile_x,
+        result->tile_y + row,
+        result->tile_width,
+        row_pixels,
+        &line_rast_port);
   }
 
-  zz9k_picture_trace("decode: datatype tile copied");
+  FreeMem(row_pixels, (ULONG)result->tile_width);
+  target->tiles_written++;
+  if (target->tiles_written == 1U) {
+    zz9k_picture_trace("decode: datatype legacy bitmap tile written");
+  }
   return 1;
 }
 
@@ -4046,6 +4551,45 @@ static int zz9k_picture_write_bgra_tile_to_object(
   target->tiles_written++;
   if (target->tiles_written == 1U) {
     zz9k_picture_trace("decode: datatype tile written");
+  }
+  return 1;
+}
+
+static int zz9k_picture_write_png_alpha_tile_to_object(
+    const ZZ9KSharedBuffer *tile,
+    const ZZ9KImageSessionResult *result,
+    ZZ9KPictureDatatypeTarget *target,
+    uint32_t tile_stride)
+{
+  uint32_t min_row_bytes;
+
+  if (!tile || !tile->data || !result || !target || !target->object ||
+      !target->cl ||
+      target->output_format != ZZ9K_SURFACE_FORMAT_RGBA8888 ||
+      result->tile_width == 0U || result->tile_height == 0U ||
+      result->tile_x > target->width ||
+      result->tile_y > target->height ||
+      result->tile_width > (target->width - result->tile_x) ||
+      result->tile_height > (target->height - result->tile_y) ||
+      !zz9k_picture_min_row_bytes(
+          result->tile_width, ZZ9K_PICTURE_RGBA_BYTES_PER_PIXEL,
+          &min_row_bytes) ||
+      tile_stride < min_row_bytes) {
+    return 0;
+  }
+
+  if (!zz9k_picture_write_v43_rgba_buffer(
+      target->cl, target->object, (uint8_t *)tile->data,
+      result->tile_x, result->tile_y,
+      result->tile_width, result->tile_height, tile_stride)) {
+    zz9k_picture_trace("decode: datatype writepixelarray failed");
+    return 0;
+  }
+
+  target->tiles_written++;
+  if (target->tiles_written == 1U) {
+    zz9k_picture_trace("decode: datatype alpha tile written");
+    zz9k_picture_trace_source("decode: datatype alpha tile written");
   }
   return 1;
 }
@@ -4790,9 +5334,19 @@ static int zz9k_picture_copy_tile_to_datatype(
   if (!target) {
     return 0;
   }
+  if (target->legacy_bitmap) {
+    return zz9k_picture_write_legacy_bitmap_tile(
+        tile, result, target, tile_stride);
+  }
   if (target->direct) {
-    if (!zz9k_picture_copy_bgra_tile_to_rgb_pixels(
+    if (target->output_format == ZZ9K_SURFACE_FORMAT_RGB888 &&
+      target->direct_pixels->pbpa_PixelFormat == PBPAFMT_RGB) {
+      if (!zz9k_picture_copy_raw_tile_to_direct_pixels(
             tile, result, target->direct_pixels, tile_stride)) {
+        return 0;
+      }
+    } else {
+      zz9k_picture_trace("decode: datatype direct rgb mismatch");
       return 0;
     }
     target->tiles_written++;
@@ -4804,12 +5358,8 @@ static int zz9k_picture_copy_tile_to_datatype(
   }
   if (target->output_format == ZZ9K_SURFACE_FORMAT_RGBA8888 ||
       target->output_format == ZZ9K_SURFACE_FORMAT_ARGB8888) {
-#if ZZ9K_PICTURE_ENABLE_PNG_ALPHA_EXPERIMENTS
-    return zz9k_picture_write_alpha_tile_to_object(
+    return zz9k_picture_write_png_alpha_tile_to_object(
         tile, result, target, tile_stride);
-#else
-    return 0;
-#endif
   }
   return zz9k_picture_write_bgra_tile_to_object(
       tile, result, target, tile_stride);
@@ -5401,6 +5951,110 @@ cleanup:
 }
 #endif
 
+static int zz9k_picture_try_datatype_v47_direct(
+    Object *object,
+    ZZ9KPictureInstance *instance,
+    int png_has_alpha,
+    struct pdtBlitPixelArray *pixels,
+    uint32_t *pixel_bytes,
+    ZZ9KPictureDatatypeTarget *target)
+{
+  if (!object || !instance || !pixels || !pixel_bytes || !target) {
+    return 0;
+  }
+  if (png_has_alpha) {
+    zz9k_picture_trace(
+        "metadata: datatype dynamic v47 alpha skipped; v43 fallback");
+    return 0;
+  }
+  if (!zz9k_picture_prepare_datatype_v47_direct(
+          object, instance, pixels, pixel_bytes)) {
+    return 0;
+  }
+
+  target->direct = 1U;
+  target->direct_pixels = pixels;
+  zz9k_picture_trace("metadata: datatype dynamic v47 direct path");
+  return 1;
+}
+
+static int zz9k_picture_try_jpeg_datatype_v47_rgb_direct(
+    Object *object,
+    ZZ9KPictureInstance *instance,
+    const ZZ9KServiceInfo *image_service,
+    struct pdtBlitPixelArray *pixels,
+    ZZ9KPictureDatatypeTarget *target)
+{
+  if (!object || !instance || !image_service || !pixels || !target ||
+      instance->codec != ZZ9K_PICTURE_CODEC_JPEG) {
+    return 0;
+  }
+  if (!zz9k_has_service_flag(image_service->flags,
+                             ZZ9K_SERVICE_FLAG_IMAGE_RGB888_OUTPUT)) {
+    zz9k_picture_trace("metadata: jpeg v47 rgb service unavailable");
+    return 0;
+  }
+  if (!zz9k_picture_prepare_jpeg_datatype_v47_rgb_direct(
+          object, instance, pixels)) {
+    return 0;
+  }
+
+  target->direct = 1U;
+  target->direct_pixels = pixels;
+  zz9k_picture_trace("metadata: datatype jpeg v47 rgb direct path");
+  return 1;
+}
+
+static int zz9k_picture_try_datatype_v43_writepixelarray(
+    Object *object,
+    ZZ9KPictureInstance *instance,
+    int png_has_alpha)
+{
+  if (!object || !instance) {
+    return 0;
+  }
+
+  if (instance->codec == ZZ9K_PICTURE_CODEC_PNG) {
+    if (!zz9k_picture_prepare_png_datatype_v43(
+            object, instance, png_has_alpha)) {
+      return 0;
+    }
+  } else if (!zz9k_picture_prepare_datatype_v43(object, instance)) {
+    return 0;
+  }
+
+  zz9k_picture_trace("metadata: datatype dynamic v43 writepixelarray path");
+  zz9k_picture_trace("metadata: datatype writepixelarray path");
+  return 1;
+}
+
+static int zz9k_picture_decode_to_legacy_bitmap(
+    Object *object,
+    ZZ9KPictureInstance *instance,
+    int png_has_alpha,
+    ZZ9KPictureDatatypeTarget *target)
+{
+  struct BitMap *bitmap;
+  struct BitMap *line_bitmap;
+
+  if (!object || !instance || !target) {
+    return 0;
+  }
+
+  bitmap = 0;
+  line_bitmap = 0;
+  zz9k_picture_trace("metadata: datatype dynamic legacy bitmap path");
+  if (!zz9k_picture_prepare_legacy_bitmap(
+          object, instance, png_has_alpha, &bitmap, &line_bitmap)) {
+    return 0;
+  }
+
+  target->legacy_bitmap = bitmap;
+  target->legacy_line_bitmap = line_bitmap;
+  target->legacy_has_alpha = png_has_alpha ? 1U : 0U;
+  return 1;
+}
+
 static int zz9k_picture_decode_to_datatype_pixels(
     Class *cl,
     Object *object,
@@ -5450,9 +6104,6 @@ static int zz9k_picture_decode_to_datatype_pixels(
   zz9k_picture_trace_u32("metadata: superclass version", (uint32_t)version);
   zz9k_picture_trace_u32("metadata: image width", instance->width);
   zz9k_picture_trace_u32("metadata: image height", instance->height);
-  if (version < 43U) {
-    return 0;
-  }
   png_has_alpha = 0;
 #if ZZ9K_PICTURE_ENABLE_PNG_ALPHA_EXPERIMENTS
   png_alpha_opaque = 0;
@@ -5474,13 +6125,9 @@ static int zz9k_picture_decode_to_datatype_pixels(
         (uint32_t)png_has_alpha);
   }
   if (png_has_alpha) {
-#if ZZ9K_PICTURE_FORCE_ALPHA_RGB_COMPAT || \
-    !ZZ9K_PICTURE_ENABLE_PNG_ALPHA_EXPERIMENTS
     zz9k_picture_trace_source(
-        "metadata: datatype png alpha rgb compatibility path");
-    png_has_alpha = 0;
-    instance->png_has_alpha = 0U;
-#else
+        "metadata: datatype png alpha v43 rgba path");
+#if ZZ9K_PICTURE_ENABLE_PNG_ALPHA_EXPERIMENTS
     zz9k_picture_trace_source(
         "metadata: datatype png alpha surface path");
     if (!zz9k_picture_decode_png_to_datatype_pixels(
@@ -5520,7 +6167,72 @@ static int zz9k_picture_decode_to_datatype_pixels(
   status = 0;
   failure = 0;
 
-#if ZZ9K_PICTURE_FORCE_DATATYPE_V47_TRUECOLOR
+  if (!zz9k_picture_decode_lock_obtain()) {
+    failure = "decode: serialize unavailable";
+    goto cleanup;
+  }
+  decode_lock_held = 1;
+
+  if (zz9k_picture_open_cached_context(&ctx) != ZZ9K_STATUS_OK) {
+    failure = "decode: zz9k_open failed";
+    goto cleanup;
+  }
+  if (!zz9k_picture_require_datatype_caps(ctx)) {
+    failure = "decode: required capabilities missing";
+    goto cleanup;
+  }
+  if (!zz9k_picture_require_stream_service(
+          ctx, instance->codec, ZZ9K_IMAGE_OUTPUT_TILE_BUFFER,
+          &image_service)) {
+    failure = "decode: stream service missing";
+    goto cleanup;
+  }
+
+#if ZZ9K_PICTURE_DYNAMIC_DATATYPE_FEATURES
+#if ZZ9K_PICTURE_ENABLE_JPEG_DATATYPE_V47_RGB_DIRECT
+  if (version >= 47U &&
+      instance->codec == ZZ9K_PICTURE_CODEC_JPEG) {
+    if (!zz9k_picture_try_jpeg_datatype_v47_rgb_direct(
+            object, instance, &image_service, &pixels, &target)) {
+      zz9k_picture_trace(
+          "metadata: datatype jpeg v47 rgb unavailable; v43 fallback");
+    }
+  } else if (version >= 47U &&
+             instance->codec == ZZ9K_PICTURE_CODEC_PNG) {
+    zz9k_picture_trace(
+        "metadata: datatype v47 png uses v43 writepixelarray");
+  }
+#elif ZZ9K_PICTURE_ENABLE_DATATYPE_V47_DIRECT
+  if (version >= 47U) {
+    if (!zz9k_picture_try_datatype_v47_direct(
+            object, instance, png_has_alpha, &pixels, &pixel_bytes,
+            &target)) {
+      zz9k_picture_trace(
+          "metadata: datatype dynamic v47 unavailable; v43 fallback");
+    }
+  }
+#else
+  if (version >= 47U) {
+    zz9k_picture_trace(
+        "metadata: datatype v47 direct disabled; v43 fallback");
+  }
+#endif
+  if (!target.direct && !target.legacy_bitmap) {
+    if (version >= 43U) {
+      if (!zz9k_picture_try_datatype_v43_writepixelarray(
+              object, instance, png_has_alpha)) {
+        failure = instance->codec == ZZ9K_PICTURE_CODEC_PNG ?
+            "metadata: datatype png v43 prepare failed" :
+            "metadata: datatype v43 prepare failed";
+        goto cleanup;
+      }
+    } else if (!zz9k_picture_decode_to_legacy_bitmap(
+                   object, instance, png_has_alpha, &target)) {
+      failure = "metadata: datatype legacy bitmap prepare failed";
+      goto cleanup;
+    }
+  }
+#elif ZZ9K_PICTURE_FORCE_DATATYPE_V47_TRUECOLOR
   zz9k_picture_trace("metadata: forced datatype v47 truecolor");
   if (version >= 47U &&
       zz9k_picture_prepare_datatype_v47_truecolor(
@@ -5591,35 +6303,32 @@ static int zz9k_picture_decode_to_datatype_pixels(
   }
 #endif
 
-  if (!zz9k_picture_decode_lock_obtain()) {
-    failure = "decode: serialize unavailable";
-    goto cleanup;
-  }
-  decode_lock_held = 1;
-
-  if (zz9k_picture_open_cached_context(&ctx) != ZZ9K_STATUS_OK) {
-    failure = "decode: zz9k_open failed";
-    goto cleanup;
-  }
-  if (!zz9k_picture_require_datatype_caps(ctx)) {
-    failure = "decode: required capabilities missing";
-    goto cleanup;
-  }
-  if (!zz9k_picture_require_stream_service(
-          ctx, instance->codec, ZZ9K_IMAGE_OUTPUT_TILE_BUFFER,
-          &image_service)) {
-    failure = "decode: stream service missing";
-    goto cleanup;
+  if (target.direct &&
+      !zz9k_picture_direct_pixels_prefer_rgb888_tiles(
+          &image_service, target.direct_pixels)) {
+    zz9k_picture_trace(
+        "metadata: datatype direct rgb888 unavailable; v43 fallback");
+    target.direct = 0U;
+    target.direct_pixels = 0;
+    if (!zz9k_picture_try_datatype_v43_writepixelarray(
+            object, instance, png_has_alpha)) {
+      failure = instance->codec == ZZ9K_PICTURE_CODEC_PNG ?
+          "metadata: datatype png v43 prepare failed" :
+          "metadata: datatype v43 prepare failed";
+      goto cleanup;
+    }
   }
   if (instance->codec == ZZ9K_PICTURE_CODEC_PNG) {
     if (!zz9k_picture_choose_png_datatype_tile_format(
-            &image_service, target.direct, png_has_alpha,
+            &image_service, target.direct ? target.direct_pixels : 0,
+            png_has_alpha,
             &tile_format, &tile_bpp)) {
       failure = "decode: datatype tile format failed";
       goto cleanup;
     }
   } else if (!zz9k_picture_choose_datatype_tile_format(
-                 &image_service, target.direct, &tile_format, &tile_bpp)) {
+                 &image_service, target.direct ? target.direct_pixels : 0,
+                 &tile_format, &tile_bpp)) {
     failure = "decode: datatype tile format failed";
     goto cleanup;
   }
@@ -5666,7 +6375,8 @@ static int zz9k_picture_decode_to_datatype_pixels(
   tile_allocated = 1;
   zz9k_picture_trace("decode: datatype tile alloc ok");
 
-  if (!target.direct && target.output_format == ZZ9K_SURFACE_FORMAT_BGRA8888) {
+  if (!target.direct && !target.legacy_bitmap &&
+      target.output_format == ZZ9K_SURFACE_FORMAT_BGRA8888) {
     if (!zz9k_picture_min_row_bytes(
             instance->width, ZZ9K_PICTURE_RGB_BYTES_PER_PIXEL,
             &scratch_pitch) ||
@@ -5755,10 +6465,27 @@ cleanup:
     FreeMem(scratch_pixels, (ULONG)scratch_bytes);
   }
   if (ok) {
-    if (!zz9k_picture_finalize_datatype_v43_attrs(object, instance)) {
+    if (target.legacy_bitmap) {
+      if (!zz9k_picture_publish_legacy_bitmap(
+              object, instance, target.legacy_bitmap)) {
+        failure = "metadata: datatype legacy bitmap publish failed";
+        ok = 0;
+      } else {
+        target.legacy_bitmap = 0;
+      }
+    } else if (!zz9k_picture_finalize_datatype_v43_attrs(
+                   object, instance)) {
       failure = "metadata: datatype final attrs failed";
       ok = 0;
     }
+  }
+  if (target.legacy_line_bitmap) {
+    FreeBitMap(target.legacy_line_bitmap);
+    target.legacy_line_bitmap = 0;
+  }
+  if (target.legacy_bitmap) {
+    FreeBitMap(target.legacy_bitmap);
+    target.legacy_bitmap = 0;
   }
   if (ok) {
     zz9k_picture_trace("metadata: datatype pixels ready");
@@ -6109,6 +6836,16 @@ static int zz9k_picture_load_metadata(Class *cl,
 #if ZZ9K_PICTURE_FORCE_DATATYPE_V43_WRITEPIXELS
   zz9k_picture_trace("metadata: forced datatype v43 writepixelarray");
 #endif
+  if (zz9k_picture_alpha_reference_mode(render_mode)) {
+    instance->decode_attempted = 1;
+    if (!zz9k_picture_set_v43_alpha_reference_pattern(
+            cl, object, instance, codec, width, height)) {
+      SetIoErr(DTERROR_INVALID_DATA);
+      return 0;
+    }
+    instance->source_ready = 0;
+    return 1;
+  }
   if (zz9k_picture_reference_mode(render_mode)) {
     instance->decode_attempted = 1;
 #if ZZ9K_PICTURE_FORCE_REFERENCE_V43_WRITEPIXELS
@@ -7042,7 +7779,7 @@ static ULONG zz9k_picture_datatype_dispatch(REG(a0, struct Hook *hook),
     instance = (ZZ9KPictureInstance *)INST_DATA(cl, object);
     (void)zz9k_picture_prepare_hardware(object, instance);
     render_mode = zz9k_picture_render_mode();
-    if (render_mode == ZZ9K_PICTURE_RENDER_MODE_REFERENCE_NOLAYOUT) {
+    if (zz9k_picture_reference_nolayout_mode(render_mode)) {
       zz9k_picture_trace("layout: reference nolayout skip");
       zz9k_picture_notify_datatype_sync(
           object, instance, (const struct gpLayout *)msg);
@@ -7054,7 +7791,7 @@ static ULONG zz9k_picture_datatype_dispatch(REG(a0, struct Hook *hook),
       zz9k_picture_trace("layout: datatype superclass returned");
       zz9k_picture_notify_datatype_sync(
           object, instance, (const struct gpLayout *)msg);
-    } else if (render_mode == ZZ9K_PICTURE_RENDER_MODE_REFERENCE) {
+    } else if (zz9k_picture_reference_mode(render_mode)) {
 #if ZZ9K_PICTURE_FORCE_REFERENCE_V43_STYLE
       zz9k_picture_trace("layout: v43 reference superclass returned");
 #else

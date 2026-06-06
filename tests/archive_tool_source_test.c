@@ -219,10 +219,16 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "7z header crc mismatch");
   ok &= expect_contains(source, "ZZ9K_ARCHIVE_ENTRY_FLAG_CRC32");
   ok &= expect_contains(source, "ZZ9K_ARCHIVE_ENTRY_FLAG_7Z_UNSUPPORTED_SPLIT");
+  ok &= expect_contains(source, "decoded_offset");
   ok &= expect_contains(source, "zz9k_archive_entry_has_crc32");
   ok &= expect_contains(source, "zz9k_archive_7z_entry_has_unsupported_split");
+  ok &= expect_contains(source, "zz9k_archive_7z_entry_has_split_substream");
   ok &= expect_contains(source, "zz9k_archive_7z_read_digests");
   ok &= expect_contains(source, "zz9k_archive_7z_streams_flatten_substreams");
+  ok &= expect_contains(source, "zz9k_archive_7z_split_group_count");
+  ok &= expect_contains(source, "ZZ9KArchive7zSplitWriter");
+  ok &= expect_contains(source, "zz9k_archive_7z_split_writer_chunk");
+  ok &= expect_contains(source, "zz9k_archive_handle_7z_split_group_file");
   ok &= expect_contains(source, "zz9k_archive_7z_copy_file_crc_matches");
   ok &= expect_contains(source, "zz9k_archive_7z_result_matches_entry");
   ok &= expect_contains(source, "7z entry crc mismatch");
@@ -255,6 +261,7 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "Largest free block");
   ok &= expect_contains(source, "unsupported encoded 7z header");
   ok &= expect_contains(source, "7z non-Copy multi-substream unsupported");
+  ok &= expect_contains(source, "7z compressed multi-substream");
   ok &= expect_contains(source, "7z list ok");
 
   free(source);
