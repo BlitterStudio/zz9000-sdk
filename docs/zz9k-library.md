@@ -916,7 +916,8 @@ are collapsed before the common path-safety checks run. Simple compressed
 multi-substream Deflate/LZMA/LZMA2 folders are listed with their substream
 names and sizes; on the file-backed `t`/`x` path, `zz9k-archive` decodes the
 folder once with `decompress-feed`, splits the decoded bytes across the listed
-entries, and validates each substream CRC when the archive provides one. 7z
+entries, and validates CRCs only for selected substreams when the archive
+provides them. 7z
 archive-root metadata entries such as `./` are skipped and do not consume
 output entry slots. A single-folder 7z LZMA2 stream with one file, one pack
 stream, and the normal 1-byte LZMA2 property is offloaded through the LZMA2

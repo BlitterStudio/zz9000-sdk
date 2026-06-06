@@ -3064,6 +3064,68 @@ static int test_7z_split_writer_rejects_substream_crc_mismatch(void)
   return ok ? 2 : 0;
 }
 
+static int test_7z_split_writer_filter_ignores_unmatched_crc(void)
+{
+  const char *output_dir = "archive_tool_7z_split_match_out";
+  const char *hello_path = "archive_tool_7z_split_match_out/hello.txt";
+  const char *bye_path = "archive_tool_7z_split_match_out/bye.txt";
+  const uint8_t decoded[8] = {
+    'h', 'e', 'x', 'l', 'o', 'b', 'y', 'e'
+  };
+  uint8_t archive[256];
+  uint8_t actual[3];
+  ZZ9KArchiveEntry entries[3];
+  ZZ9KArchive7zSplitWriter writer;
+  FILE *file = 0;
+  uint32_t archive_len;
+  uint32_t count;
+  int rc = 0;
+
+  remove(hello_path);
+  remove(bye_path);
+  remove(output_dir);
+  make_7z_deflate_two_file_substream(archive, &archive_len);
+  memset(entries, 0, sizeof(entries));
+  if (!zz9k_archive_7z_list(archive, archive_len, entries, 3U, &count)) {
+    return 1;
+  }
+  zz9k_archive_match_filter = "bye";
+  zz9k_archive_7z_split_writer_init(&writer, output_dir, entries, count, 1);
+  if (!zz9k_archive_7z_split_writer_chunk(
+          &writer, decoded, sizeof(decoded)) ||
+      !zz9k_archive_7z_split_writer_finish(&writer)) {
+    rc = 2;
+    goto out;
+  }
+
+  file = fopen(hello_path, "rb");
+  if (file) {
+    rc = 3;
+    goto out;
+  }
+  file = fopen(bye_path, "rb");
+  if (!file) {
+    rc = 4;
+    goto out;
+  }
+  if (fread(actual, 1U, 3U, file) != 3U ||
+      memcmp(actual, "bye", 3U) != 0) {
+    rc = 5;
+    goto out;
+  }
+
+out:
+  if (file) {
+    fclose(file);
+  }
+  zz9k_archive_7z_split_writer_cleanup(&writer);
+  zz9k_archive_match_filter = 0;
+  remove(hello_path);
+  remove(bye_path);
+  remove(output_dir);
+  return rc;
+}
+
 static int test_7z_rejects_bad_start_header_crc(void)
 {
   uint8_t archive[192];
@@ -5908,6 +5970,12 @@ int main(void)
     printf("test_7z_split_writer_rejects_substream_crc_mismatch failed: %d\n",
            rc);
     return 325 + rc;
+  }
+  rc = test_7z_split_writer_filter_ignores_unmatched_crc();
+  if (rc) {
+    printf("test_7z_split_writer_filter_ignores_unmatched_crc failed: %d\n",
+           rc);
+    return 330 + rc;
   }
   rc = test_7z_rejects_bad_start_header_crc();
   if (rc) {

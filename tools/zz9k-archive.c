@@ -7719,7 +7719,8 @@ static int zz9k_archive_7z_split_writer_finish_entry(
     return 0;
   }
   entry = &writer->entries[writer->current];
-  if (zz9k_archive_entry_has_crc32(entry) &&
+  if (zz9k_archive_entry_matches_filter(entry) &&
+      zz9k_archive_entry_has_crc32(entry) &&
       writer->entry_crc != entry->crc32) {
     printf("7z split crc mismatch: %s decoded=0x%08lx expected=0x%08lx\n",
            entry->name,

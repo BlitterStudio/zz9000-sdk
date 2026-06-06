@@ -235,7 +235,7 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "single-folder 7z LZMA2");
   ok &= expect_contains(source, "multi-substream Deflate/LZMA/LZMA2");
   ok &= expect_contains(source, "splits the decoded bytes");
-  ok &= expect_contains(source, "substream CRC");
+  ok &= expect_contains(source, "validates CRCs only for selected substreams");
   ok &= expect_contains(source, "streams the archive file directly from disk");
   ok &= expect_contains(source, "converted to the LZMA-alone stream shape");
   ok &= expect_contains(source, "1-byte LZMA2 property prefix");
