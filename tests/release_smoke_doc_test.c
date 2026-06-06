@@ -88,6 +88,14 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "zz9k-aead");
   ok &= expect_contains(source, "zz9k-inflate");
   ok &= expect_contains(source, "zz9k-archive");
+  ok &= expect_contains(source, "Archives/split-deflate.7z");
+  ok &= expect_contains(source, "Archives/split-lzma.7z");
+  ok &= expect_contains(source, "Archives/split-lzma2.7z");
+  ok &= expect_contains(source, "zz9k-archive l Archives/split-deflate.7z");
+  ok &= expect_contains(source, "zz9k-archive t Archives/split-lzma.7z");
+  ok &= expect_contains(
+      source,
+      "zz9k-archive x --dry-run -o RAM:zz9k-split Archives/split-lzma2.7z");
   ok &= expect_contains(source, "zz9k-jpeg");
   ok &= expect_contains(source, "zz9k-png");
   ok &= expect_contains(source, "zz9k-view");

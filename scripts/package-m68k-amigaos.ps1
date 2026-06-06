@@ -47,7 +47,8 @@ $Dirs = @(
   "Developer\Include\fd",
   "Developer\FD",
   "Docs",
-  "Examples"
+  "Examples",
+  "Archives"
 )
 foreach ($Dir in $Dirs) {
   New-Item -ItemType Directory -Force `
@@ -151,6 +152,12 @@ Copy-One "docs/zz9k-library.md" "Docs/zz9k-library.md"
 Copy-One "docs/zz9k-modules.md" "Docs/zz9k-modules.md"
 Copy-One "docs/zz9k-picture-datatype.md" "Docs/zz9k-picture-datatype.md"
 Copy-One "docs/zz9k-release-smoke.md" "Docs/zz9k-release-smoke.md"
+Decode-Base64File "tests/fixtures/archives/split-deflate.7z.b64" `
+  "Archives/split-deflate.7z"
+Decode-Base64File "tests/fixtures/archives/split-lzma.7z.b64" `
+  "Archives/split-lzma.7z"
+Decode-Base64File "tests/fixtures/archives/split-lzma2.7z.b64" `
+  "Archives/split-lzma2.7z"
 Copy-One "examples/amiga-library/zz9k-library-demo.c" `
   "Examples/zz9k-library-demo.c"
 Copy-One "examples/amiga-jpeg-stream/zz9k-jpeg-stream-demo.c" `

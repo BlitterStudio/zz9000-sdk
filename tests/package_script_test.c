@@ -90,6 +90,7 @@ static int check_script(const char *path, const char *name)
   ok &= expect_contains(script, name, "FD");
   ok &= expect_contains(script, name, "Docs");
   ok &= expect_contains(script, name, "Examples");
+  ok &= expect_contains(script, name, "Archives");
   ok &= expect_contains(script, name, "MANIFEST.sha256");
   ok &= expect_contains(script, name, "build/zz9k.library");
   ok &= expect_contains(script, name, "build/zz9k-info");
@@ -159,6 +160,15 @@ static int check_script(const char *path, const char *name)
   ok &= expect_contains(script, name, "docs/zz9k-picture-datatype.md");
   ok &= expect_contains(script, name, "docs/zz9k-release-smoke.md");
   ok &= expect_contains(script, name, "Docs/zz9k-release-smoke.md");
+  ok &= expect_contains(script, name,
+                        "tests/fixtures/archives/split-deflate.7z.b64");
+  ok &= expect_contains(script, name,
+                        "tests/fixtures/archives/split-lzma.7z.b64");
+  ok &= expect_contains(script, name,
+                        "tests/fixtures/archives/split-lzma2.7z.b64");
+  ok &= expect_contains(script, name, "Archives/split-deflate.7z");
+  ok &= expect_contains(script, name, "Archives/split-lzma.7z");
+  ok &= expect_contains(script, name, "Archives/split-lzma2.7z");
   ok &= expect_contains(script, name,
                         "examples/amiga-jpeg-stream/"
                         "zz9k-jpeg-stream-demo.c");

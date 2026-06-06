@@ -79,6 +79,15 @@ zz9k-archive t Work:Archives/test.zip
 zz9k-archive x --dry-run -o RAM:zz9k-smoke Work:Archives/test.zip
 zz9k-archive l Work:Archives/test.lha
 zz9k-archive t Work:Archives/test.tar.gz
+zz9k-archive l Archives/split-deflate.7z
+zz9k-archive t Archives/split-deflate.7z
+zz9k-archive x --dry-run -o RAM:zz9k-split Archives/split-deflate.7z
+zz9k-archive l Archives/split-lzma.7z
+zz9k-archive t Archives/split-lzma.7z
+zz9k-archive x --dry-run -o RAM:zz9k-split Archives/split-lzma.7z
+zz9k-archive l Archives/split-lzma2.7z
+zz9k-archive t Archives/split-lzma2.7z
+zz9k-archive x --dry-run -o RAM:zz9k-split Archives/split-lzma2.7z
 ```
 
 Expected pass signal:
@@ -86,6 +95,8 @@ Expected pass signal:
 - `zz9k-inflate --selftest` completes all built-in compressed payload checks.
 - Archive list/test/dry-run commands complete without path-safety, CRC, or
   unsupported-method surprises for the chosen fixtures.
+- The packaged `Archives/split-*.7z` fixtures list as two files and exercise
+  the file-backed compressed multi-substream 7z path.
 
 Failure routing:
 

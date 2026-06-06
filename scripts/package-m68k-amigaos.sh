@@ -68,7 +68,8 @@ mkdir -p \
   "$PACKAGE_ROOT/Developer/Include/fd" \
   "$PACKAGE_ROOT/Developer/FD" \
   "$PACKAGE_ROOT/Docs" \
-  "$PACKAGE_ROOT/Examples"
+  "$PACKAGE_ROOT/Examples" \
+  "$PACKAGE_ROOT/Archives"
 
 copy_one() {
   cp "$REPO_ROOT/$1" "$PACKAGE_ROOT/$2"
@@ -166,6 +167,12 @@ copy_one "docs/zz9k-library.md" "Docs/zz9k-library.md"
 copy_one "docs/zz9k-modules.md" "Docs/zz9k-modules.md"
 copy_one "docs/zz9k-picture-datatype.md" "Docs/zz9k-picture-datatype.md"
 copy_one "docs/zz9k-release-smoke.md" "Docs/zz9k-release-smoke.md"
+decode_base64_file "tests/fixtures/archives/split-deflate.7z.b64" \
+  "Archives/split-deflate.7z"
+decode_base64_file "tests/fixtures/archives/split-lzma.7z.b64" \
+  "Archives/split-lzma.7z"
+decode_base64_file "tests/fixtures/archives/split-lzma2.7z.b64" \
+  "Archives/split-lzma2.7z"
 copy_one "examples/amiga-library/zz9k-library-demo.c" \
   "Examples/zz9k-library-demo.c"
 copy_one "examples/amiga-jpeg-stream/zz9k-jpeg-stream-demo.c" \

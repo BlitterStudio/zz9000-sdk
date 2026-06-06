@@ -10,6 +10,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "archive_7z_real_fixtures.h"
+
 #define ZZ9K_ARCHIVE_TEST_7Z_SPLIT_SUBSTREAM_FLAG 0x40000000UL
 
 static int write_test_file(const char *path,
@@ -2965,6 +2967,149 @@ static int test_7z_deflate_multi_substream_is_file_backed_split(void)
     return 19;
   }
   if (!needs_deflate || needs_lzma || needs_lzma2) return 22;
+  return 0;
+}
+
+static int assert_7z_real_split_fixture(const uint8_t *archive,
+                                        uint32_t archive_len,
+                                        uint32_t method,
+                                        int expect_deflate,
+                                        int expect_lzma,
+                                        int expect_lzma2)
+{
+  const char *output_dir = "archive_tool_real_7z_split_out";
+  const char *bye_path = "archive_tool_real_7z_split_out/bye.txt";
+  const char *hello_path = "archive_tool_real_7z_split_out/hello.txt";
+  const uint8_t decoded[8] = {
+    'b', 'y', 'e', 'h', 'e', 'l', 'l', 'o'
+  };
+  ZZ9KArchiveEntry entries[4];
+  ZZ9KArchive7zSplitWriter writer;
+  uint8_t actual[5];
+  FILE *file = 0;
+  uint32_t count;
+  int needs_deflate;
+  int needs_lzma;
+  int needs_lzma2;
+  int rc = 0;
+
+  remove(bye_path);
+  remove(hello_path);
+  remove(output_dir);
+  memset(entries, 0, sizeof(entries));
+  if (!zz9k_archive_7z_list(archive, archive_len, entries, 4U, &count)) {
+    return 1;
+  }
+  if (count != 2U) return 2;
+  if (strcmp(entries[0].name, "bye.txt") != 0) return 3;
+  if (strcmp(entries[1].name, "hello.txt") != 0) return 4;
+  if (entries[0].method != method || entries[1].method != method) return 5;
+  if (entries[0].data_offset != 32U || entries[1].data_offset != 32U) {
+    return 6;
+  }
+  if (entries[0].compressed_size == 0U ||
+      entries[0].compressed_size != entries[1].compressed_size) {
+    return 7;
+  }
+  if (entries[0].uncompressed_size != 3U ||
+      entries[1].uncompressed_size != 5U) {
+    return 8;
+  }
+  if (entries[0].decoded_offset != 0U ||
+      entries[1].decoded_offset != 3U) {
+    return 9;
+  }
+  if (entries[0].crc32 != 0x77379134UL ||
+      entries[1].crc32 != 0x3610a686UL) {
+    return 10;
+  }
+  if ((entries[0].flags & ZZ9K_ARCHIVE_ENTRY_FLAG_CRC32) == 0U ||
+      (entries[1].flags & ZZ9K_ARCHIVE_ENTRY_FLAG_CRC32) == 0U) {
+    return 11;
+  }
+  if ((entries[0].flags & ZZ9K_ARCHIVE_TEST_7Z_SPLIT_SUBSTREAM_FLAG) == 0U ||
+      (entries[1].flags & ZZ9K_ARCHIVE_TEST_7Z_SPLIT_SUBSTREAM_FLAG) == 0U) {
+    return 12;
+  }
+  if (zz9k_archive_7z_split_group_count(entries, count, 0U) != 2U) {
+    return 13;
+  }
+  if (!zz9k_archive_7z_file_can_handle_entries(
+          entries, count, archive_len, &needs_deflate,
+          &needs_lzma, &needs_lzma2)) {
+    return 14;
+  }
+  if (needs_deflate != expect_deflate ||
+      needs_lzma != expect_lzma ||
+      needs_lzma2 != expect_lzma2) {
+    return 15;
+  }
+
+  zz9k_archive_7z_split_writer_init(&writer, output_dir, entries, count, 1);
+  if (!zz9k_archive_7z_split_writer_chunk(&writer, decoded, 4U) ||
+      !zz9k_archive_7z_split_writer_chunk(&writer, decoded + 4U, 4U) ||
+      !zz9k_archive_7z_split_writer_finish(&writer)) {
+    rc = 16;
+    goto out;
+  }
+
+  file = fopen(bye_path, "rb");
+  if (!file) {
+    rc = 17;
+    goto out;
+  }
+  if (fread(actual, 1U, 3U, file) != 3U ||
+      memcmp(actual, "bye", 3U) != 0) {
+    rc = 18;
+    goto out;
+  }
+  fclose(file);
+  file = 0;
+
+  file = fopen(hello_path, "rb");
+  if (!file) {
+    rc = 19;
+    goto out;
+  }
+  if (fread(actual, 1U, 5U, file) != 5U ||
+      memcmp(actual, "hello", 5U) != 0) {
+    rc = 20;
+    goto out;
+  }
+
+out:
+  if (file) {
+    fclose(file);
+  }
+  zz9k_archive_7z_split_writer_cleanup(&writer);
+  remove(bye_path);
+  remove(hello_path);
+  remove(output_dir);
+  return rc;
+}
+
+static int test_7z_real_split_fixtures_parse_and_split(void)
+{
+  int rc;
+
+  rc = assert_7z_real_split_fixture(
+      real_7z_split_deflate_fixture,
+      (uint32_t)sizeof(real_7z_split_deflate_fixture),
+      ZZ9K_ARCHIVE_7Z_METHOD_DEFLATE, 1, 0, 0);
+  if (rc) return 100 + rc;
+
+  rc = assert_7z_real_split_fixture(
+      real_7z_split_lzma_fixture,
+      (uint32_t)sizeof(real_7z_split_lzma_fixture),
+      ZZ9K_ARCHIVE_7Z_METHOD_LZMA, 0, 1, 0);
+  if (rc) return 200 + rc;
+
+  rc = assert_7z_real_split_fixture(
+      real_7z_split_lzma2_fixture,
+      (uint32_t)sizeof(real_7z_split_lzma2_fixture),
+      ZZ9K_ARCHIVE_7Z_METHOD_LZMA2, 0, 0, 1);
+  if (rc) return 300 + rc;
+
   return 0;
 }
 
@@ -5958,6 +6103,12 @@ int main(void)
     printf("test_7z_deflate_multi_substream_is_file_backed_split "
            "failed: %d\n", rc);
     return 315 + rc;
+  }
+  rc = test_7z_real_split_fixtures_parse_and_split();
+  if (rc) {
+    printf("test_7z_real_split_fixtures_parse_and_split failed: %d\n",
+           rc);
+    return 317 + rc;
   }
   rc = test_7z_split_writer_extracts_decoded_substreams();
   if (rc) {
