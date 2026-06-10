@@ -3289,6 +3289,82 @@ static int test_7z_split_group_rejects_discontinuous_offsets(void)
   return 0;
 }
 
+static int test_7z_split_writer_handles_zero_length_substreams(void)
+{
+  const char *output_dir = "archive_tool_7z_split_zero_out";
+  const char *a_path = "archive_tool_7z_split_zero_out/a.txt";
+  const char *empty_path = "archive_tool_7z_split_zero_out/empty.txt";
+  const char *b_path = "archive_tool_7z_split_zero_out/b.txt";
+  const uint8_t decoded[8] = {
+    'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'
+  };
+  uint8_t actual[8];
+  ZZ9KArchiveEntry entries[3];
+  ZZ9KArchive7zSplitWriter writer;
+  FILE *file = 0;
+  int rc = 0;
+
+  remove(a_path);
+  remove(empty_path);
+  remove(b_path);
+  remove(output_dir);
+  memset(entries, 0, sizeof(entries));
+  strcpy(entries[0].name, "a.txt");
+  entries[0].uncompressed_size = 3U;
+  entries[0].decoded_offset = 0U;
+  strcpy(entries[1].name, "empty.txt");
+  entries[1].uncompressed_size = 0U;
+  entries[1].decoded_offset = 3U;
+  strcpy(entries[2].name, "b.txt");
+  entries[2].uncompressed_size = 5U;
+  entries[2].decoded_offset = 3U;
+
+  zz9k_archive_7z_split_writer_init(&writer, output_dir, entries, 3U, 1);
+  if (!zz9k_archive_7z_split_writer_chunk(&writer, decoded, 2U) ||
+      !zz9k_archive_7z_split_writer_chunk(&writer, decoded + 2U, 3U) ||
+      !zz9k_archive_7z_split_writer_chunk(&writer, decoded + 5U, 3U) ||
+      !zz9k_archive_7z_split_writer_finish(&writer)) {
+    rc = 1;
+    goto out;
+  }
+
+  file = fopen(a_path, "rb");
+  if (!file || fread(actual, 1U, 3U, file) != 3U ||
+      memcmp(actual, "abc", 3U) != 0) {
+    rc = 2;
+    goto out;
+  }
+  fclose(file);
+  file = fopen(empty_path, "rb");
+  if (!file) {
+    rc = 3;
+    goto out;
+  }
+  if (fseek(file, 0L, SEEK_END) != 0 || ftell(file) != 0L) {
+    rc = 4;
+    goto out;
+  }
+  fclose(file);
+  file = fopen(b_path, "rb");
+  if (!file || fread(actual, 1U, 5U, file) != 5U ||
+      memcmp(actual, "defgh", 5U) != 0) {
+    rc = 5;
+    goto out;
+  }
+
+out:
+  if (file) {
+    fclose(file);
+    file = 0;
+  }
+  zz9k_archive_7z_split_writer_cleanup(&writer);
+  remove(a_path);
+  remove(empty_path);
+  remove(b_path);
+  remove(output_dir);
+  return rc;
+}
+
 static int test_7z_rejects_bad_start_header_crc(void)
 {
   uint8_t archive[192];
@@ -6483,6 +6559,12 @@ int main(void)
     printf("test_7z_split_group_rejects_discontinuous_offsets failed: %d\n",
            rc);
     return 415 + rc;
+  }
+  rc = test_7z_split_writer_handles_zero_length_substreams();
+  if (rc) {
+    printf("test_7z_split_writer_handles_zero_length_substreams failed: %d\n",
+           rc);
+    return 420 + rc;
   }
   return 0;
 }
