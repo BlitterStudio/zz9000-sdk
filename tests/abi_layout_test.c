@@ -223,6 +223,13 @@ int main(void)
     return 46;
   }
 
+  if (sizeof(struct ZZ9KCryptoKxPayload) != 48U) return 70;
+  if ((int)ZZ9K_OP_CRYPTO_KX != 0x0803) return 71;
+  if ((int)ZZ9K_CRYPTO_KX_X25519 != 1) return 72;
+  if (ZZ9K_CRYPTO_X25519_KEY_BYTES != 32U) return 73;
+  if (ZZ9K_CRYPTO_X25519_SHARED_BYTES != 32U) return 74;
+  if (ZZ9K_SERVICE_FLAG_CRYPTO_X25519 != (1U << 16)) return 75;
+
   zz9k_put_be16(data, 0x1234U);
   if (zz9k_get_be16(data) != 0x1234U) return 1;
 

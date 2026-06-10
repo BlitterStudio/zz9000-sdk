@@ -162,6 +162,7 @@ enum ZZ9KOpcode {
   ZZ9K_OP_CRYPTO_HASH = ZZ9K_SERVICE_CRYPTO + 0x00,
   ZZ9K_OP_CRYPTO_STREAM = ZZ9K_SERVICE_CRYPTO + 0x01,
   ZZ9K_OP_CRYPTO_AEAD = ZZ9K_SERVICE_CRYPTO + 0x02,
+  ZZ9K_OP_CRYPTO_KX        = ZZ9K_SERVICE_CRYPTO + 0x03,
 
   ZZ9K_OP_DIAG_READ = ZZ9K_SERVICE_DIAG + 0x00,
   ZZ9K_OP_DIAG_TIMING = ZZ9K_SERVICE_DIAG + 0x01
@@ -224,7 +225,9 @@ enum ZZ9KServiceFlags {
   ZZ9K_SERVICE_FLAG_CODEC_DEFLATE_FEED = 1U << 25,
   ZZ9K_SERVICE_FLAG_CODEC_ZLIB_FEED = 1U << 26,
   ZZ9K_SERVICE_FLAG_CODEC_GZIP_FEED = 1U << 27,
-  ZZ9K_SERVICE_FLAG_CODEC_LZMA2 = 1U << 28
+  ZZ9K_SERVICE_FLAG_CODEC_LZMA2 = 1U << 28,
+
+  ZZ9K_SERVICE_FLAG_CRYPTO_X25519     = 1U << 16
 };
 
 enum ZZ9KAudioSampleFormat {
@@ -615,6 +618,18 @@ typedef struct ZZ9KCryptoResultPayload {
   uint8_t flags[4];
   uint8_t reserved[36];
 } ZZ9KCryptoResultPayload;
+
+struct ZZ9KCryptoKxPayload {
+  uint8_t scalar_handle[4];
+  uint8_t scalar_offset[4];
+  uint8_t point_handle[4];
+  uint8_t point_offset[4];
+  uint8_t dst_handle[4];
+  uint8_t dst_offset[4];
+  uint8_t algorithm[4];
+  uint8_t flags[4];
+  uint8_t reserved[16];
+};
 
 typedef struct ZZ9KDecompressPayload {
   uint8_t src_handle[4];
@@ -1325,6 +1340,14 @@ enum ZZ9KCryptoAeadAlgorithm {
   ZZ9K_CRYPTO_AEAD_NONE = 0,
   ZZ9K_CRYPTO_AEAD_CHACHA20_POLY1305 = 1
 };
+
+typedef enum ZZ9KCryptoKxAlgorithm {
+  ZZ9K_CRYPTO_KX_NONE    = 0,
+  ZZ9K_CRYPTO_KX_X25519  = 1
+} ZZ9KCryptoKxAlgorithm;
+
+#define ZZ9K_CRYPTO_X25519_KEY_BYTES    32U
+#define ZZ9K_CRYPTO_X25519_SHARED_BYTES 32U
 
 enum ZZ9KCryptoAeadFlags {
   ZZ9K_CRYPTO_AEAD_FLAG_DECRYPT = 1U << 0
