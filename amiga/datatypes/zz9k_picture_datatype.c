@@ -4225,6 +4225,10 @@ static int zz9k_picture_choose_png_full_datatype_tile_layout(
       !zz9k_picture_accumulate_surface_bytes(height, pitch, &bytes)) {
     return 0;
   }
+  if (bytes > ZZ9K_PICTURE_MAX_SURFACE_BYTES) {
+    zz9k_picture_trace("decode: datatype png full layout too large");
+    return 0;
+  }
 
   *tile_max_rows = height;
   *tile_target_bytes = bytes;
