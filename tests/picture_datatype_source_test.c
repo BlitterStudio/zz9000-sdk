@@ -973,8 +973,8 @@ int main(int argc, char **argv)
       "  };");
   ok &= expect_contains(source, "case PBPAFMT_LUT8:");
   ok &= expect_contains(source, "case PBPAFMT_GREY8:");
-  ok &= expect_contains(source, "struct ColorRegister lut_colors[256];");
-  ok &= expect_contains(source, "ULONG lut_cregs[256U * 3U];");
+  ok &= expect_not_contains(source, "struct ColorRegister lut_colors[256];");
+  ok &= expect_not_contains(source, "ULONG lut_cregs[256U * 3U];");
   ok &= expect_contains(source, "\"metadata: v47 lut8 palette ready\"");
   ok &= expect_contains(source, "\"metadata: v47 lut8 palette skipped\"");
   ok &= expect_contains(source, "zz9k_picture_prepare_direct_pixel_header");
@@ -988,8 +988,15 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "formats[i] == PBPAFMT_GREY8");
   ok &= expect_contains(source, "\"metadata: obtain pixel buffer method\"");
   ok &= expect_contains(source, "continue;");
-  ok &= expect_contains(source, "PDTA_ColorRegisters, (ULONG)instance->lut_colors");
-  ok &= expect_contains(source, "PDTA_CRegs, (ULONG)instance->lut_cregs");
+  ok &= expect_not_contains(source, "PDTA_ColorRegisters, (ULONG)instance->lut_colors");
+  ok &= expect_not_contains(source, "PDTA_CRegs, (ULONG)instance->lut_cregs");
+  ok &= expect_contains(
+      source, "(void)SetDTAttrs(object, 0, 0, PDTA_NumColors, 256, TAG_END);");
+  ok &= expect_contains(source, "\"metadata: v47 lut8 palette unavailable\"");
+  ok &= expect_contains(
+      source, "\"metadata: datatype legacy lut8 palette unavailable\"");
+  ok &= expect_contains(
+      source, "\"metadata: png alpha lut8 palette unavailable\"");
   ok &= expect_contains(source, "obtain.popa_Flags = pixel_format == PBPAFMT_GREY8");
   ok &= expect_contains(source, "\"metadata: v47 unsupported pixel format\"");
   ok &= expect_not_contains(source, "\"metadata: v47 greyscale palette ready\"");

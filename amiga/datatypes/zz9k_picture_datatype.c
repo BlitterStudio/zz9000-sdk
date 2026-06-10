@@ -167,8 +167,6 @@ typedef enum ZZ9KPictureRenderMode {
 typedef struct ZZ9KPictureInstance {
   ZZ9KPictureCodec codec;
   char object_name[ZZ9K_PICTURE_OBJECT_NAME_BYTES];
-  struct ColorRegister lut_colors[256];
-  ULONG lut_cregs[256U * 3U];
   uint32_t width;
   uint32_t height;
   uint32_t framebuffer_width;
@@ -1414,10 +1412,25 @@ static int zz9k_picture_prepare_lut8_palette(
     Object *object,
     ZZ9KPictureInstance *instance)
 {
+  struct ColorRegister *colors;
+  ULONG *cregs;
   uint32_t i;
 
   if (!object || !instance) {
     zz9k_picture_trace("metadata: v47 lut8 palette skipped");
+    return 0;
+  }
+
+  (void)SetDTAttrs(object, 0, 0, PDTA_NumColors, 256, TAG_END);
+  colors = 0;
+  cregs = 0;
+  (void)GetDTAttrs(
+      object,
+      PDTA_ColorRegisters, (ULONG)&colors,
+      PDTA_CRegs, (ULONG)&cregs,
+      TAG_END);
+  if (!colors || !cregs) {
+    zz9k_picture_trace("metadata: v47 lut8 palette unavailable");
     return 0;
   }
 
@@ -1430,20 +1443,14 @@ static int zz9k_picture_prepare_lut8_palette(
               ((ULONG)level8 << 16) |
               ((ULONG)level8 << 8) |
               (ULONG)level8;
-    instance->lut_colors[i].red = level8;
-    instance->lut_colors[i].green = level8;
-    instance->lut_colors[i].blue = level8;
-    instance->lut_cregs[(i * 3U) + 0U] = level32;
-    instance->lut_cregs[(i * 3U) + 1U] = level32;
-    instance->lut_cregs[(i * 3U) + 2U] = level32;
+    colors[i].red = level8;
+    colors[i].green = level8;
+    colors[i].blue = level8;
+    cregs[(i * 3U) + 0U] = level32;
+    cregs[(i * 3U) + 1U] = level32;
+    cregs[(i * 3U) + 2U] = level32;
   }
 
-  (void)SetDTAttrs(
-      object, 0, 0,
-      PDTA_NumColors, 256,
-      PDTA_ColorRegisters, (ULONG)instance->lut_colors,
-      PDTA_CRegs, (ULONG)instance->lut_cregs,
-      TAG_END);
   zz9k_picture_trace("metadata: v47 lut8 palette ready");
   return 1;
 }
@@ -1975,9 +1982,25 @@ static int zz9k_picture_prepare_legacy_lut8_palette(
     Object *object,
     ZZ9KPictureInstance *instance)
 {
+  struct ColorRegister *colors;
+  ULONG *cregs;
   uint32_t index;
 
   if (!object || !instance) {
+    return 0;
+  }
+
+  (void)SetDTAttrs(object, 0, 0, PDTA_NumColors, 256, TAG_END);
+  colors = 0;
+  cregs = 0;
+  (void)GetDTAttrs(
+      object,
+      PDTA_ColorRegisters, (ULONG)&colors,
+      PDTA_CRegs, (ULONG)&cregs,
+      TAG_END);
+  if (!colors || !cregs) {
+    zz9k_picture_trace(
+        "metadata: datatype legacy lut8 palette unavailable");
     return 0;
   }
 
@@ -1999,23 +2022,17 @@ static int zz9k_picture_prepare_legacy_lut8_palette(
       blue = (uint8_t)((entry % 6U) * 51U);
     }
 
-    instance->lut_colors[index].red = red;
-    instance->lut_colors[index].green = green;
-    instance->lut_colors[index].blue = blue;
-    instance->lut_cregs[(index * 3U) + 0U] =
+    colors[index].red = red;
+    colors[index].green = green;
+    colors[index].blue = blue;
+    cregs[(index * 3U) + 0U] =
         zz9k_picture_legacy_lut8_creg(red);
-    instance->lut_cregs[(index * 3U) + 1U] =
+    cregs[(index * 3U) + 1U] =
         zz9k_picture_legacy_lut8_creg(green);
-    instance->lut_cregs[(index * 3U) + 2U] =
+    cregs[(index * 3U) + 2U] =
         zz9k_picture_legacy_lut8_creg(blue);
   }
 
-  (void)SetDTAttrs(
-      object, 0, 0,
-      PDTA_NumColors, 256,
-      PDTA_ColorRegisters, (ULONG)instance->lut_colors,
-      PDTA_CRegs, (ULONG)instance->lut_cregs,
-      TAG_END);
   zz9k_picture_trace("metadata: datatype legacy lut8 palette ready");
   return 1;
 }
@@ -2470,9 +2487,24 @@ static ULONG zz9k_picture_alpha_lut8_creg(uint8_t value)
 static int zz9k_picture_prepare_alpha_lut8_palette(Object *object,
                                                    ZZ9KPictureInstance *instance)
 {
+  struct ColorRegister *colors;
+  ULONG *cregs;
   uint32_t index;
 
   if (!object || !instance) {
+    return 0;
+  }
+
+  (void)SetDTAttrs(object, 0, 0, PDTA_NumColors, 256, TAG_END);
+  colors = 0;
+  cregs = 0;
+  (void)GetDTAttrs(
+      object,
+      PDTA_ColorRegisters, (ULONG)&colors,
+      PDTA_CRegs, (ULONG)&cregs,
+      TAG_END);
+  if (!colors || !cregs) {
+    zz9k_picture_trace("metadata: png alpha lut8 palette unavailable");
     return 0;
   }
 
@@ -2480,9 +2512,6 @@ static int zz9k_picture_prepare_alpha_lut8_palette(Object *object,
     uint8_t red;
     uint8_t green;
     uint8_t blue;
-    ULONG red32;
-    ULONG green32;
-    ULONG blue32;
 
     if (index == 0U || index > 216U) {
       red = 0U;
@@ -2497,23 +2526,14 @@ static int zz9k_picture_prepare_alpha_lut8_palette(Object *object,
       blue = (uint8_t)((entry % 6U) * 51U);
     }
 
-    red32 = zz9k_picture_alpha_lut8_creg(red);
-    green32 = zz9k_picture_alpha_lut8_creg(green);
-    blue32 = zz9k_picture_alpha_lut8_creg(blue);
-    instance->lut_colors[index].red = red;
-    instance->lut_colors[index].green = green;
-    instance->lut_colors[index].blue = blue;
-    instance->lut_cregs[(index * 3U) + 0U] = red32;
-    instance->lut_cregs[(index * 3U) + 1U] = green32;
-    instance->lut_cregs[(index * 3U) + 2U] = blue32;
+    colors[index].red = red;
+    colors[index].green = green;
+    colors[index].blue = blue;
+    cregs[(index * 3U) + 0U] = zz9k_picture_alpha_lut8_creg(red);
+    cregs[(index * 3U) + 1U] = zz9k_picture_alpha_lut8_creg(green);
+    cregs[(index * 3U) + 2U] = zz9k_picture_alpha_lut8_creg(blue);
   }
 
-  (void)SetDTAttrs(
-      object, 0, 0,
-      PDTA_NumColors, 256,
-      PDTA_ColorRegisters, (ULONG)instance->lut_colors,
-      PDTA_CRegs, (ULONG)instance->lut_cregs,
-      TAG_END);
   zz9k_picture_trace("metadata: png alpha lut8 palette ready");
   return 1;
 }
