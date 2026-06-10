@@ -997,6 +997,10 @@ int main(int argc, char **argv)
       source, "\"metadata: datatype legacy lut8 palette unavailable\"");
   ok &= expect_contains(
       source, "\"metadata: png alpha lut8 palette unavailable\"");
+  ok &= expect_contains(source, "uint32_t tile_rows;");
+  ok &= expect_contains(
+      source, "result->tile_height > target->tile_rows");
+  ok &= expect_contains(source, "target.tile_rows = tile_rows;");
   ok &= expect_contains(source, "obtain.popa_Flags = pixel_format == PBPAFMT_GREY8");
   ok &= expect_contains(source, "\"metadata: v47 unsupported pixel format\"");
   ok &= expect_not_contains(source, "\"metadata: v47 greyscale palette ready\"");

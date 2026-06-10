@@ -199,6 +199,7 @@ typedef struct ZZ9KPictureDatatypeTarget {
   uint32_t scratch_pitch;
   uint32_t output_format;
   uint32_t output_bpp;
+  uint32_t tile_rows;
   uint32_t tiles_written;
   uint8_t direct;
   uint8_t legacy_has_alpha;
@@ -4248,6 +4249,7 @@ static int zz9k_picture_write_rgb_tile_to_object(
       result->tile_y > target->height ||
       result->tile_width > (target->width - result->tile_x) ||
       result->tile_height > (target->height - result->tile_y) ||
+      result->tile_height > target->tile_rows ||
       !zz9k_picture_min_row_bytes(
           result->tile_width, ZZ9K_PICTURE_RGB_BYTES_PER_PIXEL,
           &min_row_bytes) ||
@@ -4397,7 +4399,8 @@ static int zz9k_picture_write_legacy_bitmap_tile(
       result->tile_x > target->width ||
       result->tile_y > target->height ||
       result->tile_width > (target->width - result->tile_x) ||
-      result->tile_height > (target->height - result->tile_y)) {
+      result->tile_height > (target->height - result->tile_y) ||
+      result->tile_height > target->tile_rows) {
     return 0;
   }
 
@@ -4529,6 +4532,7 @@ static int zz9k_picture_write_bgra_tile_to_object(
       result->tile_y > target->height ||
       result->tile_width > (target->width - result->tile_x) ||
       result->tile_height > (target->height - result->tile_y) ||
+      result->tile_height > target->tile_rows ||
       !zz9k_picture_min_row_bytes(
           result->tile_width, ZZ9K_PICTURE_BGRA_BYTES_PER_PIXEL,
           &src_min_row_bytes) ||
@@ -4591,6 +4595,7 @@ static int zz9k_picture_write_png_alpha_tile_to_object(
       result->tile_y > target->height ||
       result->tile_width > (target->width - result->tile_x) ||
       result->tile_height > (target->height - result->tile_y) ||
+      result->tile_height > target->tile_rows ||
       !zz9k_picture_min_row_bytes(
           result->tile_width, ZZ9K_PICTURE_RGBA_BYTES_PER_PIXEL,
           &min_row_bytes) ||
@@ -5091,6 +5096,7 @@ static int zz9k_picture_write_png_surface_to_datatype(
 
   zz9k_picture_init_datatype_target(
       &target, cl, object, instance, expected_format, output_bpp);
+  target.tile_rows = instance->height;
   memset(&tile, 0, sizeof(tile));
   tile.handle = ZZ9K_INVALID_HANDLE;
   tile.data = surface->data;
@@ -5221,6 +5227,7 @@ static int zz9k_picture_copy_png_local_surface_to_datatype(
 
   zz9k_picture_init_datatype_target(
       &target, cl, object, instance, expected_format, output_bpp);
+  target.tile_rows = tile_rows;
   memset(&tile_surface, 0, sizeof(tile_surface));
   tile_surface.handle = ZZ9K_INVALID_HANDLE;
   alpha_bitmap = 0;
@@ -6372,6 +6379,7 @@ static int zz9k_picture_decode_to_datatype_pixels(
       goto cleanup;
     }
   }
+  target.tile_rows = tile_rows;
   zz9k_picture_trace_u32("decode: datatype tile max rows", tile_max_rows);
   zz9k_picture_trace_u32(
       "decode: datatype tile target bytes", tile_target_bytes);
