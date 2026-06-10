@@ -200,6 +200,17 @@ target_include_directories(crypto_helper_test
 
 add_test(NAME crypto_helper_test COMMAND crypto_helper_test)
 
+add_executable(crypto_soft_test
+  tests/crypto_soft_test.c
+)
+
+target_include_directories(crypto_soft_test
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools
+)
+
+add_test(NAME crypto_soft_test COMMAND crypto_soft_test)
+
 add_executable(shared_helper_test
   tests/shared_helper_test.c
 )
