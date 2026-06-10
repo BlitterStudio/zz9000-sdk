@@ -211,6 +211,19 @@ target_include_directories(crypto_soft_test
 
 add_test(NAME crypto_soft_test COMMAND crypto_soft_test)
 
+add_executable(cryptobench_logic_test
+  tests/cryptobench_logic_test.c
+)
+
+target_include_directories(cryptobench_logic_test
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/host/include
+)
+
+add_test(NAME cryptobench_logic_test COMMAND cryptobench_logic_test)
+
 add_executable(shared_helper_test
   tests/shared_helper_test.c
 )
@@ -997,6 +1010,18 @@ add_executable(zz9k_bench
 )
 
 target_link_libraries(zz9k_bench PRIVATE zz9k_host)
+
+add_executable(zz9k_cryptobench
+  tools/zz9k-cryptobench.c
+  tools/zz9k-crypto-soft.c
+)
+
+target_include_directories(zz9k_cryptobench
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools
+)
+
+target_link_libraries(zz9k_cryptobench PRIVATE zz9k_host)
 
 add_executable(zz9k_hash
   tools/zz9k-hash.c
