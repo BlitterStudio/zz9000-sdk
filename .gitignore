@@ -6,3 +6,4 @@ docs/superpowers/
 .DS_Store
 /archive_tool_*
 
+build-cmake
