@@ -72,6 +72,7 @@ m68k-amigaos-gcc $CFLAGS -Itools/lha-unix build/m68k/zz9k_host.o $LHA_OBJS tools
 m68k-amigaos-gcc $CFLAGS build/m68k/zz9k_host.o tools/zz9k-irqtest.c -o build/zz9k-irqtest
 m68k-amigaos-gcc $CFLAGS build/m68k/zz9k_host.o tools/zz9k-chacha.c -o build/zz9k-chacha
 m68k-amigaos-gcc $CFLAGS build/m68k/zz9k_host.o tools/zz9k-aead.c -o build/zz9k-aead
+m68k-amigaos-gcc $CFLAGS -Itools build/m68k/zz9k_host.o tools/zz9k-crypto-soft.c tools/zz9k-cryptobench.c -o build/zz9k-cryptobench
 m68k-amigaos-gcc $CFLAGS build/m68k/zz9k_host.o tools/zz9k-mp3.c -o build/zz9k-mp3
 m68k-amigaos-gcc $LIBCFLAGS tools/zz9k-mpega-smoke.c -o build/zz9k-mpega-smoke
 m68k-amigaos-gcc $CFLAGS -Itools build/m68k/zz9k_host.o build/m68k/zz9k-fb-common.o build/m68k/zz9k-image-window.o build/m68k/zz9k-picture-viewer.o tools/zz9k-jpeg.c -o build/zz9k-jpeg
