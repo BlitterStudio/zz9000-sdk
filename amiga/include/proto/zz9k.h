@@ -791,6 +791,23 @@ static __inline int __ZZ9KAudioStreamCloseInline(
 #define ZZ9KAudioStreamClose(session, flags, result) \
   __ZZ9KAudioStreamCloseInline((session), (flags), (result))
 
+static __inline int __ZZ9KCryptoKeyExchangeInline(
+    const ZZ9KCryptoKxDesc *desc,
+    ZZ9KCryptoResult *result)
+{
+  register int zz9k_d0 __asm("d0");
+  register struct Library *zz9k_a6 __asm("a6") = ZZ9KBase;
+  register const ZZ9KCryptoKxDesc *zz9k_a0 __asm("a0") = desc;
+  register ZZ9KCryptoResult *zz9k_a1 __asm("a1") = result;
+  __asm volatile("jsr -288(a6)"
+                 : "=r"(zz9k_d0)
+                 : "r"(zz9k_a6), "r"(zz9k_a0), "r"(zz9k_a1)
+                 : ZZ9K_INLINE_CLOBBERS);
+  return zz9k_d0;
+}
+#define ZZ9KCryptoKeyExchange(desc, result) \
+  __ZZ9KCryptoKeyExchangeInline((desc), (result))
+
 #endif
 
 #ifdef __cplusplus

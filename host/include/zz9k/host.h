@@ -9,6 +9,7 @@
 
 #include <stdint.h>
 #include "zz9k/abi.h"
+#include "zz9k/crypto.h"
 #include "zz9k/text.h"
 
 #ifdef __cplusplus
@@ -178,6 +179,8 @@ int zz9k_crypto_stream_batch(ZZ9KContext *ctx,
                              uint32_t timeout_ticks);
 int zz9k_crypto_aead(ZZ9KContext *ctx, const ZZ9KCryptoAeadDesc *desc,
                      ZZ9KCryptoResult *result);
+int zz9k_crypto_kx(ZZ9KContext *ctx, const ZZ9KCryptoKxDesc *desc,
+                   ZZ9KCryptoResult *result);
 int zz9k_crypto_aead_batch(ZZ9KContext *ctx,
                            const ZZ9KCryptoAeadDesc *descs,
                            ZZ9KCryptoResult *results,

@@ -44,4 +44,5 @@ ZZ9KAudioStreamBegin(desc,result)(a0/a1)
 ZZ9KAudioStreamFeed(desc,result)(a0/a1)
 ZZ9KAudioStreamRead(session,pcm_read,flags,result)(d0/d1/d2/a0)
 ZZ9KAudioStreamClose(session,flags,result)(d0/d1/a0)
+ZZ9KCryptoKeyExchange(desc,result)(a0/a1)
 ##end

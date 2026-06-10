@@ -270,7 +270,11 @@ int main(int argc, char **argv)
      "ZZ9KAudioStreamClose(session,flags,result)(d0/d1/a0)",
      "int ZZ9KAudioStreamClose(uint32_t session, uint32_t flags, "
      "ZZ9KAudioStreamResult *result);",
-     "jsr -282(a6)"}
+     "jsr -282(a6)"},
+    {"ZZ9KCryptoKeyExchange", "ZZ9KCryptoKeyExchange(desc,result)(a0/a1)",
+     "int ZZ9KCryptoKeyExchange(const ZZ9KCryptoKxDesc *desc, "
+     "ZZ9KCryptoResult *result);",
+     "jsr -288(a6)"}
   };
   char *fd;
   char *clib;
