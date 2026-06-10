@@ -75,7 +75,7 @@ int main(int argc, char **argv)
   }
 
   ok = 1;
-  ok &= expect_contains(source, "zz9k-picture.datatype 42.146");
+  ok &= expect_contains(source, "zz9k-picture.datatype 42.147");
   ok &= expect_contains(source, "validated SDK v2 DataType candidate");
   ok &= expect_contains(source, "OS3.1");
   ok &= expect_contains(source, "picture.datatype v39-v42");

@@ -2,7 +2,7 @@
 
 Copyright (C) 2024-2026, Dimitris Panokostas / BlitterStudio
 
-`zz9k-picture.datatype 42.146` is the validated SDK v2 DataType candidate for
+`zz9k-picture.datatype 42.147` is the validated SDK v2 DataType candidate for
 the current package. It is packaged as a side-by-side subclass of the system
 `picture.datatype` and must not replace `Classes/DataTypes/picture.datatype`.
 OS3.1 remains the minimum target: the class opens against
@@ -104,6 +104,19 @@ That benchmark path produced correct-enough output for timing but averaged
 about 2.57 seconds, well slower than the previous v43 write-pixel baseline, so
 the JPEG v47 RGB direct path is disabled in `42.146` with
 `ZZ9K_PICTURE_ENABLE_JPEG_DATATYPE_V47_RGB_DIRECT` set to 0.
+
+`42.147` is a stability hardening release with no behaviour change on correct
+input. The three LUT8 palette functions (`zz9k_picture_prepare_lut8_palette`,
+`zz9k_picture_prepare_legacy_lut8_palette`, and the disabled alpha variant)
+now use the correct `SetDTAttrs(PDTA_NumColors)` → `GetDTAttrs(PDTA_ColorRegisters,
+PDTA_CRegs)` pattern and fill the superclass-owned tables in place, instead of
+maintaining redundant instance-level arrays; this fixes black output on
+`picture.datatype v39–v42`. Firmware tile heights from untrusted replies are now
+validated against the allocated tile buffer via the new `tile_rows` field in
+`ZZ9KPictureDatatypeTarget`, guarding all four tile writers. A missing overflow
+check after `zz9k_picture_accumulate_surface_bytes` in the PNG full-image layout
+path is added. The `WritePixelLine8` per-row buffer is now allocated rounded up
+to a 16-pixel multiple as required by `graphics.library`.
 
 On `picture.datatype v39-v42`, the class now decodes into a
 legacy 8-bit remapped bitmap instead of aborting PNG decode. That OS3.1 fallback uses a
