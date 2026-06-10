@@ -3271,6 +3271,24 @@ out:
   return rc;
 }
 
+static int test_7z_split_group_rejects_discontinuous_offsets(void)
+{
+  ZZ9KArchiveEntry entries[2];
+  uint32_t unpacked = 0U;
+
+  memset(entries, 0, sizeof(entries));
+  strcpy(entries[0].name, "hello.txt");
+  entries[0].uncompressed_size = 2U;
+  entries[0].decoded_offset = 0U;
+  strcpy(entries[1].name, "bye.txt");
+  entries[1].uncompressed_size = 3U;
+  entries[1].decoded_offset = 5U; /* gap: previous substream ends at 2 */
+  if (zz9k_archive_7z_split_group_unpacked_size(entries, 2U, &unpacked)) {
+    return 1;
+  }
+  return 0;
+}
+
 static int test_7z_rejects_bad_start_header_crc(void)
 {
   uint8_t archive[192];
@@ -6459,6 +6477,12 @@ int main(void)
   if (rc) {
     printf("test_tar_rejects_bad_header_checksum failed: %d\n", rc);
     return 230 + rc;
+  }
+  rc = test_7z_split_group_rejects_discontinuous_offsets();
+  if (rc) {
+    printf("test_7z_split_group_rejects_discontinuous_offsets failed: %d\n",
+           rc);
+    return 415 + rc;
   }
   return 0;
 }

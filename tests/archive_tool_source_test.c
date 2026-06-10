@@ -229,6 +229,7 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "ZZ9KArchive7zSplitWriter");
   ok &= expect_contains(source, "zz9k_archive_7z_split_writer_chunk");
   ok &= expect_contains(source, "zz9k_archive_handle_7z_split_group_file");
+  ok &= expect_contains(source, "7z split group not contiguous");
   ok &= expect_contains(source, "zz9k_archive_7z_copy_file_crc_matches");
   ok &= expect_contains(source, "zz9k_archive_7z_result_matches_entry");
   ok &= expect_contains(source, "7z entry crc mismatch");

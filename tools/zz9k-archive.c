@@ -7853,9 +7853,12 @@ static int zz9k_archive_handle_7z_split_group_file(
   if (!zz9k_archive_7z_split_group_has_match(entries, count)) {
     return 1;
   }
-  if (!zz9k_archive_7z_split_group_is_safe(entries, count) ||
-      !zz9k_archive_7z_split_group_unpacked_size(
+  if (!zz9k_archive_7z_split_group_is_safe(entries, count)) {
+    return 0;
+  }
+  if (!zz9k_archive_7z_split_group_unpacked_size(
           entries, count, &unpacked_size)) {
+    printf("7z split group not contiguous: %s\n", entries[0].name);
     return 0;
   }
 
