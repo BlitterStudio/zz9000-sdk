@@ -224,6 +224,17 @@ target_include_directories(cryptobench_logic_test
 
 add_test(NAME cryptobench_logic_test COMMAND cryptobench_logic_test)
 
+add_executable(handshake_model_test
+  tests/handshake_model_test.c
+)
+
+target_include_directories(handshake_model_test
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools
+)
+
+add_test(NAME handshake_model_test COMMAND handshake_model_test)
+
 add_executable(shared_helper_test
   tests/shared_helper_test.c
 )
