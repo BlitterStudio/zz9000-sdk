@@ -4393,6 +4393,7 @@ static int zz9k_picture_write_legacy_bitmap_tile(
   struct RastPort rast_port;
   struct RastPort line_rast_port;
   uint8_t *row_pixels;
+  uint32_t row_alloc_bytes;
   uint32_t bytes_per_pixel;
   uint32_t src_min_row_bytes;
   uint32_t row;
@@ -4416,7 +4417,8 @@ static int zz9k_picture_write_legacy_bitmap_tile(
     return 0;
   }
 
-  row_pixels = (uint8_t *)AllocMem((ULONG)result->tile_width, MEMF_PUBLIC);
+  row_alloc_bytes = ((uint32_t)result->tile_width + 15U) & ~(uint32_t)15U;
+  row_pixels = (uint8_t *)AllocMem((ULONG)row_alloc_bytes, MEMF_PUBLIC);
   if (!row_pixels) {
     zz9k_picture_trace("decode: datatype legacy bitmap row alloc failed");
     return 0;
@@ -4447,7 +4449,7 @@ static int zz9k_picture_write_legacy_bitmap_tile(
         &line_rast_port);
   }
 
-  FreeMem(row_pixels, (ULONG)result->tile_width);
+  FreeMem(row_pixels, (ULONG)row_alloc_bytes);
   target->tiles_written++;
   if (target->tiles_written == 1U) {
     zz9k_picture_trace("decode: datatype legacy bitmap tile written");

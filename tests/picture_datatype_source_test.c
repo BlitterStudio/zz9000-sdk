@@ -1003,6 +1003,7 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "target.tile_rows = tile_rows;");
   ok &= expect_contains(
       source, "\"decode: datatype png full layout too large\"");
+  ok &= expect_contains(source, "row_alloc_bytes");
   ok &= expect_contains(source, "obtain.popa_Flags = pixel_format == PBPAFMT_GREY8");
   ok &= expect_contains(source, "\"metadata: v47 unsupported pixel format\"");
   ok &= expect_not_contains(source, "\"metadata: v47 greyscale palette ready\"");
