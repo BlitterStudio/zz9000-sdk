@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#include "zz9k/crypto.h"
 #include "zz9k/request.h"
 #include <string.h>
 
@@ -1021,6 +1022,33 @@ static int test_no_payload_builders(void)
   return 0;
 }
 
+static int test_crypto_kx_builder_encodes_descriptor(void)
+{
+  ZZ9KCryptoKxDesc desc;
+  ZZ9KRequest request;
+  const struct ZZ9KCryptoKxPayload *payload;
+
+  if (!zz9k_crypto_build_x25519_desc(&desc, 0xAAU, 0x10U, 0xBBU, 0x20U,
+                                     0xCCU, 0x30U))
+    return 1;
+  zz9k_request_crypto_kx(&request, &desc);
+  if (request.entry.opcode != ZZ9K_OP_CRYPTO_KX) return 2;
+  if (request.entry.payload_len != sizeof(struct ZZ9KCryptoKxPayload)) {
+    return 3;
+  }
+  payload =
+      (const struct ZZ9KCryptoKxPayload *)request.entry.payload.inline_data;
+  if (zz9k_get_be32(payload->scalar_handle) != 0xAAU) return 4;
+  if (zz9k_get_be32(payload->scalar_offset) != 0x10U) return 5;
+  if (zz9k_get_be32(payload->point_handle)  != 0xBBU) return 6;
+  if (zz9k_get_be32(payload->point_offset)  != 0x20U) return 7;
+  if (zz9k_get_be32(payload->dst_handle)    != 0xCCU) return 8;
+  if (zz9k_get_be32(payload->dst_offset)    != 0x30U) return 9;
+  if (zz9k_get_be32(payload->algorithm) != ZZ9K_CRYPTO_KX_X25519) return 10;
+  if (zz9k_get_be32(payload->flags) != 0U) return 11;
+  return 0;
+}
+
 int main(void)
 {
   int result;
@@ -1060,6 +1088,9 @@ int main(void)
 
   result = test_no_payload_builders();
   if (result) return 190 + result;
+
+  result = test_crypto_kx_builder_encodes_descriptor();
+  if (result) return 200 + result;
 
   return 0;
 }

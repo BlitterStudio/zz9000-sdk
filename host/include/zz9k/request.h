@@ -10,6 +10,7 @@
 #include "zz9k/host.h"
 #include "zz9k/audio.h"
 #include "zz9k/compression.h"
+#include "zz9k/crypto.h"
 #include <string.h>
 
 #ifdef __cplusplus
@@ -718,6 +719,32 @@ static inline int zz9k_request_crypto_aead(ZZ9KRequest *request,
   zz9k_put_be32(payload->key_offset, desc->key_offset);
   zz9k_put_be32(payload->nonce_handle, desc->nonce_handle);
   zz9k_put_be32(payload->flags, desc->flags);
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_request_crypto_kx(ZZ9KRequest *request,
+                                          const ZZ9KCryptoKxDesc *desc)
+{
+  struct ZZ9KCryptoKxPayload *payload;
+
+  if (!request || !desc ||
+      desc->scalar_handle == ZZ9K_INVALID_HANDLE ||
+      desc->point_handle  == ZZ9K_INVALID_HANDLE ||
+      desc->dst_handle    == ZZ9K_INVALID_HANDLE) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  zz9k_request_init(request, ZZ9K_OP_CRYPTO_KX);
+  request->entry.payload_len = sizeof(struct ZZ9KCryptoKxPayload);
+  payload = (struct ZZ9KCryptoKxPayload *)request->entry.payload.inline_data;
+  zz9k_put_be32(payload->scalar_handle, desc->scalar_handle);
+  zz9k_put_be32(payload->scalar_offset, desc->scalar_offset);
+  zz9k_put_be32(payload->point_handle,  desc->point_handle);
+  zz9k_put_be32(payload->point_offset,  desc->point_offset);
+  zz9k_put_be32(payload->dst_handle,    desc->dst_handle);
+  zz9k_put_be32(payload->dst_offset,    desc->dst_offset);
+  zz9k_put_be32(payload->algorithm,     desc->algorithm);
+  zz9k_put_be32(payload->flags,         desc->flags);
   return ZZ9K_STATUS_OK;
 }
 

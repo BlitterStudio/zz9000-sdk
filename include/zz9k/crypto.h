@@ -222,6 +222,39 @@ static inline int zz9k_crypto_build_chacha20_poly1305_desc(
   return 1;
 }
 
+typedef struct ZZ9KCryptoKxDesc {
+  uint32_t scalar_handle;
+  uint32_t scalar_offset;
+  uint32_t point_handle;
+  uint32_t point_offset;
+  uint32_t dst_handle;
+  uint32_t dst_offset;
+  uint32_t algorithm;
+  uint32_t flags;
+} ZZ9KCryptoKxDesc;
+
+static inline int zz9k_crypto_build_x25519_desc(
+    ZZ9KCryptoKxDesc *desc,
+    uint32_t scalar_handle, uint32_t scalar_offset,
+    uint32_t point_handle, uint32_t point_offset,
+    uint32_t dst_handle, uint32_t dst_offset)
+{
+  if (scalar_handle == ZZ9K_INVALID_HANDLE ||
+      point_handle  == ZZ9K_INVALID_HANDLE ||
+      dst_handle    == ZZ9K_INVALID_HANDLE)
+    return 0;
+  memset(desc, 0, sizeof(*desc));
+  desc->scalar_handle = scalar_handle;
+  desc->scalar_offset = scalar_offset;
+  desc->point_handle  = point_handle;
+  desc->point_offset  = point_offset;
+  desc->dst_handle    = dst_handle;
+  desc->dst_offset    = dst_offset;
+  desc->algorithm     = ZZ9K_CRYPTO_KX_X25519;
+  desc->flags         = 0U;
+  return 1;
+}
+
 #ifdef __cplusplus
 }
 #endif

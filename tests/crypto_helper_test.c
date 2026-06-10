@@ -181,6 +181,29 @@ static int test_stream_and_aead_descriptors(void)
   return 0;
 }
 
+static int test_kx_descriptor(void)
+{
+  ZZ9KCryptoKxDesc desc;
+
+  /* valid call: all handles non-invalid */
+  if (!zz9k_crypto_build_x25519_desc(&desc, 1U, 0U, 2U, 0U, 3U, 0U))
+    return 1;
+  if (desc.algorithm != ZZ9K_CRYPTO_KX_X25519) return 2;
+  if (desc.scalar_handle != 1U) return 3;
+  if (desc.point_handle != 2U) return 4;
+  if (desc.dst_handle != 3U) return 5;
+  if (desc.scalar_offset != 0U) return 6;
+  if (desc.point_offset != 0U) return 7;
+  if (desc.dst_offset != 0U) return 8;
+
+  /* invalid handle must be rejected */
+  if (zz9k_crypto_build_x25519_desc(&desc, ZZ9K_INVALID_HANDLE, 0U, 2U, 0U,
+                                    3U, 0U))
+    return 9;
+
+  return 0;
+}
+
 int main(void)
 {
   int result;
@@ -196,6 +219,9 @@ int main(void)
 
   result = test_stream_and_aead_descriptors();
   if (result) return 100 + result;
+
+  result = test_kx_descriptor();
+  if (result) return 130 + result;
 
   return 0;
 }
