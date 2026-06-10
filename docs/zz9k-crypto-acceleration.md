@@ -7,10 +7,11 @@ ZZ9000 ARM coprocessor. It records the economic reasoning behind the
 **handshake-first** roadmap and the Phase 0 benchmark plan that will replace the
 estimates below with hardware measurements.
 
-> Status: Phase 0 (benchmark + economic model). No firmware crypto additions
-> have been made yet. The numbers in the estimate table are first-order
-> estimates, explicitly labelled, pending measurement on real hardware with
-> SDK-service firmware.
+> Status: Phase 0 complete. Symmetric record sweep and mailbox round trip are
+> now measured on hardware (SDK ABI 2.0); see Measured results. The asymmetric
+> handshake costs remain first-order estimates, explicitly labelled, until a
+> firmware asymmetric service exists to benchmark. No firmware crypto additions
+> have been made yet.
 
 ## Why offload, and where it pays
 
@@ -47,52 +48,81 @@ Available today (firmware crypto service, `ZZ9K_SERVICE_CRYPTO`):
 Missing for a complete TLS story (see roadmap below): AES-GCM (record), and the
 asymmetric handshake primitives X25519, P-256 ECDHE/ECDSA, and RSA verify.
 
-## Estimated economics (PENDING HARDWARE MEASUREMENT)
+## Economics (handshake rows estimated, mailbox + record rows MEASURED)
 
 Targets: m68k is a ~25-50 MHz 68030/68040; ARM is the ZZ9000 Zynq-7000
-Cortex-A9 (ARMv7, no AES/crypto extensions). Mailbox round trip is taken as a
-placeholder ~120 us (to be measured with the existing ping benchmark). These
-are order-of-magnitude estimates for sequencing the roadmap, **not** measured
-results.
+Cortex-A9 (ARMv7, no AES/crypto extensions). The mailbox round trip is now
+**measured at ~6.1 ms** for a synchronous call (see Measured results below),
+which replaces the earlier ~120 us placeholder. The asymmetric m68k/ARM costs
+remain order-of-magnitude estimates for sequencing the roadmap until a firmware
+asymmetric service exists to benchmark.
 
-| Operation | Phase | m68k SW (est.) | ARM + mbox (est.) | Speedup (est.) | Per-op saving |
+| Operation | Phase | m68k SW | ARM + mbox | Speedup | Per-op saving |
 |---|---|---|---|---|---|
-| X25519 scalar mult | handshake | ~500 ms | ~3 ms | ~160x | ~497 ms |
-| P-256 ECDHE/ECDSA-verify | handshake | ~700 ms | ~5 ms | ~140x | ~695 ms |
-| RSA-2048 verify (e=65537) | handshake | ~50 ms | ~0.6 ms | ~80x | ~49 ms |
-| RSA-2048 sign (CRT) | handshake | ~1500 ms | ~10 ms | ~150x | ~1490 ms |
-| ChaCha20-Poly1305 16 KB record | record | TBD (cryptobench) | TBD | TBD | TBD |
+| X25519 scalar mult | handshake | ~500 ms (est.) | ~3 ms + 6.1 ms | ~55x | ~491 ms |
+| P-256 ECDHE/ECDSA-verify | handshake | ~700 ms (est.) | ~5 ms + 6.1 ms | ~63x | ~689 ms |
+| RSA-2048 verify (e=65537) | handshake | ~50 ms (est.) | ~0.6 ms + 6.1 ms | ~7.5x | ~43 ms |
+| RSA-2048 sign (CRT) | handshake | ~1500 ms (est.) | ~10 ms + 6.1 ms | ~93x | ~1484 ms |
+| ChaCha20-Poly1305 16 KB record, sync | record | 162 KiB/s | 2539 KiB/s | 15.7x | measured |
+| ChaCha20-Poly1305 16 KB record, pipelined | record | 162 KiB/s | ~9539 KiB/s | ~59x | measured |
 
-Reading: the asymmetric handshake operations save tens to hundreds of
-milliseconds *per connection* at 80-160x, with offload cost dominated by a few
-milliseconds of ARM compute and a negligible mailbox round trip. There is no
-small-record break-even risk for these — they are risk-free wins. The symmetric
-record row is deliberately left as TBD: it is the open question Phase 0
-measures, because at small record sizes the round trip may erase the benefit.
+Reading: even with the measured ~6.1 ms round trip, the asymmetric handshake
+operations still save tens to hundreds of milliseconds *per connection* at
+7-90x. They are single ops on the connection's critical path (not batchable),
+so each pays one round trip — negligible against their compute. They remain
+risk-free wins, which is why the roadmap is **handshake-first**.
 
-This is why the roadmap is **handshake-first**: the largest, most certain wins
-for TLS-on-classic-Amiga are the asymmetric primitives, not the bulk cipher.
+## Measured results (hardware, SDK ABI 2.0, EClock 709 kHz)
+
+`zz9k-cryptobench` (ChaCha20-Poly1305, software m68k vs synchronous ZZ9000
+offload, 16 iterations/size):
+
+| Record | soft KiB/s | offload KiB/s | per-record offload |
+|---|---|---|---|
+| 64 B | 96 | 9 | 6.94 ms |
+| 256 B | 146 | 39 | 6.41 ms |
+| 1 KB | 161 | 158 | 6.33 ms |
+| 4 KB | 158 | 628 | 6.37 ms |
+| 16 KB | 162 | 2539 | 6.30 ms |
+
+Break-even: synchronous offload overtakes software at **2 KB**.
+
+The headline finding: **synchronous offload is mailbox-latency-bound, not
+compute-bound.** Per-record offload time is ~6.3 ms across every size from 64 B
+to 16 KB, matching the measured synchronous ping latency exactly
+(`zz9k-bench`: `SDK ping` 161 calls/s = 6.1 ms/call). The ARM's actual crypto
+work stays hidden beneath that fixed latency even at 16 KB. Pipelining collapses
+it: `SDK ping pipe` reaches 11193 calls/s (~70x), and the batched AEAD
+(`zz9k-bench` `ARM ChaCha20-Poly pipe`) hits ~9539 KiB/s at 16 KB versus the
+synchronous sweep's 2539 KiB/s.
+
+Design implication for the provider: **batch records whenever possible.** A bulk
+`SSL_write` is split by the TLS layer into multiple ~16 KB records that can be
+submitted together via the existing batch AEAD path, turning the latency-bound
+case into the throughput-bound one. Small interactive records stay on the sync
+path, but they are network-latency-dominated and crypto cost is irrelevant
+there. Software m68k ChaCha20-Poly1305 plateaus at ~160 KiB/s, so batched
+offload is ~59x faster for bulk transfer.
 
 ## Data-collection plan
 
-1. **Symmetric record sweep — `zz9k-cryptobench`** (built, packaged). Sweeps
-   record sizes 64 B .. 16 KB, timing the software reference
-   (`tools/zz9k-crypto-soft.c`, the m68k baseline) against the ZZ9000
-   ChaCha20-Poly1305 offload, and reports the break-even record size. Run on
-   hardware with SDK-service firmware:
+1. **Symmetric record sweep — `zz9k-cryptobench`** — DONE (see Measured
+   results). Break-even at 2 KB; synchronous offload is mailbox-latency-bound at
+   ~6.3 ms/record.
 
-   ```text
-   zz9k-cryptobench            ; default 16 iterations/size
-   zz9k-cryptobench 64         ; more iterations for stable small-size timing
-   ```
+2. **Mailbox round-trip baseline — `zz9k-bench`** — DONE. Synchronous ping is
+   6.1 ms/call (161 calls/s); pipelined 11193 calls/s. This 6.1 ms is now the
+   mailbox figure in the model.
 
-   Feed the measured 16 KB software rate into the table's record row.
+3. **Batched-record sweep — follow-up.** `zz9k-cryptobench` currently measures
+   only the synchronous offload path. A batched variant (via
+   `zz9k_crypto_aead_batch`) would quantify the throughput-bound case directly
+   rather than inferring it from the `zz9k-bench` pipe figures. Worth adding
+   before the provider work so the provider's batching design is grounded in a
+   real curve.
 
-2. **Mailbox round-trip baseline — `zz9k-bench`**. Use the ping calls/second
-   figure to replace the ~120 us mailbox placeholder in the model.
-
-3. **Asymmetric micro-benchmark — planned**. Once a firmware asymmetric service
-   exists (Phase 2+), a micro-benchmark will measure X25519 / P-256 / RSA on
+4. **Asymmetric micro-benchmark — planned**. Once a firmware asymmetric service
+   exists (Phase 1+), a micro-benchmark will measure X25519 / P-256 / RSA on
    both the 68k and the ARM and replace the estimate rows above. Until then the
    model in `zz9k-handshake-model.h` lets us plug in any measured pair and read
    the verdict.
