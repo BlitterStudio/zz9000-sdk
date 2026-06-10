@@ -67,6 +67,13 @@ int zz9k_soft_chacha20_poly1305_decrypt(
     const uint8_t key[ZZ9K_SOFT_CHACHA20_KEY_BYTES],
     const uint8_t nonce[ZZ9K_SOFT_CHACHA20_NONCE_BYTES]);
 
+/*
+ * X25519 Diffie-Hellman scalar multiplication (RFC 7748).
+ * Returns 1 on success, 0 if result is the all-zero point (must be rejected).
+ */
+int zz9k_soft_x25519(uint8_t out[32], const uint8_t scalar[32],
+                     const uint8_t point[32]);
+
 #ifdef __cplusplus
 }
 #endif
