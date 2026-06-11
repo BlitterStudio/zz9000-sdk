@@ -734,6 +734,52 @@ static int test_crypto_aead_builder_encodes_descriptor(void)
   return 0;
 }
 
+static int test_crypto_aes_gcm_builder_encodes_descriptor(void)
+{
+  ZZ9KRequest request;
+  ZZ9KCryptoAeadDesc desc;
+  const ZZ9KCryptoAeadPayload *payload;
+
+  /* AES-256-GCM decrypt: the algorithm rides in the flags field and the AEAD
+   * request builder must accept (not reject) those algorithm bits. */
+  if (!zz9k_crypto_build_aes_gcm_desc(&desc, 0x40000041UL, 0U, 256U,
+                                      0x40000042UL, 0U, 0U, 0U, 0U,
+                                      0x40000043UL, 0U,
+                                      ZZ9K_CRYPTO_AES256_KEY_BYTES,
+                                      0x40000044UL,
+                                      ZZ9K_CRYPTO_AEAD_FLAG_DECRYPT)) {
+    return 1;
+  }
+  if (zz9k_request_crypto_aead(&request, &desc) != ZZ9K_STATUS_OK) return 2;
+  if (request.entry.opcode != ZZ9K_OP_CRYPTO_AEAD) return 3;
+  payload = (const ZZ9KCryptoAeadPayload *)request.entry.payload.inline_data;
+  if (zz9k_get_be32(payload->key_handle) != 0x40000043UL) return 4;
+  if (zz9k_get_be32(payload->nonce_handle) != 0x40000044UL) return 5;
+  {
+    uint32_t flags = zz9k_get_be32(payload->flags);
+    if (ZZ9K_CRYPTO_AEAD_FLAG_GET_ALG(flags) != ZZ9K_CRYPTO_AEAD_AES256_GCM) {
+      return 6;
+    }
+    if ((flags & ZZ9K_CRYPTO_AEAD_FLAG_DECRYPT) == 0U) return 7;
+  }
+
+  /* AES-128-GCM encrypt encodes the AES128 algorithm. */
+  if (!zz9k_crypto_build_aes_gcm_desc(&desc, 0x40000041UL, 0U, 16U,
+                                      0x40000042UL, 0U, 0U, 0U, 0U,
+                                      0x40000043UL, 0U,
+                                      ZZ9K_CRYPTO_AES128_KEY_BYTES,
+                                      0x40000044UL, 0U)) {
+    return 8;
+  }
+  if (zz9k_request_crypto_aead(&request, &desc) != ZZ9K_STATUS_OK) return 9;
+  payload = (const ZZ9KCryptoAeadPayload *)request.entry.payload.inline_data;
+  if (ZZ9K_CRYPTO_AEAD_FLAG_GET_ALG(zz9k_get_be32(payload->flags)) !=
+      ZZ9K_CRYPTO_AEAD_AES128_GCM) {
+    return 10;
+  }
+  return 0;
+}
+
 static int test_decompress_builder_encodes_descriptor(void)
 {
   ZZ9KRequest request;
@@ -1142,6 +1188,9 @@ int main(void)
 
   result = test_crypto_verify_builder_encodes_descriptor();
   if (result) return 220 + result;
+
+  result = test_crypto_aes_gcm_builder_encodes_descriptor();
+  if (result) return 240 + result;
 
   return 0;
 }

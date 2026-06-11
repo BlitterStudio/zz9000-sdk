@@ -222,6 +222,63 @@ static inline int zz9k_crypto_build_chacha20_poly1305_desc(
   return 1;
 }
 
+/* AES-GCM via the AEAD op. key_length selects AES-128 (16 bytes) or AES-256
+ * (32 bytes); the chosen algorithm is encoded into the descriptor flags. The
+ * nonce is 12 bytes and the 16-byte tag is appended to the ciphertext, exactly
+ * as for ChaCha20-Poly1305. `flags` may carry ZZ9K_CRYPTO_AEAD_FLAG_DECRYPT. */
+static inline int zz9k_crypto_build_aes_gcm_desc(
+    ZZ9KCryptoAeadDesc *desc,
+    uint32_t src_handle,
+    uint32_t src_offset,
+    uint32_t src_length,
+    uint32_t dst_handle,
+    uint32_t dst_offset,
+    uint32_t aad_handle,
+    uint32_t aad_offset,
+    uint32_t aad_length,
+    uint32_t key_handle,
+    uint32_t key_offset,
+    uint32_t key_length,
+    uint32_t nonce_handle,
+    uint32_t flags)
+{
+  uint32_t algorithm;
+
+  if (!desc || src_handle == ZZ9K_INVALID_HANDLE || src_length == 0U ||
+      dst_handle == ZZ9K_INVALID_HANDLE ||
+      key_handle == ZZ9K_INVALID_HANDLE ||
+      nonce_handle == ZZ9K_INVALID_HANDLE ||
+      (flags & ~(uint32_t)ZZ9K_CRYPTO_AEAD_FLAG_DECRYPT) != 0U ||
+      (aad_length != 0U && aad_handle == ZZ9K_INVALID_HANDLE)) {
+    return 0;
+  }
+  if (key_length == ZZ9K_CRYPTO_AES128_KEY_BYTES) {
+    algorithm = ZZ9K_CRYPTO_AEAD_AES128_GCM;
+  } else if (key_length == ZZ9K_CRYPTO_AES256_KEY_BYTES) {
+    algorithm = ZZ9K_CRYPTO_AEAD_AES256_GCM;
+  } else {
+    return 0;
+  }
+
+  memset(desc, 0, sizeof(*desc));
+  desc->src_handle = src_handle;
+  desc->src_offset = src_offset;
+  desc->src_length = src_length;
+  desc->dst_handle = dst_handle;
+  desc->dst_offset = dst_offset;
+  if (aad_length != 0U) {
+    desc->aad_handle = aad_handle;
+    desc->aad_offset = aad_offset;
+    desc->aad_length = aad_length;
+  }
+  desc->key_handle = key_handle;
+  desc->key_offset = key_offset;
+  desc->nonce_handle = nonce_handle;
+  desc->flags = (flags & (uint32_t)ZZ9K_CRYPTO_AEAD_FLAG_DECRYPT) |
+                ZZ9K_CRYPTO_AEAD_FLAG_ALG(algorithm);
+  return 1;
+}
+
 typedef struct ZZ9KCryptoKxDesc {
   uint32_t scalar_handle;
   uint32_t scalar_offset;

@@ -231,7 +231,8 @@ enum ZZ9KServiceFlags {
   ZZ9K_SERVICE_FLAG_CRYPTO_X25519     = 1U << 16,
   ZZ9K_SERVICE_FLAG_CRYPTO_P256       = 1U << 17,
   ZZ9K_SERVICE_FLAG_CRYPTO_ECDSA_P256 = 1U << 18,
-  ZZ9K_SERVICE_FLAG_CRYPTO_RSA_2048   = 1U << 19
+  ZZ9K_SERVICE_FLAG_CRYPTO_RSA_2048   = 1U << 19,
+  ZZ9K_SERVICE_FLAG_CRYPTO_AES_GCM    = 1U << 20
 };
 
 enum ZZ9KAudioSampleFormat {
@@ -1359,7 +1360,9 @@ enum ZZ9KCryptoStreamAlgorithm {
 
 enum ZZ9KCryptoAeadAlgorithm {
   ZZ9K_CRYPTO_AEAD_NONE = 0,
-  ZZ9K_CRYPTO_AEAD_CHACHA20_POLY1305 = 1
+  ZZ9K_CRYPTO_AEAD_CHACHA20_POLY1305 = 1,
+  ZZ9K_CRYPTO_AEAD_AES128_GCM = 2,
+  ZZ9K_CRYPTO_AEAD_AES256_GCM = 3
 };
 
 typedef enum ZZ9KCryptoKxAlgorithm {
@@ -1382,9 +1385,26 @@ typedef enum ZZ9KCryptoVerifyAlgorithm {
 #define ZZ9K_CRYPTO_P256_PRIVATE_BYTES 32U
 #define ZZ9K_CRYPTO_P256_SHARED_BYTES  32U
 
+/* AES-GCM (reuses the AEAD op): 96-bit nonce, 128-bit tag, key 16 or 32. */
+#define ZZ9K_CRYPTO_AES128_KEY_BYTES    16U
+#define ZZ9K_CRYPTO_AES256_KEY_BYTES    32U
+#define ZZ9K_CRYPTO_AES_GCM_NONCE_BYTES 12U
+#define ZZ9K_CRYPTO_AES_GCM_TAG_BYTES   16U
+
+/* The AEAD payload has no algorithm field, so the AEAD algorithm is carried in
+ * the flags field at bits 8-15. A zero algorithm nibble means the legacy
+ * default, ChaCha20-Poly1305, so existing callers stay byte-compatible. */
 enum ZZ9KCryptoAeadFlags {
-  ZZ9K_CRYPTO_AEAD_FLAG_DECRYPT = 1U << 0
+  ZZ9K_CRYPTO_AEAD_FLAG_DECRYPT = 1U << 0,
+  ZZ9K_CRYPTO_AEAD_ALG_SHIFT = 8,
+  ZZ9K_CRYPTO_AEAD_ALG_MASK = 0xFFU << 8
 };
+
+/* Encode/decode the AEAD algorithm in the flags field. */
+#define ZZ9K_CRYPTO_AEAD_FLAG_ALG(alg) \
+  (((uint32_t)(alg) << ZZ9K_CRYPTO_AEAD_ALG_SHIFT) & ZZ9K_CRYPTO_AEAD_ALG_MASK)
+#define ZZ9K_CRYPTO_AEAD_FLAG_GET_ALG(flags) \
+  (((flags) & ZZ9K_CRYPTO_AEAD_ALG_MASK) >> ZZ9K_CRYPTO_AEAD_ALG_SHIFT)
 
 enum ZZ9KCompressionAlgorithm {
   ZZ9K_COMPRESSION_NONE = 0,

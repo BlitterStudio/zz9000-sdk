@@ -697,7 +697,8 @@ static inline int zz9k_request_crypto_aead(ZZ9KRequest *request,
       desc->src_length == 0U || desc->dst_handle == ZZ9K_INVALID_HANDLE ||
       desc->key_handle == ZZ9K_INVALID_HANDLE ||
       desc->nonce_handle == ZZ9K_INVALID_HANDLE ||
-      (desc->flags & ~ZZ9K_CRYPTO_AEAD_FLAG_DECRYPT) != 0U) {
+      (desc->flags & ~(uint32_t)(ZZ9K_CRYPTO_AEAD_FLAG_DECRYPT |
+                                 ZZ9K_CRYPTO_AEAD_ALG_MASK)) != 0U) {
     return ZZ9K_STATUS_BAD_REQUEST;
   }
   if (desc->aad_length != 0U && desc->aad_handle == ZZ9K_INVALID_HANDLE) {

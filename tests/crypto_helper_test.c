@@ -261,6 +261,43 @@ static int test_verify_descriptor(void)
   return 0;
 }
 
+static int test_aes_gcm_descriptor(void)
+{
+  ZZ9KCryptoAeadDesc desc;
+
+  /* AES-128-GCM: key_length 16 selects the AES128 algorithm in the flags. */
+  if (!zz9k_crypto_build_aes_gcm_desc(&desc, 1U, 0U, 64U, 2U, 0U, 3U, 0U, 12U,
+                                      4U, 0U, ZZ9K_CRYPTO_AES128_KEY_BYTES,
+                                      5U, 0U))
+    return 1;
+  if (ZZ9K_CRYPTO_AEAD_FLAG_GET_ALG(desc.flags) != ZZ9K_CRYPTO_AEAD_AES128_GCM)
+    return 2;
+  if (desc.src_length != 64U || desc.key_handle != 4U || desc.nonce_handle != 5U)
+    return 3;
+
+  /* AES-256-GCM with the decrypt flag preserved alongside the algorithm. */
+  if (!zz9k_crypto_build_aes_gcm_desc(&desc, 1U, 0U, 64U, 2U, 0U, 0U, 0U, 0U,
+                                      4U, 0U, ZZ9K_CRYPTO_AES256_KEY_BYTES,
+                                      5U, ZZ9K_CRYPTO_AEAD_FLAG_DECRYPT))
+    return 4;
+  if (ZZ9K_CRYPTO_AEAD_FLAG_GET_ALG(desc.flags) != ZZ9K_CRYPTO_AEAD_AES256_GCM)
+    return 5;
+  if ((desc.flags & ZZ9K_CRYPTO_AEAD_FLAG_DECRYPT) == 0U) return 6;
+
+  /* A key length that is neither 16 nor 32 must be rejected. */
+  if (zz9k_crypto_build_aes_gcm_desc(&desc, 1U, 0U, 64U, 2U, 0U, 0U, 0U, 0U,
+                                     4U, 0U, 24U, 5U, 0U))
+    return 7;
+
+  /* A missing nonce handle must be rejected. */
+  if (zz9k_crypto_build_aes_gcm_desc(&desc, 1U, 0U, 64U, 2U, 0U, 0U, 0U, 0U,
+                                     4U, 0U, ZZ9K_CRYPTO_AES128_KEY_BYTES,
+                                     ZZ9K_INVALID_HANDLE, 0U))
+    return 8;
+
+  return 0;
+}
+
 int main(void)
 {
   int result;
@@ -282,6 +319,9 @@ int main(void)
 
   result = test_verify_descriptor();
   if (result) return 160 + result;
+
+  result = test_aes_gcm_descriptor();
+  if (result) return 190 + result;
 
   return 0;
 }

@@ -242,6 +242,20 @@ int main(void)
   if (ZZ9K_SERVICE_FLAG_CRYPTO_ECDSA_P256 != (1U << 18)) return 84;
   if (ZZ9K_SERVICE_FLAG_CRYPTO_RSA_2048 != (1U << 19)) return 85;
 
+  if ((int)ZZ9K_CRYPTO_AEAD_AES128_GCM != 2) return 86;
+  if ((int)ZZ9K_CRYPTO_AEAD_AES256_GCM != 3) return 87;
+  if (ZZ9K_SERVICE_FLAG_CRYPTO_AES_GCM != (1U << 20)) return 88;
+  if (ZZ9K_CRYPTO_AES128_KEY_BYTES != 16U) return 89;
+  if (ZZ9K_CRYPTO_AES256_KEY_BYTES != 32U) return 90;
+  if (ZZ9K_CRYPTO_AES_GCM_NONCE_BYTES != 12U) return 91;
+  if (ZZ9K_CRYPTO_AES_GCM_TAG_BYTES != 16U) return 92;
+  /* AEAD algorithm round-trips through the flags field. */
+  if (ZZ9K_CRYPTO_AEAD_FLAG_GET_ALG(
+          ZZ9K_CRYPTO_AEAD_FLAG_ALG(ZZ9K_CRYPTO_AEAD_AES256_GCM) |
+          ZZ9K_CRYPTO_AEAD_FLAG_DECRYPT) != ZZ9K_CRYPTO_AEAD_AES256_GCM) {
+    return 93;
+  }
+
   zz9k_put_be16(data, 0x1234U);
   if (zz9k_get_be16(data) != 0x1234U) return 1;
 
