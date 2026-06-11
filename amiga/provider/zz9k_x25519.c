@@ -18,6 +18,7 @@
 #include <openssl/crypto.h>
 
 #include "zz9k-crypto-soft.h"
+#include "zz9k_offload.h"
 
 #include <string.h>
 
@@ -29,11 +30,22 @@ static const unsigned char zz9k_x25519_basepoint[ZZ9K_X25519_KEYLEN] = { 9 };
 int zz9k_prov_x25519(unsigned char out[32], const unsigned char scalar[32],
                      const unsigned char point[32], ZZ9K_PROV_CTX *provctx)
 {
-  /* Hardware offload hook: on the Amiga, when provctx->sdk_ctx is an open
-   * ZZ9000 context and the X25519 service flag is set, this is where the
-   * zz9k_crypto_kx() call is wired in (Phase 4.5). Until then, and always on
-   * the host, use the portable software reference. */
+#ifdef ZZ9K_PROVIDER_OFFLOAD
+  /* On the Amiga, when provctx carries an open ZZ9000 context, run the key
+   * exchange on the hardware (zz9k_crypto_kx via the offload backend). A
+   * negative return means the offload could not run, so fall through to the
+   * portable software reference (the same code the firmware was validated
+   * against). On the host ZZ9K_PROVIDER_OFFLOAD is undefined and the software
+   * reference is always used. */
+  if (provctx != NULL && provctx->sdk_ctx != NULL) {
+    int r = zz9k_offload_x25519(provctx->sdk_ctx, out, scalar, point);
+    if (r >= 0) {
+      return r;
+    }
+  }
+#else
   (void)provctx;
+#endif
   return zz9k_soft_x25519(out, scalar, point);
 }
 

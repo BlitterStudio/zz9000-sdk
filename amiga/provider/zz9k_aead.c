@@ -26,6 +26,7 @@
 #include <openssl/crypto.h>
 
 #include "zz9k-crypto-soft.h"
+#include "zz9k_offload.h"
 
 #include <string.h>
 
@@ -71,9 +72,24 @@ static int zz9k_prov_aead(int alg, int enc, const unsigned char *key,
                           unsigned char *out, unsigned char *tag,
                           ZZ9K_PROV_CTX *provctx)
 {
-  /* Offload hook (Phase 4.5): route to zz9k_crypto_aead when provctx carries a
-   * live ZZ9000 context and the matching service flag is set. */
+#ifdef ZZ9K_PROVIDER_OFFLOAD
+  /* Route to zz9k_crypto_aead when provctx carries a live ZZ9000 context. A
+   * negative return means the offload could not run (allocation/mailbox error)
+   * so fall through to the software reference; for a decrypt with a bad tag the
+   * offload also returns negative and the software path then returns 0, which
+   * is the correct authentication failure. */
+  if (provctx != NULL && provctx->sdk_ctx != NULL) {
+    int aes = (alg != ZZ9K_AEAD_CHACHA20_POLY1305);
+    int r = zz9k_offload_aead(provctx->sdk_ctx, aes, (unsigned int)keylen, !enc,
+                              key, iv, aad, (unsigned int)aadlen, in,
+                              (unsigned int)inlen, out, tag);
+    if (r >= 0) {
+      return r;
+    }
+  }
+#else
   (void)provctx;
+#endif
   switch (alg) {
   case ZZ9K_AEAD_AES128_GCM:
   case ZZ9K_AEAD_AES256_GCM:

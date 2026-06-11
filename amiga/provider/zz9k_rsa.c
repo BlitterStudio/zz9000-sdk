@@ -21,6 +21,7 @@
 #include <openssl/bn.h>
 
 #include "zz9k-crypto-soft.h"
+#include "zz9k_offload.h"
 
 #include <string.h>
 
@@ -32,9 +33,31 @@ static int zz9k_prov_rsa_verify(const unsigned char *sig, uint32_t siglen,
                                 const unsigned char *n, uint32_t nbits,
                                 uint32_t e, ZZ9K_PROV_CTX *provctx)
 {
-  /* Offload hook (Phase 4.5): route RSA-2048 to zz9k_crypto_verify when a
-   * ZZ9000 context is present; larger sizes stay in software. */
+#ifdef ZZ9K_PROVIDER_OFFLOAD
+  /* Verify on the ZZ9000 (zz9k_crypto_verify) when provctx carries a live
+   * context. The firmware accepts RSA-2048/3072/4096 (BearSSL is size-agnostic
+   * up to 4096-bit). The key is marshalled as modulus || exponent, the
+   * exponent in 4 big-endian bytes. A negative return falls through to the
+   * software reference. */
+  if (provctx != NULL && provctx->sdk_ctx != NULL) {
+    unsigned int nbytes = nbits / 8U;
+    if (nbytes <= ZZ9K_RSA_MAX_BYTES) {
+      unsigned char key[ZZ9K_RSA_MAX_BYTES + 4];
+      int valid = 0;
+      memcpy(key, n, nbytes);
+      key[nbytes + 0] = (unsigned char)(e >> 24);
+      key[nbytes + 1] = (unsigned char)(e >> 16);
+      key[nbytes + 2] = (unsigned char)(e >> 8);
+      key[nbytes + 3] = (unsigned char)(e);
+      if (zz9k_offload_verify(provctx->sdk_ctx, ZZ9K_OFFLOAD_VERIFY_RSA_PKCS1,
+                              hash, sig, siglen, key, nbytes + 4U, &valid) >= 0) {
+        return valid;
+      }
+    }
+  }
+#else
   (void)provctx;
+#endif
   return zz9k_soft_rsa_verify_pkcs1_sha256(sig, siglen, hash, n, nbits, e);
 }
 

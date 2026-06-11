@@ -18,6 +18,7 @@
 #include <openssl/crypto.h>
 
 #include "zz9k-crypto-soft.h"
+#include "zz9k_offload.h"
 
 #include <string.h>
 
@@ -30,9 +31,25 @@ static int zz9k_prov_ecdsa_verify(const unsigned char r[32],
                                   const unsigned char point[65],
                                   ZZ9K_PROV_CTX *provctx)
 {
-  /* Offload hook (Phase 4.5): zz9k_crypto_verify when a ZZ9000 context is
-   * present and the ECDSA-P256 service flag is set. */
+#ifdef ZZ9K_PROVIDER_OFFLOAD
+  /* Verify on the ZZ9000 (zz9k_crypto_verify) when provctx carries a live
+   * context. The signature is passed as r||s (64 bytes) and the key as the
+   * 65-byte uncompressed point. A negative return falls through to the
+   * software reference. */
+  if (provctx != NULL && provctx->sdk_ctx != NULL) {
+    unsigned char sig[64];
+    int valid = 0;
+    memcpy(sig, r, 32);
+    memcpy(sig + 32, s, 32);
+    if (zz9k_offload_verify(provctx->sdk_ctx, ZZ9K_OFFLOAD_VERIFY_ECDSA_P256,
+                            hash, sig, sizeof(sig), point, ZZ9K_P256_POINT_LEN,
+                            &valid) >= 0) {
+      return valid;
+    }
+  }
+#else
   (void)provctx;
+#endif
   return zz9k_soft_ecdsa_verify_p256(r, s, hash, point);
 }
 

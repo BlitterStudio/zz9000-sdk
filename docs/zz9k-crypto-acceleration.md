@@ -218,11 +218,12 @@ Two findings, both stronger than the ChaCha20-Poly1305 case:
   aes_ct/gcm) on the existing AEAD op. Software m68k AES-GCM is ~10 KiB/s, so
   offload wins at every record size; batched offload reaches 3584 KiB/s at 16 KB.
   Closes the dominant-ciphersuite record gap.
-- **Phase 4 — OpenSSL 3.x provider.** Wire the primitives into AmiSSL via a
-  built-in, no-DSO provider (`OSSL_PROVIDER_add_builtin`), routing
-  `EVP_CIPHER` / `EVP_MD` / key-exchange to the ZZ9000 service. AmiSSL 5.x
-  (OpenSSL 3.6) exports the full provider-registration API through
-  `amisslext_lib.fd`, so this path is confirmed feasible.
+- **Phase 4 — OpenSSL 3.x provider. DONE.** A built-in, no-DSO provider
+  (`OSSL_PROVIDER_add_builtin`) routing X25519 key exchange, AES-GCM /
+  ChaCha20-Poly1305 ciphers, and ECDSA-P256 / RSA-PKCS1 verify to the ZZ9000,
+  with software fallback. Host parity tests pass against OpenSSL 3; the same
+  source compiles for m68k against AmiSSL 5.x (OpenSSL 3.6). Build, registration,
+  and hardware-verification procedure: [zz9k-amissl-provider.md](zz9k-amissl-provider.md).
 - **Phase 5 (optional, far) — FPGA AES core**, only if software AES-GCM on the
   ARMv7 A9 proves throughput-limited.
 
@@ -234,3 +235,7 @@ Two findings, both stronger than the ChaCha20-Poly1305 case:
   `tests/cryptobench_logic_test.c`.
 - `tools/zz9k-handshake-model.h` — handshake offload calculator, checks in
   `tests/handshake_model_test.c`.
+- `amiga/provider/` — OpenSSL 3 provider that exposes the offload to AmiSSL
+  (X25519, AES-GCM, ChaCha20-Poly1305, ECDSA/RSA verify) with software fallback;
+  host parity tests in `tests/provider_*_test.c`. See
+  [zz9k-amissl-provider.md](zz9k-amissl-provider.md).

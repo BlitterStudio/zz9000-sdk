@@ -19,6 +19,11 @@
 #include <openssl/params.h>
 #include <openssl/crypto.h>
 
+#ifdef ZZ9K_PROVIDER_OFFLOAD
+#include "zz9k/host.h"
+#include "zz9k/abi.h"
+#endif
+
 #define ZZ9K_PROVIDER_VERSION "0.1.0"
 
 static const OSSL_PARAM zz9k_param_types[] = {
@@ -85,6 +90,13 @@ static const OSSL_ALGORITHM *zz9k_query_operation(void *provctx,
 
 static void zz9k_teardown(void *provctx)
 {
+#ifdef ZZ9K_PROVIDER_OFFLOAD
+  ZZ9K_PROV_CTX *ctx = (ZZ9K_PROV_CTX *)provctx;
+  if (ctx != NULL && ctx->sdk_ctx != NULL) {
+    zz9k_close((ZZ9KContext *)ctx->sdk_ctx);
+    ctx->sdk_ctx = NULL;
+  }
+#endif
   OPENSSL_free(provctx);
 }
 
@@ -107,6 +119,22 @@ int zz9k_provider_init(const OSSL_CORE_HANDLE *handle, const OSSL_DISPATCH *in,
     return 0;
   }
   ctx->handle = handle;
+#ifdef ZZ9K_PROVIDER_OFFLOAD
+  /* Open the ZZ9000 once for the provider's lifetime and remember which crypto
+   * services the firmware advertises. If the board is absent or unsupported the
+   * provider still loads and every operation transparently uses its software
+   * reference (the per-op hooks check sdk_ctx before offloading). */
+  {
+    ZZ9KContext *sdk = NULL;
+    if (zz9k_open(&sdk) == ZZ9K_STATUS_OK) {
+      ZZ9KServiceInfo svc;
+      ctx->sdk_ctx = sdk;
+      if (zz9k_query_service(sdk, ZZ9K_SERVICE_CRYPTO, &svc) == ZZ9K_STATUS_OK) {
+        ctx->service_flags = svc.flags;
+      }
+    }
+  }
+#endif
   *provctx = ctx;
   *out = zz9k_dispatch_table;
   return 1;
