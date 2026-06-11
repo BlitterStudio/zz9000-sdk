@@ -59,7 +59,7 @@ asymmetric service exists to benchmark.
 
 | Operation | Phase | m68k SW | ARM + mbox | Speedup | Per-op saving |
 |---|---|---|---|---|---|
-| X25519 scalar mult | handshake | ~500 ms (est.) | ~3 ms + 6.1 ms | ~55x | ~491 ms |
+| X25519 scalar mult | handshake | 790.75 ms (meas.) | 6.36 ms (meas.) | 124x | 784 ms |
 | P-256 ECDHE/ECDSA-verify | handshake | ~700 ms (est.) | ~5 ms + 6.1 ms | ~63x | ~689 ms |
 | RSA-2048 verify (e=65537) | handshake | ~50 ms (est.) | ~0.6 ms + 6.1 ms | ~7.5x | ~43 ms |
 | RSA-2048 sign (CRT) | handshake | ~1500 ms (est.) | ~10 ms + 6.1 ms | ~93x | ~1484 ms |
@@ -104,6 +104,24 @@ path, but they are network-latency-dominated and crypto cost is irrelevant
 there. Software m68k ChaCha20-Poly1305 plateaus at ~160 KiB/s, so batched
 offload is ~59x faster for bulk transfer.
 
+### X25519 key exchange (Phase 1, measured)
+
+`zz9k-cryptobench` X25519 section (16 iterations, software m68k vs synchronous
+ZZ9000 offload):
+
+| | per-op | speedup |
+|---|---|---|
+| Software (m68k) | 790.75 ms/op | — |
+| Offload (ZZ9000) | 6.36 ms/op | **124x** |
+
+This confirms the handshake-first thesis directly: X25519 is the single most
+expensive handshake primitive on m68k (~0.8 s of pure compute), and the offload
+collapses it to one ~6.4 ms mailbox round trip — the ARM's scalar multiplication
+disappears beneath the same fixed latency seen in the symmetric sweep. Unlike
+records, this op is on the connection's critical path and pays exactly one round
+trip, so the full 124x is realised per connection. The earlier ~500 ms estimate
+under-counted the m68k cost; the measured saving is **784 ms per handshake**.
+
 ## Data-collection plan
 
 1. **Symmetric record sweep — `zz9k-cryptobench`** — DONE (see Measured
@@ -121,11 +139,12 @@ offload is ~59x faster for bulk transfer.
    before the provider work so the provider's batching design is grounded in a
    real curve.
 
-4. **Asymmetric micro-benchmark — planned**. Once a firmware asymmetric service
-   exists (Phase 1+), a micro-benchmark will measure X25519 / P-256 / RSA on
-   both the 68k and the ARM and replace the estimate rows above. Until then the
-   model in `zz9k-handshake-model.h` lets us plug in any measured pair and read
-   the verdict.
+4. **Asymmetric micro-benchmark — X25519 DONE, P-256/RSA pending.** The
+   `zz9k-cryptobench` X25519 section is measured (790.75 ms m68k vs 6.36 ms
+   offload, 124x). P-256 ECDHE/ECDSA-verify and RSA-2048-verify sections follow
+   in Phase 2 and will replace their estimate rows once run on hardware. The
+   model in `zz9k-handshake-model.h` still lets us plug in any measured pair and
+   read the verdict.
 
 ## Roadmap (informed by this analysis)
 
