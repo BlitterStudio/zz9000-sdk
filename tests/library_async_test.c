@@ -821,6 +821,45 @@ static int test_crypto_aead_batch_uses_library_context(void)
   return 0;
 }
 
+static int test_crypto_kx_uses_library_context(void)
+{
+  struct TestMailbox mailbox;
+  ZZ9KLibrary library;
+  ZZ9KCryptoKxDesc desc;
+  ZZ9KCryptoResult result;
+
+  init_mailbox(&mailbox);
+  if (!zz9k_crypto_build_x25519_desc(&desc, 0x40000090UL, 0U,
+                                     0x40000091UL, 0U,
+                                     0x40000092UL, 0U)) {
+    return 1;
+  }
+  prepare_completion(&mailbox, 1, ZZ9K_OP_CRYPTO_KX, ZZ9K_STATUS_OK,
+                     sizeof(ZZ9KCryptoResultPayload));
+  zz9k_put_be32(&mailbox.completion_ring[0].payload[0],
+                ZZ9K_CRYPTO_X25519_SHARED_BYTES);
+  zz9k_put_be32(&mailbox.completion_ring[0].payload[4],
+                ZZ9K_CRYPTO_KX_X25519);
+
+  ZZ9KInit(&library);
+  if (attach_library(&library, &mailbox) != 0) return 2;
+
+  memset(&result, 0, sizeof(result));
+  if (ZZ9KCryptoKeyExchange(&library, &desc, &result) != ZZ9K_STATUS_OK) {
+    return 3;
+  }
+  if (zz9k_get_be16(mailbox.request_ring[0].opcode) != ZZ9K_OP_CRYPTO_KX) {
+    return 4;
+  }
+  if (result.bytes_written != ZZ9K_CRYPTO_X25519_SHARED_BYTES ||
+      result.algorithm != ZZ9K_CRYPTO_KX_X25519) {
+    return 5;
+  }
+
+  ZZ9KClose(&library);
+  return 0;
+}
+
 static int test_async_call_completes_matching_request(void)
 {
   struct TestMailbox mailbox;
@@ -1251,6 +1290,9 @@ int main(void)
 
   result = test_crypto_aead_batch_uses_library_context();
   if (result) return 31 + result;
+
+  result = test_crypto_kx_uses_library_context();
+  if (result) return 300 + result;
 
   result = test_async_batch_queues_until_request_ring_fills();
   if (result) return 32 + result;

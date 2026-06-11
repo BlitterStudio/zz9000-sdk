@@ -171,6 +171,9 @@ int ZZ9KCryptoAeadBatch(ZZ9KLibrary *library,
                         ZZ9KCryptoResult *results,
                         uint32_t count, uint32_t max_in_flight,
                         uint32_t timeout_ticks);
+int ZZ9KCryptoKeyExchange(ZZ9KLibrary *library,
+                          const ZZ9KCryptoKxDesc *desc,
+                          ZZ9KCryptoResult *result);
 int ZZ9KReadDiag(ZZ9KLibrary *library, ZZ9KDiagInfo *diag);
 
 #endif /* ZZ9K_LIBRARY_TYPES_ONLY */

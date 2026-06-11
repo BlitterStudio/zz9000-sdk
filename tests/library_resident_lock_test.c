@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "zz9k/library_vectors.h"
+
 static char *read_file(const char *path)
 {
   FILE *file;
@@ -87,6 +89,43 @@ static int function_contains(const char *source, const char *name,
   return hit && hit < end;
 }
 
+/* The resident jump table must provide one vector per LVO the headers
+ * advertise (4 standard + ZZ9K_LVO_FUNCTION_COUNT public), or a client
+ * gated on lib_Revision jumps past the initialized table. */
+static int expect_vector_table_complete(const char *source)
+{
+  const char *table;
+  const char *end;
+  const char *pos;
+  int count;
+
+  table = strstr(source, "zz9k_lib_vectors[] = {");
+  if (!table) {
+    printf("zz9k_lib_vectors table not found\n");
+    return 0;
+  }
+  end = strstr(table, "};");
+  if (!end) {
+    printf("zz9k_lib_vectors table not terminated\n");
+    return 0;
+  }
+
+  count = 0;
+  pos = table;
+  while ((pos = strstr(pos, "(APTR)zz9k_lib_")) != 0 && pos < end) {
+    count++;
+    pos++;
+  }
+
+  if (count != 4 + ZZ9K_LVO_FUNCTION_COUNT) {
+    printf("zz9k_lib_vectors has %d entries, headers advertise %d\n",
+           count, 4 + ZZ9K_LVO_FUNCTION_COUNT);
+    return 0;
+  }
+
+  return 1;
+}
+
 static int expect_public_call_locked(const char *source, const char *name)
 {
   int ok;
@@ -136,6 +175,7 @@ int main(int argc, char **argv)
     "zz9k_lib_crypto_stream_batch",
     "zz9k_lib_crypto_aead",
     "zz9k_lib_crypto_aead_batch",
+    "zz9k_lib_crypto_kx",
     "zz9k_lib_fill_surface",
     "zz9k_lib_copy_surface"
   };
@@ -166,6 +206,10 @@ int main(int argc, char **argv)
   if (!function_contains(source, "zz9k_lib_close",
                          "ObtainSemaphore(&base->lock)")) {
     printf("zz9k_lib_close: missing semaphore guard\n");
+    failures++;
+  }
+
+  if (!expect_vector_table_complete(source)) {
     failures++;
   }
 

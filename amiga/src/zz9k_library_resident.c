@@ -247,6 +247,9 @@ static int zz9k_lib_crypto_aead_batch(
     REG(d0, uint32_t count),
     REG(d1, uint32_t max_in_flight),
     REG(d2, uint32_t timeout_ticks));
+static int zz9k_lib_crypto_kx(REG(a6, struct ZZ9KBase *base),
+                              REG(a0, const ZZ9KCryptoKxDesc *desc),
+                              REG(a1, ZZ9KCryptoResult *result));
 
 static const APTR zz9k_lib_vectors[] = {
   (APTR)zz9k_lib_open,
@@ -296,6 +299,7 @@ static const APTR zz9k_lib_vectors[] = {
   (APTR)zz9k_lib_audio_stream_feed,
   (APTR)zz9k_lib_audio_stream_read,
   (APTR)zz9k_lib_audio_stream_close,
+  (APTR)zz9k_lib_crypto_kx,
   (APTR)-1
 };
 
@@ -1621,6 +1625,19 @@ static int zz9k_lib_crypto_aead_batch(
   }
   status = ZZ9KCryptoAeadBatch(&base->core, descs, results, count,
                                max_in_flight, timeout_ticks);
+  zz9k_lib_leave(base);
+  return status;
+}
+
+static int zz9k_lib_crypto_kx(REG(a6, struct ZZ9KBase *base),
+                              REG(a0, const ZZ9KCryptoKxDesc *desc),
+                              REG(a1, ZZ9KCryptoResult *result))
+{
+  int status = zz9k_lib_enter(base);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  status = ZZ9KCryptoKeyExchange(&base->core, desc, result);
   zz9k_lib_leave(base);
   return status;
 }

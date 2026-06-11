@@ -447,6 +447,11 @@ add_executable(library_resident_lock_test
   tests/library_resident_lock_test.c
 )
 
+target_include_directories(library_resident_lock_test
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/amiga/include
+)
+
 add_test(
   NAME library_resident_lock_test
   COMMAND library_resident_lock_test
