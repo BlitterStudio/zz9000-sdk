@@ -67,6 +67,8 @@ asymmetric service exists to benchmark.
 | RSA-2048 sign (CRT) | handshake | ~1500 ms (est.) | ~10 ms + 6.1 ms | ~93x | ~1484 ms |
 | ChaCha20-Poly1305 16 KB record, sync | record | 162 KiB/s | 2539 KiB/s | 15.7x | measured |
 | ChaCha20-Poly1305 16 KB record, pipelined | record | 162 KiB/s | ~9539 KiB/s | ~59x | measured |
+| AES-128-GCM 16 KB record, sync | record | 10 KiB/s | 2487 KiB/s | 249x | measured |
+| AES-128-GCM 16 KB record, batched (16) | record | 10 KiB/s | 3584 KiB/s | 358x | measured |
 
 Reading: even with the measured ~6-19 ms offload round trip, the asymmetric
 handshake operations save **hundreds of milliseconds to tens of seconds** *per
@@ -151,6 +153,38 @@ EC cost (P-256 estimated ~700 ms, measured 9593 ms). The conclusion is unchanged
 and stronger: asymmetric offload is a risk-free win of **1.4-19 s per handshake
 operation**.
 
+### AES-128-GCM record cipher (Phase 3, measured)
+
+`zz9k-cryptobench` AES-128-GCM section (16 iterations/size; software m68k vs
+synchronous offload vs batched offload at depth 16):
+
+| Record | soft KiB/s | sync KiB/s | batched(16) KiB/s |
+|---|---|---|---|
+| 64 B | 7 | 9 | 619 |
+| 256 B | 9 | 39 | 510 |
+| 1 KB | 10 | 157 | 1989 |
+| 4 KB | 10 | 635 | 3132 |
+| 16 KB | 10 | 2487 | 3584 |
+
+Two findings, both stronger than the ChaCha20-Poly1305 case:
+
+1. **Software AES-GCM on m68k is unusably slow — ~10 KiB/s**, about 16x slower
+   than software ChaCha20-Poly1305 (162 KiB/s). The 68k has no AES instructions,
+   and a constant-time byte-oriented AES plus GHASH is expensive. Consequently
+   even the *synchronous* offload beats software at **every** record size (9 vs 7
+   KiB/s already at 64 B) — there is no small-record regime where software wins,
+   unlike ChaCha (which had a ~1-2 KB break-even). For AES-GCM the offload is
+   always the right choice.
+
+2. **Batching is the throughput win.** The synchronous path is mailbox-latency
+   bound (the familiar ~6 ms/record curve: 9 KiB/s at 64 B rising to 2487 KiB/s
+   at 16 KB). Batching 16 records per submission collapses that latency: **619
+   KiB/s at 64 B (≈68x the synchronous path) and 3584 KiB/s at 16 KB.** The small
+   end gains the most, because that is where per-record latency dominates; at
+   16 KB the ARM's compute starts to dominate so the batch margin narrows to
+   ~1.4x. This is exactly the curve the provider's batching design (Phase 4)
+   needs: accumulate TLS records and submit them via `zz9k_crypto_aead_batch`.
+
 ## Data-collection plan
 
 1. **Symmetric record sweep — `zz9k-cryptobench`** — DONE (see Measured
@@ -161,12 +195,10 @@ operation**.
    6.1 ms/call (161 calls/s); pipelined 11193 calls/s. This 6.1 ms is now the
    mailbox figure in the model.
 
-3. **Batched-record sweep — follow-up.** `zz9k-cryptobench` currently measures
-   only the synchronous offload path. A batched variant (via
-   `zz9k_crypto_aead_batch`) would quantify the throughput-bound case directly
-   rather than inferring it from the `zz9k-bench` pipe figures. Worth adding
-   before the provider work so the provider's batching design is grounded in a
-   real curve.
+3. **Batched-record sweep — DONE (Phase 3).** The AES-128-GCM section measures
+   software, synchronous, and batched (`zz9k_crypto_aead_batch`, depth 16) paths.
+   Batching reaches 3584 KiB/s at 16 KB and beats the synchronous path ~68x at
+   64 B, grounding the provider's batching design in a real curve.
 
 4. **Asymmetric micro-benchmark — DONE.** All four `zz9k-cryptobench`
    handshake sections are measured on hardware: X25519 (790.75 ms vs 6.36 ms,
@@ -182,9 +214,10 @@ operation**.
   wrapper. The handshake key-exchange win.
 - **Phase 2 — P-256 ECDH/ECDSA + RSA verify. DONE (measured, 122-1018x).**
   Broader handshake coverage, BearSSL on the ARM.
-- **Phase 3 — AES-GCM** (ARM software service). Closes the dominant-ciphersuite
-  record gap so the provider accelerates the common case; sequenced after the
-  `zz9k-cryptobench` result confirms the record-offload economics.
+- **Phase 3 — AES-GCM. DONE (measured).** ARM software service (BearSSL
+  aes_ct/gcm) on the existing AEAD op. Software m68k AES-GCM is ~10 KiB/s, so
+  offload wins at every record size; batched offload reaches 3584 KiB/s at 16 KB.
+  Closes the dominant-ciphersuite record gap.
 - **Phase 4 — OpenSSL 3.x provider.** Wire the primitives into AmiSSL via a
   built-in, no-DSO provider (`OSSL_PROVIDER_add_builtin`), routing
   `EVP_CIPHER` / `EVP_MD` / key-exchange to the ZZ9000 service. AmiSSL 5.x
