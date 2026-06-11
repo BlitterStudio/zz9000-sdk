@@ -12,17 +12,12 @@
  */
 
 #include "zz9k_provider.h"
+#include "zz9k_prov_local.h"
 
 #include <openssl/core_dispatch.h>
 #include <openssl/core_names.h>
 #include <openssl/params.h>
 #include <openssl/crypto.h>
-
-/* Provider-side context. Holds the core handle for later use (error
- * reporting, capability queries); the skeleton only needs its lifetime. */
-typedef struct zz9k_prov_ctx_st {
-  const OSSL_CORE_HANDLE *handle;
-} ZZ9K_PROV_CTX;
 
 #define ZZ9K_PROVIDER_VERSION "0.1.0"
 
@@ -65,16 +60,23 @@ static int zz9k_get_params(void *provctx, OSSL_PARAM params[])
   return 1;
 }
 
-/* No algorithms are advertised yet; every operation falls through to the
- * default (software) provider. */
+/* Advertise the operations the provider implements. Anything not listed here
+ * falls through to the default (software) provider via the "?provider=zz9000"
+ * property query. */
 static const OSSL_ALGORITHM *zz9k_query_operation(void *provctx,
                                                   int operation_id,
                                                   int *no_store)
 {
   (void)provctx;
-  (void)operation_id;
   *no_store = 0;
-  return NULL;
+  switch (operation_id) {
+  case OSSL_OP_KEYMGMT:
+    return zz9k_keymgmt_algorithms;
+  case OSSL_OP_KEYEXCH:
+    return zz9k_keyexch_algorithms;
+  default:
+    return NULL;
+  }
 }
 
 static void zz9k_teardown(void *provctx)

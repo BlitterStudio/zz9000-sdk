@@ -216,19 +216,27 @@ add_test(NAME crypto_soft_test COMMAND crypto_soft_test)
 # free. On the Amiga the same provider source builds against AmiSSL 5.x.
 find_package(OpenSSL 3.0 QUIET COMPONENTS Crypto)
 if(OpenSSL_FOUND)
-  add_executable(provider_init_test
-    tests/provider_init_test.c
+  set(ZZ9K_PROVIDER_SOURCES
     amiga/provider/zz9k_provider.c
+    amiga/provider/zz9k_x25519.c
+    tools/zz9k-crypto-soft.c
   )
-  target_include_directories(provider_init_test
-    PRIVATE
-      ${CMAKE_CURRENT_SOURCE_DIR}/amiga/provider
-  )
-  target_link_libraries(provider_init_test PRIVATE OpenSSL::Crypto)
-  add_test(NAME provider_init_test COMMAND provider_init_test)
-  message(STATUS "OpenSSL ${OPENSSL_VERSION} found: provider_init_test enabled")
+  foreach(provtest provider_init_test provider_x25519_test)
+    add_executable(${provtest}
+      tests/${provtest}.c
+      ${ZZ9K_PROVIDER_SOURCES}
+    )
+    target_include_directories(${provtest}
+      PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/amiga/provider
+        ${CMAKE_CURRENT_SOURCE_DIR}/tools
+    )
+    target_link_libraries(${provtest} PRIVATE OpenSSL::Crypto)
+    add_test(NAME ${provtest} COMMAND ${provtest})
+  endforeach()
+  message(STATUS "OpenSSL ${OPENSSL_VERSION} found: provider tests enabled")
 else()
-  message(STATUS "OpenSSL 3 not found: provider_init_test skipped")
+  message(STATUS "OpenSSL 3 not found: provider tests skipped")
 endif()
 
 add_executable(cryptobench_logic_test
