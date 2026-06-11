@@ -85,7 +85,9 @@ int main(int argc, char **argv)
   }
 
   ok = 1;
-  ok &= expect_contains(source, "#define ZZ9K_LIBRARY_REVISION 22");
+  ok &= expect_contains(source, "#define ZZ9K_LIBRARY_REVISION 23");
+  ok &= expect_contains(source, "ZZ9K_LIBRARY_MIN_REVISION_CRYPTO_KX");
+  ok &= expect_contains(source, "ZZ9K_SERVICE_FLAG_CRYPTO_X25519");
   ok &= expect_contains(source, "zz9k-services --check-release");
   ok &= expect_contains(source, "release check ok");
   ok &= expect_contains(source, "zz9k-release-smoke.md");

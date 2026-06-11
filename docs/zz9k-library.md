@@ -8,7 +8,7 @@ The current library identity is:
 ```c
 #define ZZ9K_LIBRARY_NAME "zz9k.library"
 #define ZZ9K_LIBRARY_VERSION 2
-#define ZZ9K_LIBRARY_REVISION 22
+#define ZZ9K_LIBRARY_REVISION 23
 ```
 
 Open the library with at least version 2:
@@ -1369,6 +1369,19 @@ if (ZZ9KBase->lib_Revision < ZZ9K_LIBRARY_MIN_REVISION_AUDIO_STREAM) {
 The streaming surface uses `ZZ9KAudioStreamBegin()`, `ZZ9KAudioStreamFeed()`,
 `ZZ9KAudioStreamRead()`, and `ZZ9KAudioStreamClose()` so large files do not
 need to fit in shared memory at once.
+
+Library revision 23 added X25519 key exchange via `ZZ9KCryptoKeyExchange()`.
+Programs that require it should check:
+
+```c
+if (ZZ9KBase->lib_Revision < ZZ9K_LIBRARY_MIN_REVISION_CRYPTO_KX) {
+  /* fallback or refuse to run */
+}
+```
+
+The firmware additionally advertises X25519 support through the crypto
+service flags; gate hardware use on `ZZ9K_SERVICE_FLAG_CRYPTO_X25519` from
+`ZZ9KQueryService()`.
 `ZZ9KAudioStreamBeginDesc.low_water_bytes` is reserved for input-ring refill
 policy. `high_water_bytes` caps the amount of PCM firmware should produce in a
 single mailbox call; pass zero for the firmware default, or a value below the
