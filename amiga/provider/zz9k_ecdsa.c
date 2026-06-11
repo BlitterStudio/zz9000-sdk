@@ -299,7 +299,7 @@ static const OSSL_PARAM *zz9k_ecdsa_settable_ctx_params(void *vctx,
   return types;
 }
 
-static const OSSL_DISPATCH zz9k_ecdsa_signature_functions[] = {
+const OSSL_DISPATCH zz9k_ecdsa_signature_functions[] = {
   { OSSL_FUNC_SIGNATURE_NEWCTX, (void (*)(void))zz9k_ecdsa_newctx },
   { OSSL_FUNC_SIGNATURE_FREECTX, (void (*)(void))zz9k_ecdsa_freectx },
   { OSSL_FUNC_SIGNATURE_VERIFY_INIT, (void (*)(void))zz9k_ecdsa_verify_init },
@@ -310,9 +310,5 @@ static const OSSL_DISPATCH zz9k_ecdsa_signature_functions[] = {
     (void (*)(void))zz9k_ecdsa_settable_ctx_params },
   { 0, NULL }
 };
-
-const OSSL_ALGORITHM zz9k_signature_algorithms[] = {
-  { "ECDSA", "provider=zz9000", zz9k_ecdsa_signature_functions,
-    "ZZ9000 ECDSA verify" },
-  { NULL, NULL, NULL, NULL }
-};
+/* The SIGNATURE OSSL_ALGORITHM table (ECDSA + RSA) is assembled in
+ * zz9k_algorithms.c. */

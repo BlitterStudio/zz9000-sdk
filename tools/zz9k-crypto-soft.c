@@ -696,7 +696,7 @@ int zz9k_soft_chacha20_poly1305_decrypt(
 
 /* ===== Generic big-integer core (little-endian uint32_t limbs) ===== */
 
-#define BN_MAX_LIMBS 64            /* up to 2048-bit (RSA) */
+#define BN_MAX_LIMBS 128           /* up to 4096-bit (RSA-2048/3072/4096) */
 
 /* Compare a and b (len limbs). Returns -1, 0, or 1. */
 static int bn_cmp(const uint32_t *a, const uint32_t *b, int len)

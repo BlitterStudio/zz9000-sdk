@@ -17,5 +17,15 @@ const OSSL_ALGORITHM zz9k_keymgmt_algorithms[] = {
     "ZZ9000 X25519 key management" },
   { "EC", "provider=zz9000", zz9k_ec_keymgmt_functions,
     "ZZ9000 EC (P-256) key management" },
+  { "RSA", "provider=zz9000", zz9k_rsa_keymgmt_functions,
+    "ZZ9000 RSA key management" },
+  { NULL, NULL, NULL, NULL }
+};
+
+const OSSL_ALGORITHM zz9k_signature_algorithms[] = {
+  { "ECDSA", "provider=zz9000", zz9k_ecdsa_signature_functions,
+    "ZZ9000 ECDSA verify" },
+  { "RSA", "provider=zz9000", zz9k_rsa_signature_functions,
+    "ZZ9000 RSA PKCS#1 v1.5 verify" },
   { NULL, NULL, NULL, NULL }
 };

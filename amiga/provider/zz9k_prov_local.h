@@ -32,10 +32,13 @@ typedef struct zz9k_prov_ctx_st {
 int zz9k_prov_x25519(unsigned char out[32], const unsigned char scalar[32],
                      const unsigned char point[32], ZZ9K_PROV_CTX *provctx);
 
-/* Per-key-type KEYMGMT dispatch tables, combined into zz9k_keymgmt_algorithms
- * in zz9k_algorithms.c. */
+/* Per-key-type KEYMGMT and per-algorithm SIGNATURE dispatch tables, combined
+ * into the keymgmt/signature OSSL_ALGORITHM tables in zz9k_algorithms.c. */
 extern const OSSL_DISPATCH zz9k_x25519_keymgmt_functions[];
 extern const OSSL_DISPATCH zz9k_ec_keymgmt_functions[];
+extern const OSSL_DISPATCH zz9k_rsa_keymgmt_functions[];
+extern const OSSL_DISPATCH zz9k_ecdsa_signature_functions[];
+extern const OSSL_DISPATCH zz9k_rsa_signature_functions[];
 
 /* Algorithm tables advertised by the provider's query-operation callback. */
 extern const OSSL_ALGORITHM zz9k_keymgmt_algorithms[];

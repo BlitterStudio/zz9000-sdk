@@ -222,10 +222,11 @@ if(OpenSSL_FOUND)
     amiga/provider/zz9k_x25519.c
     amiga/provider/zz9k_aead.c
     amiga/provider/zz9k_ecdsa.c
+    amiga/provider/zz9k_rsa.c
     tools/zz9k-crypto-soft.c
   )
   foreach(provtest provider_init_test provider_x25519_test provider_aead_test
-                   provider_ecdsa_test)
+                   provider_ecdsa_test provider_rsa_test)
     add_executable(${provtest}
       tests/${provtest}.c
       ${ZZ9K_PROVIDER_SOURCES}
