@@ -812,6 +812,203 @@ static uint32_t zz9k_cryptobench_offload_rate(
                                          timer->ticks_per_second);
 }
 
+/* ---- AES-128-GCM record cipher: software vs synchronous vs batched offload ----
+ *
+ * Phase 0 found symmetric offload is mailbox-latency-bound: a synchronous call
+ * per record loses to software below ~2 KB. Batching amortises the round trip
+ * over many records via zz9k_crypto_aead_batch. This section quantifies that
+ * directly for AES-128-GCM, the dominant TLS record cipher. */
+
+#define ZZ9K_CRYPTOBENCH_GCM_BATCH 16U
+
+static const uint8_t zz9k_cryptobench_aes_key[16] = {
+  0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6,
+  0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c
+};
+
+/* Software AES-128-GCM encryption rate over `iterations` records of `size`. */
+static uint32_t zz9k_cryptobench_aes_gcm_software_rate(
+    const ZZ9KCryptoBenchTimer *timer, uint32_t size, uint32_t iterations,
+    uint8_t *plaintext, uint8_t *ciphertext)
+{
+  static const uint8_t nonce[ZZ9K_SOFT_AES_GCM_NONCE_BYTES] = {
+    0x07, 0x00, 0x00, 0x00, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47
+  };
+  uint8_t tag[ZZ9K_SOFT_AES_GCM_TAG_BYTES];
+  ZZ9KCryptoBenchTick start;
+  ZZ9KCryptoBenchTick elapsed;
+  uint32_t i;
+
+  start = zz9k_cryptobench_timer_now(timer);
+  for (i = 0; i < iterations; i++) {
+    zz9k_soft_aes_gcm_encrypt(ciphertext, tag, plaintext, size, 0, 0U,
+                              zz9k_cryptobench_aes_key, 16U, nonce);
+  }
+  elapsed = zz9k_cryptobench_timer_now(timer) - start;
+  return zz9k_cryptobench_kib_per_second(size * iterations, elapsed,
+                                         timer->ticks_per_second);
+}
+
+/* Synchronous AES-128-GCM offload rate (one mailbox round trip per record). */
+static uint32_t zz9k_cryptobench_aes_gcm_offload_rate(
+    ZZ9KContext *ctx, const ZZ9KCryptoBenchTimer *timer, uint32_t size,
+    uint32_t iterations, const ZZ9KSharedBuffer *input,
+    const ZZ9KSharedBuffer *output, const ZZ9KSharedBuffer *key,
+    const ZZ9KSharedBuffer *nonce)
+{
+  ZZ9KCryptoAeadDesc desc;
+  ZZ9KCryptoResult result;
+  ZZ9KCryptoBenchTick start;
+  ZZ9KCryptoBenchTick elapsed;
+  uint32_t i;
+  int status;
+
+  if (!zz9k_crypto_build_aes_gcm_desc(&desc, input->handle, 0U, size,
+          output->handle, 0U, 0U, 0U, 0U, key->handle, 0U,
+          ZZ9K_CRYPTO_AES128_KEY_BYTES, nonce->handle, 0U)) {
+    printf("aes-gcm offload %5lu: descriptor build failed\n",
+           (unsigned long)size);
+    return 0;
+  }
+  start = zz9k_cryptobench_timer_now(timer);
+  for (i = 0; i < iterations; i++) {
+    memset(&result, 0, sizeof(result));
+    status = zz9k_crypto_aead(ctx, &desc, &result);
+    if (status != ZZ9K_STATUS_OK) {
+      printf("aes-gcm offload %5lu: %s (%d)\n", (unsigned long)size,
+             zz9k_status_name(status), status);
+      return 0;
+    }
+  }
+  elapsed = zz9k_cryptobench_timer_now(timer) - start;
+  return zz9k_cryptobench_kib_per_second(size * iterations, elapsed,
+                                         timer->ticks_per_second);
+}
+
+/* Batched AES-128-GCM offload rate (ZZ9K_CRYPTOBENCH_GCM_BATCH records per
+ * mailbox submission, pipelined). */
+static uint32_t zz9k_cryptobench_aes_gcm_batch_rate(
+    ZZ9KContext *ctx, const ZZ9KCryptoBenchTimer *timer, uint32_t size,
+    uint32_t iterations, const ZZ9KSharedBuffer *input,
+    const ZZ9KSharedBuffer *output, const ZZ9KSharedBuffer *key,
+    const ZZ9KSharedBuffer *nonce)
+{
+  ZZ9KCryptoAeadDesc descs[ZZ9K_CRYPTOBENCH_GCM_BATCH];
+  ZZ9KCryptoResult results[ZZ9K_CRYPTOBENCH_GCM_BATCH];
+  ZZ9KCryptoBenchTick start;
+  ZZ9KCryptoBenchTick elapsed;
+  uint32_t i, b;
+  int status;
+
+  for (b = 0; b < ZZ9K_CRYPTOBENCH_GCM_BATCH; b++) {
+    if (!zz9k_crypto_build_aes_gcm_desc(&descs[b], input->handle, 0U, size,
+            output->handle, 0U, 0U, 0U, 0U, key->handle, 0U,
+            ZZ9K_CRYPTO_AES128_KEY_BYTES, nonce->handle, 0U)) {
+      printf("aes-gcm batch %5lu: descriptor build failed\n",
+             (unsigned long)size);
+      return 0;
+    }
+  }
+  start = zz9k_cryptobench_timer_now(timer);
+  for (i = 0; i < iterations; i++) {
+    status = zz9k_crypto_aead_batch(ctx, descs, results,
+                                    ZZ9K_CRYPTOBENCH_GCM_BATCH,
+                                    ZZ9K_CRYPTOBENCH_GCM_BATCH,
+                                    ZZ9K_DEFAULT_TIMEOUT_TICKS);
+    if (status != ZZ9K_STATUS_OK) {
+      printf("aes-gcm batch %5lu: %s (%d)\n", (unsigned long)size,
+             zz9k_status_name(status), status);
+      return 0;
+    }
+  }
+  elapsed = zz9k_cryptobench_timer_now(timer) - start;
+  return zz9k_cryptobench_kib_per_second(
+      size * ZZ9K_CRYPTOBENCH_GCM_BATCH * iterations, elapsed,
+      timer->ticks_per_second);
+}
+
+/* Allocate buffers and run the AES-128-GCM software/sync/batch sweep. The
+ * offload columns are filled only when the crypto service advertises AES-GCM. */
+static void zz9k_cryptobench_run_aes_gcm(
+    ZZ9KContext *ctx, const ZZ9KCryptoBenchTimer *timer, uint32_t iterations,
+    const uint32_t *sizes, uint8_t *plaintext, uint8_t *ciphertext,
+    int offload_ok)
+{
+  ZZ9KSharedBuffer input;
+  ZZ9KSharedBuffer output;
+  ZZ9KSharedBuffer key;
+  ZZ9KSharedBuffer nonce;
+  uint32_t i;
+  int have_buffers = 0;
+  int status;
+
+  memset(&input, 0, sizeof(input));
+  memset(&output, 0, sizeof(output));
+  memset(&key, 0, sizeof(key));
+  memset(&nonce, 0, sizeof(nonce));
+
+  if (offload_ok) {
+    status = zz9k_alloc_shared(ctx, ZZ9K_CRYPTOBENCH_MAX_RECORD_BYTES, 16U, 0,
+                               &input);
+    if (status == ZZ9K_STATUS_OK) {
+      status = zz9k_alloc_shared(
+          ctx, ZZ9K_CRYPTOBENCH_MAX_RECORD_BYTES + ZZ9K_CRYPTOBENCH_TAG_BYTES,
+          16U, 0, &output);
+    }
+    if (status == ZZ9K_STATUS_OK) {
+      status = zz9k_alloc_shared(ctx, ZZ9K_CRYPTO_AES128_KEY_BYTES, 16U, 0,
+                                 &key);
+    }
+    if (status == ZZ9K_STATUS_OK) {
+      status = zz9k_alloc_shared(ctx, ZZ9K_CRYPTO_AES_GCM_NONCE_BYTES, 16U, 0,
+                                 &nonce);
+    }
+    if (status == ZZ9K_STATUS_OK) {
+      have_buffers = 1;
+      zz9k_cryptobench_fill_pattern((uint8_t *)input.data,
+                                    ZZ9K_CRYPTOBENCH_MAX_RECORD_BYTES);
+      memcpy((void *)key.data, zz9k_cryptobench_aes_key,
+             ZZ9K_CRYPTO_AES128_KEY_BYTES);
+      zz9k_cryptobench_fill_pattern((uint8_t *)nonce.data,
+                                    ZZ9K_CRYPTO_AES_GCM_NONCE_BYTES);
+    }
+  }
+
+  printf("\nAES-128-GCM record cipher (%lu iterations/size, batch depth %lu)\n",
+         (unsigned long)iterations,
+         (unsigned long)ZZ9K_CRYPTOBENCH_GCM_BATCH);
+  printf("%6s  %10s  %10s  %12s\n", "bytes", "soft KiB/s", "sync KiB/s",
+         "batch KiB/s");
+  for (i = 0; i < ZZ9K_CRYPTOBENCH_SWEEP_COUNT; i++) {
+    uint32_t soft = zz9k_cryptobench_aes_gcm_software_rate(
+        timer, sizes[i], iterations, plaintext, ciphertext);
+    if (have_buffers) {
+      uint32_t sync = zz9k_cryptobench_aes_gcm_offload_rate(
+          ctx, timer, sizes[i], iterations, &input, &output, &key, &nonce);
+      uint32_t batch = zz9k_cryptobench_aes_gcm_batch_rate(
+          ctx, timer, sizes[i], iterations, &input, &output, &key, &nonce);
+      printf("%6lu  %10lu  %10lu  %12lu\n", (unsigned long)sizes[i],
+             (unsigned long)soft, (unsigned long)sync, (unsigned long)batch);
+    } else {
+      printf("%6lu  %10lu  %10s  %12s\n", (unsigned long)sizes[i],
+             (unsigned long)soft, "-", "-");
+    }
+  }
+
+  if (nonce.handle != 0 && nonce.handle != ZZ9K_INVALID_HANDLE) {
+    zz9k_free_shared(ctx, nonce.handle);
+  }
+  if (key.handle != 0 && key.handle != ZZ9K_INVALID_HANDLE) {
+    zz9k_free_shared(ctx, key.handle);
+  }
+  if (output.handle != 0 && output.handle != ZZ9K_INVALID_HANDLE) {
+    zz9k_free_shared(ctx, output.handle);
+  }
+  if (input.handle != 0 && input.handle != ZZ9K_INVALID_HANDLE) {
+    zz9k_free_shared(ctx, input.handle);
+  }
+}
+
 static int zz9k_cryptobench_run_offload_sweep(
     ZZ9KContext *ctx, const ZZ9KCryptoBenchTimer *timer, uint32_t iterations,
     const uint32_t *sizes, const uint32_t *software_kib,
@@ -1075,6 +1272,10 @@ int main(int argc, char **argv)
       }
       zz9k_cryptobench_report_asym(soft, off, note);
     }
+
+    zz9k_cryptobench_run_aes_gcm(
+        ctx, &timer, iterations, sizes, plaintext, ciphertext,
+        crypto_ok && (svc_flags & ZZ9K_SERVICE_FLAG_CRYPTO_AES_GCM) != 0U);
   }
 
   if (ctx) {
