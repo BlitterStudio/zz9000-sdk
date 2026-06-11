@@ -576,8 +576,10 @@ static void fe25519_mul(fe25519 h, const fe25519 f, const fe25519 g) {
   h[5]=(uint32_t)r5;h[6]=(uint32_t)r6;h[7]=(uint32_t)r7;h[8]=(uint32_t)r8;h[9]=(uint32_t)r9;
 }
 static void fe25519_sq(fe25519 h, const fe25519 f) { fe25519_mul(h, f, f); }
-/* Multiply by a24 = (486662-2)/4 = 121665, the Montgomery ladder constant. */
-static void fe25519_mul_121666(fe25519 h, const fe25519 f) {
+/* Multiply by a24 = (486662-2)/4 = 121665, the Montgomery ladder constant.
+ * (Not ref10's fe_mul121666 -- that belongs to a differently arranged
+ * ladder step; this AA + a24*E formulation uses 121665.) */
+static void fe25519_mul_a24(fe25519 h, const fe25519 f) {
   int i; int64_t carry;
   int64_t t[10]; for(i=0;i<10;i++) t[i]=(int64_t)f[i]*121665;
   carry=t[9]>>25; t[0]+=19*carry; t[9]&=0x1ffffff;
@@ -637,7 +639,7 @@ static void x25519_ladder(const uint8_t *k, const uint8_t *u, uint8_t *out)
     fe25519_add(tmp,DA,CB); fe25519_sq(x3,tmp);
     fe25519_sub(tmp,DA,CB); fe25519_sq(z3,tmp); fe25519_mul(z3,z3,x1);
     fe25519_mul(x2,AA,BB);
-    fe25519_mul_121666(tmp,E); fe25519_add(tmp,AA,tmp);
+    fe25519_mul_a24(tmp,E); fe25519_add(tmp,AA,tmp);
     fe25519_mul(z2,E,tmp);
   }
   fe25519_cswap(x2,x3,swap); fe25519_cswap(z2,z3,swap);
