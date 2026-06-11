@@ -1,0 +1,75 @@
+# Build amissl.library with the ZZ9000 crypto-offload provider compiled in
+# (Path A). Mirrors AmiSSL's own CI environment (ubuntu + adtools), which is the
+# proven way to build AmiSSL + OpenSSL 3.x from source with the m68k toolchain —
+# a clean Linux/ext4 checkout avoids the CRLF/inode/PATH pitfalls of a local
+# Docker build. The result is a drop-in library users copy into LIBS:.
+#
+# Trigger manually (Actions tab -> Run workflow) or on changes to the provider
+# or integration files. Artifacts: amissl-zz9000-<platform>.
+name: Build AmiSSL + ZZ9000 provider
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - amiga/provider/**
+      - host/src/zz9k_host.c
+      - tools/zz9k-crypto-soft.*
+      - integration/amissl/**
+      - .github/workflows/build-amissl-provider.yml
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [os3-68020, os3-68060]
+    steps:
+      - name: Checkout zz9000-sdk
+        uses: actions/checkout@v4
+        with:
+          path: zz9000-sdk
+
+      - name: Read pinned AmiSSL ref
+        id: amissl
+        run: echo "ref=$(cat zz9000-sdk/integration/amissl/AMISSL_REF)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout AmiSSL
+        uses: actions/checkout@v4
+        with:
+          repository: jens-maus/amissl
+          ref: ${{ steps.amissl.outputs.ref }}
+          path: amissl
+
+      - name: Setup dependencies
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update -y -qq || true
+          sudo apt-get -qq install libc6:i386
+          sudo ln -sf /usr/lib/x86_64-linux-gnu/libmpfr.so.6 \
+                      /usr/lib/x86_64-linux-gnu/libmpfr.so.4
+
+      - name: Install adtools build environment
+        run: |
+          DL=https://github.com/adtools/adtools/releases/download/20170213
+          DLU=https://github.com/adtools/adtools/releases/download/20220416
+          curl -L ${DLU}/adtools-utils.tar.bz2 | sudo tar xj -C /
+          curl -L ${DL}/adtools-m68k-amigaos.tar.bz2 | sudo tar xj -C /
+          echo "/usr/local/amiga/bin" >> "$GITHUB_PATH"
+          echo "/opt/m68k-amigaos/bin" >> "$GITHUB_PATH"
+
+      - name: Build amissl.library (${{ matrix.platform }})
+        run: |
+          AMISSL_DIR="$GITHUB_WORKSPACE/amissl" \
+          ZZ9000_SDK="$GITHUB_WORKSPACE/zz9000-sdk" \
+          OS=${{ matrix.platform }} \
+          bash zz9000-sdk/integration/amissl/build.sh
+
+      - name: Upload library artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: amissl-zz9000-${{ matrix.platform }}
+          path: amissl/build_${{ matrix.platform }}/amissl_v*.library
+          if-no-files-found: error

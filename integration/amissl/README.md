@@ -39,21 +39,36 @@ and only re-touch the patch if those two spots moved.
 
 ## Building
 
-Inside the m68k AmiSSL build environment (the
-`sacredbanana/amiga-compiler:m68k-amigaos` image has `m68k-amigaos-gcc`, `sfdc`,
-`clib2`, and `make`):
+### Recommended: GitHub Actions (`.github/workflows/build-amissl-provider.yml`)
 
-```sh
-# From the repository root, with an AmiSSL checkout beside it at ../amissl:
-docker run --rm \
-  -v "$PWD:/sdk" -v "$PWD/../amissl:/amissl" \
-  sacredbanana/amiga-compiler:m68k-amigaos \
-  sh -c 'AMISSL_DIR=/amissl ZZ9000_SDK=/sdk /sdk/integration/amissl/build.sh'
-```
+AmiSSL + OpenSSL 3.x build from source with an old m68k toolchain (adtools,
+gcc 2.95.3). That toolchain is finicky outside the exact environment AmiSSL's
+own CI uses, so the supported path is a workflow that mirrors it: an
+`ubuntu-24.04` runner, the adtools build env, a clean (LF, ext4) checkout of
+both this repo and AmiSSL at the pinned ref, `build.sh`, and an uploaded
+`amissl.library` artifact for `os3-68020` and `os3-68060`.
 
-Or let the script clone AmiSSL itself (drop `AMISSL_DIR` and the `../amissl`
-mount). The built library lands in `work/out/` (gitignored). `OS=os3` builds the
-m68k library; the other AmiSSL CPU targets (`os3-68020`, …) build the same way.
+Run it from the Actions tab ("Build AmiSSL + ZZ9000 provider" → Run workflow),
+or it runs automatically when the provider/integration files change. Download
+the artifact, and that's your drop-in library. This is the basis for cutting
+binary releases.
+
+### `build.sh` (used by the workflow; also for local builds)
+
+`build.sh` does the actual work — fetch/locate AmiSSL at `AMISSL_REF`, apply the
+patch, `make OS=os3-68020 ZZ9000_SDK=…`. It needs the adtools m68k toolchain on
+`PATH` (`/opt/m68k-amigaos/bin` for the cross-gcc, `/usr/local/amiga/bin` for
+`bumprev`/utils). `OS=os3-68020` (default) builds the 68020+ library;
+`OS=os3-68060` builds the 68060 one. Output lands in `work/out/` (gitignored).
+
+**Local-build caveats** (why CI is recommended): the adtools 2017 gcc is a 32-bit
+binary that overflows on Windows bind-mount inodes (`Value too large for defined
+data type`) — build on the container's own ext4 (copy sources off the mount).
+And it rejects `\`-continuations followed by CR, so a Windows (CRLF) checkout of
+AmiSSL must be normalised to LF (`dos2unix`) first. A Linux/ext4 checkout — what
+the workflow uses — has neither problem. (The `sacredbanana/amiga-compiler`
+image compiles the provider objects fine but is *not* a clean AmiSSL-from-source
+environment: its NDK conflicts with AmiSSL's `libcmt` and it lacks `bumprev`.)
 
 ## Installing and testing
 

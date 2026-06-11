@@ -17,7 +17,7 @@
 #   ZZ9000_SDK   path to the zz9000-sdk checkout      (default: repo root)
 #   AMISSL_DIR   use an existing AmiSSL checkout       (default: clone into work/)
 #   AMISSL_REPO  git URL to clone when AMISSL_DIR unset
-#   OS           AmiSSL build target                   (default: os3 = m68k)
+#   OS           AmiSSL build target                   (default: os3-68020 = m68k)
 #   WORK         scratch directory                     (default: integration/amissl/work)
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
@@ -27,7 +27,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 ZZ9000_SDK=${ZZ9000_SDK:-$(cd "$HERE/../.." && pwd)}
 AMISSL_REF=$(cat "$HERE/AMISSL_REF")
 AMISSL_REPO=${AMISSL_REPO:-https://github.com/jens-maus/amissl.git}
-OS=${OS:-os3}
+OS=${OS:-os3-68020}
 WORK=${WORK:-$HERE/work}
 PATCH="$HERE/amissl-zz9000.patch"
 
