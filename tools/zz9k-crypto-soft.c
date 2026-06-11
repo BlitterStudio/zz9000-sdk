@@ -1191,3 +1191,289 @@ int zz9k_soft_rsa_verify_pkcs1_sha256(const uint8_t *signature,
   }
   return 1;
 }
+
+/* ---- AES-128/256-GCM (FIPS-197 + NIST SP 800-38D) ----
+ *
+ * Compact correctness-first reference: byte-oriented AES (S-box + GF(2^8)
+ * MixColumns) and a bitwise GF(2^128) GHASH. The firmware offload uses
+ * BearSSL's constant-time aes_ct/ghash_ctmul; this software path is the KAT
+ * oracle and m68k fallback, validated against the NIST GCM test vectors.
+ */
+
+static const uint8_t zz9k_aes_sbox[256] = {
+  0x63,0x7c,0x77,0x7b,0xf2,0x6b,0x6f,0xc5,0x30,0x01,0x67,0x2b,0xfe,0xd7,0xab,0x76,
+  0xca,0x82,0xc9,0x7d,0xfa,0x59,0x47,0xf0,0xad,0xd4,0xa2,0xaf,0x9c,0xa4,0x72,0xc0,
+  0xb7,0xfd,0x93,0x26,0x36,0x3f,0xf7,0xcc,0x34,0xa5,0xe5,0xf1,0x71,0xd8,0x31,0x15,
+  0x04,0xc7,0x23,0xc3,0x18,0x96,0x05,0x9a,0x07,0x12,0x80,0xe2,0xeb,0x27,0xb2,0x75,
+  0x09,0x83,0x2c,0x1a,0x1b,0x6e,0x5a,0xa0,0x52,0x3b,0xd6,0xb3,0x29,0xe3,0x2f,0x84,
+  0x53,0xd1,0x00,0xed,0x20,0xfc,0xb1,0x5b,0x6a,0xcb,0xbe,0x39,0x4a,0x4c,0x58,0xcf,
+  0xd0,0xef,0xaa,0xfb,0x43,0x4d,0x33,0x85,0x45,0xf9,0x02,0x7f,0x50,0x3c,0x9f,0xa8,
+  0x51,0xa3,0x40,0x8f,0x92,0x9d,0x38,0xf5,0xbc,0xb6,0xda,0x21,0x10,0xff,0xf3,0xd2,
+  0xcd,0x0c,0x13,0xec,0x5f,0x97,0x44,0x17,0xc4,0xa7,0x7e,0x3d,0x64,0x5d,0x19,0x73,
+  0x60,0x81,0x4f,0xdc,0x22,0x2a,0x90,0x88,0x46,0xee,0xb8,0x14,0xde,0x5e,0x0b,0xdb,
+  0xe0,0x32,0x3a,0x0a,0x49,0x06,0x24,0x5c,0xc2,0xd3,0xac,0x62,0x91,0x95,0xe4,0x79,
+  0xe7,0xc8,0x37,0x6d,0x8d,0xd5,0x4e,0xa9,0x6c,0x56,0xf4,0xea,0x65,0x7a,0xae,0x08,
+  0xba,0x78,0x25,0x2e,0x1c,0xa6,0xb4,0xc6,0xe8,0xdd,0x74,0x1f,0x4b,0xbd,0x8b,0x8a,
+  0x70,0x3e,0xb5,0x66,0x48,0x03,0xf6,0x0e,0x61,0x35,0x57,0xb9,0x86,0xc1,0x1d,0x9e,
+  0xe1,0xf8,0x98,0x11,0x69,0xd9,0x8e,0x94,0x9b,0x1e,0x87,0xe9,0xce,0x55,0x28,0xdf,
+  0x8c,0xa1,0x89,0x0d,0xbf,0xe6,0x42,0x68,0x41,0x99,0x2d,0x0f,0xb0,0x54,0xbb,0x16
+};
+
+static const uint8_t zz9k_aes_rcon[10] = {
+  0x01,0x02,0x04,0x08,0x10,0x20,0x40,0x80,0x1b,0x36
+};
+
+/* Round keys in column-major form: rk[round][4*col + row]. nr = 10 or 14. */
+typedef struct {
+  uint8_t rk[15][16];
+  int nr;
+} zz9k_aes_ctx;
+
+static uint8_t zz9k_aes_gmul(uint8_t a, uint8_t b)
+{
+  uint8_t p = 0;
+  int i;
+  for (i = 0; i < 8; i++) {
+    if (b & 1U) p ^= a;
+    {
+      uint8_t hi = (uint8_t)(a & 0x80U);
+      a = (uint8_t)(a << 1);
+      if (hi) a ^= 0x1bU;
+    }
+    b = (uint8_t)(b >> 1);
+  }
+  return p;
+}
+
+/* Expand a 16- or 32-byte key. Returns 1 on success, 0 on bad key length. */
+static int zz9k_aes_init(zz9k_aes_ctx *c, const uint8_t *key, uint32_t key_len)
+{
+  uint8_t w[60][4];
+  int nk, nr, total, i, r, col, row;
+
+  if (key_len == 16U) { nk = 4; }
+  else if (key_len == 32U) { nk = 8; }
+  else { return 0; }
+  nr = nk + 6;
+  total = 4 * (nr + 1);
+  c->nr = nr;
+
+  for (i = 0; i < nk; i++) {
+    w[i][0] = key[4 * i];
+    w[i][1] = key[4 * i + 1];
+    w[i][2] = key[4 * i + 2];
+    w[i][3] = key[4 * i + 3];
+  }
+  for (i = nk; i < total; i++) {
+    uint8_t t[4];
+    t[0] = w[i - 1][0]; t[1] = w[i - 1][1];
+    t[2] = w[i - 1][2]; t[3] = w[i - 1][3];
+    if ((i % nk) == 0) {
+      uint8_t tmp = t[0];                 /* RotWord then SubWord */
+      t[0] = (uint8_t)(zz9k_aes_sbox[t[1]] ^ zz9k_aes_rcon[i / nk - 1]);
+      t[1] = zz9k_aes_sbox[t[2]];
+      t[2] = zz9k_aes_sbox[t[3]];
+      t[3] = zz9k_aes_sbox[tmp];
+    } else if (nk > 6 && (i % nk) == 4) {
+      t[0] = zz9k_aes_sbox[t[0]];
+      t[1] = zz9k_aes_sbox[t[1]];
+      t[2] = zz9k_aes_sbox[t[2]];
+      t[3] = zz9k_aes_sbox[t[3]];
+    }
+    w[i][0] = (uint8_t)(w[i - nk][0] ^ t[0]);
+    w[i][1] = (uint8_t)(w[i - nk][1] ^ t[1]);
+    w[i][2] = (uint8_t)(w[i - nk][2] ^ t[2]);
+    w[i][3] = (uint8_t)(w[i - nk][3] ^ t[3]);
+  }
+  for (r = 0; r <= nr; r++) {
+    for (col = 0; col < 4; col++) {
+      for (row = 0; row < 4; row++) {
+        c->rk[r][4 * col + row] = w[4 * r + col][row];
+      }
+    }
+  }
+  return 1;
+}
+
+static void zz9k_aes_encrypt_block(const zz9k_aes_ctx *c,
+                                   const uint8_t in[16], uint8_t out[16])
+{
+  uint8_t s[16];
+  int round, i, col;
+
+  for (i = 0; i < 16; i++) s[i] = (uint8_t)(in[i] ^ c->rk[0][i]);
+
+  for (round = 1; round <= c->nr; round++) {
+    uint8_t t[16];
+    /* SubBytes */
+    for (i = 0; i < 16; i++) s[i] = zz9k_aes_sbox[s[i]];
+    /* ShiftRows (column-major: index = 4*col + row) */
+    for (col = 0; col < 4; col++) {
+      for (i = 0; i < 4; i++) {       /* i = row */
+        t[4 * col + i] = s[4 * ((col + i) & 3) + i];
+      }
+    }
+    if (round != c->nr) {
+      /* MixColumns */
+      for (col = 0; col < 4; col++) {
+        uint8_t a0 = t[4 * col + 0], a1 = t[4 * col + 1];
+        uint8_t a2 = t[4 * col + 2], a3 = t[4 * col + 3];
+        s[4 * col + 0] = (uint8_t)(zz9k_aes_gmul(2, a0) ^ zz9k_aes_gmul(3, a1) ^
+                                   a2 ^ a3);
+        s[4 * col + 1] = (uint8_t)(a0 ^ zz9k_aes_gmul(2, a1) ^
+                                   zz9k_aes_gmul(3, a2) ^ a3);
+        s[4 * col + 2] = (uint8_t)(a0 ^ a1 ^ zz9k_aes_gmul(2, a2) ^
+                                   zz9k_aes_gmul(3, a3));
+        s[4 * col + 3] = (uint8_t)(zz9k_aes_gmul(3, a0) ^ a1 ^ a2 ^
+                                   zz9k_aes_gmul(2, a3));
+      }
+    } else {
+      for (i = 0; i < 16; i++) s[i] = t[i];
+    }
+    /* AddRoundKey */
+    for (i = 0; i < 16; i++) s[i] ^= c->rk[round][i];
+  }
+  for (i = 0; i < 16; i++) out[i] = s[i];
+}
+
+/* GF(2^128) multiply per SP 800-38D: x = x . h (both 16-byte, big-endian). */
+static void zz9k_ghash_mul(uint8_t x[16], const uint8_t h[16])
+{
+  uint8_t z[16];
+  uint8_t v[16];
+  int i, bit;
+
+  for (i = 0; i < 16; i++) { z[i] = 0; v[i] = h[i]; }
+  for (i = 0; i < 128; i++) {
+    if ((x[i >> 3] >> (7 - (i & 7))) & 1U) {     /* bit i of x, MSB first */
+      int j;
+      for (j = 0; j < 16; j++) z[j] ^= v[j];
+    }
+    bit = v[15] & 1U;                            /* LSB of v */
+    {
+      int j;
+      for (j = 15; j > 0; j--) {
+        v[j] = (uint8_t)((v[j] >> 1) | (v[j - 1] << 7));
+      }
+      v[0] = (uint8_t)(v[0] >> 1);
+    }
+    if (bit) v[0] ^= 0xe1U;                       /* reduction R */
+  }
+  for (i = 0; i < 16; i++) x[i] = z[i];
+}
+
+/* Fold `len` bytes of `data` into the GHASH accumulator `y` (16-byte blocks,
+ * zero-padded). */
+static void zz9k_ghash_update(uint8_t y[16], const uint8_t h[16],
+                              const uint8_t *data, uint32_t len)
+{
+  uint32_t off = 0;
+  while (off < len) {
+    uint8_t block[16];
+    uint32_t n = len - off;
+    uint32_t i;
+    if (n > 16U) n = 16U;
+    for (i = 0; i < 16U; i++) block[i] = (i < n) ? data[off + i] : 0U;
+    for (i = 0; i < 16U; i++) y[i] ^= block[i];
+    zz9k_ghash_mul(y, h);
+    off += n;
+  }
+}
+
+static void zz9k_put_be32_local(uint8_t *p, uint32_t v)
+{
+  p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16);
+  p[2] = (uint8_t)(v >> 8);  p[3] = (uint8_t)v;
+}
+
+/* Core GCM: derive H, J0, tag mask, run CTR over in->out, compute the tag.
+ * `ct` points at the ciphertext for GHASH (== out for encrypt, == in for
+ * decrypt), since GHASH is always computed over the ciphertext. */
+static void zz9k_aes_gcm_core(const zz9k_aes_ctx *c,
+                              const uint8_t nonce[12],
+                              const uint8_t *aad, uint32_t aad_length,
+                              const uint8_t *in, uint8_t *out, uint32_t length,
+                              const uint8_t *ct, uint8_t tag[16])
+{
+  uint8_t h[16];
+  uint8_t j0[16];
+  uint8_t y[16];
+  uint8_t counter[16];
+  uint8_t ks[16];
+  uint8_t lenblk[16];
+  uint8_t zero[16];
+  uint32_t off, i;
+
+  for (i = 0; i < 16U; i++) zero[i] = 0;
+  zz9k_aes_encrypt_block(c, zero, h);            /* H = E(0) */
+
+  for (i = 0; i < 12U; i++) j0[i] = nonce[i];    /* J0 = IV || 0^31 1 */
+  j0[12] = 0; j0[13] = 0; j0[14] = 0; j0[15] = 1;
+
+  /* CTR encryption starting from inc32(J0). */
+  for (i = 0; i < 16U; i++) counter[i] = j0[i];
+  off = 0;
+  while (off < length) {
+    uint32_t ctr = ((uint32_t)counter[12] << 24) | ((uint32_t)counter[13] << 16) |
+                   ((uint32_t)counter[14] << 8) | (uint32_t)counter[15];
+    uint32_t n = length - off;
+    if (n > 16U) n = 16U;
+    zz9k_put_be32_local(&counter[12], ctr + 1U);
+    zz9k_aes_encrypt_block(c, counter, ks);
+    for (i = 0; i < n; i++) out[off + i] = (uint8_t)(in[off + i] ^ ks[i]);
+    off += n;
+  }
+
+  /* GHASH(AAD || C || len(AAD)||len(C)). */
+  for (i = 0; i < 16U; i++) y[i] = 0;
+  zz9k_ghash_update(y, h, aad, aad_length);
+  zz9k_ghash_update(y, h, ct, length);
+  zz9k_put_be32_local(&lenblk[0], 0U);
+  zz9k_put_be32_local(&lenblk[4], aad_length * 8U);
+  zz9k_put_be32_local(&lenblk[8], 0U);
+  zz9k_put_be32_local(&lenblk[12], length * 8U);
+  for (i = 0; i < 16U; i++) y[i] ^= lenblk[i];
+  zz9k_ghash_mul(y, h);
+
+  /* Tag = GHASH ^ E(J0). */
+  zz9k_aes_encrypt_block(c, j0, ks);
+  for (i = 0; i < 16U; i++) tag[i] = (uint8_t)(y[i] ^ ks[i]);
+}
+
+int zz9k_soft_aes_gcm_encrypt(uint8_t *ciphertext,
+                              uint8_t tag[ZZ9K_SOFT_AES_GCM_TAG_BYTES],
+                              const uint8_t *plaintext, uint32_t length,
+                              const uint8_t *aad, uint32_t aad_length,
+                              const uint8_t *key, uint32_t key_length,
+                              const uint8_t nonce[ZZ9K_SOFT_AES_GCM_NONCE_BYTES])
+{
+  zz9k_aes_ctx c;
+  if (!zz9k_aes_init(&c, key, key_length)) return 0;
+  zz9k_aes_gcm_core(&c, nonce, aad, aad_length, plaintext, ciphertext, length,
+                    ciphertext, tag);
+  return 1;
+}
+
+int zz9k_soft_aes_gcm_decrypt(uint8_t *plaintext,
+                              const uint8_t *ciphertext, uint32_t length,
+                              const uint8_t *aad, uint32_t aad_length,
+                              const uint8_t tag[ZZ9K_SOFT_AES_GCM_TAG_BYTES],
+                              const uint8_t *key, uint32_t key_length,
+                              const uint8_t nonce[ZZ9K_SOFT_AES_GCM_NONCE_BYTES])
+{
+  zz9k_aes_ctx c;
+  uint8_t expected[16];
+  uint8_t diff = 0;
+  uint32_t i;
+
+  if (!zz9k_aes_init(&c, key, key_length)) return 0;
+  /* CTR over ciphertext->plaintext; GHASH over the ciphertext input. */
+  zz9k_aes_gcm_core(&c, nonce, aad, aad_length, ciphertext, plaintext, length,
+                    ciphertext, expected);
+  for (i = 0; i < 16U; i++) diff |= (uint8_t)(expected[i] ^ tag[i]);
+  if (diff != 0U) {
+    for (i = 0; i < length; i++) plaintext[i] = 0;  /* withhold on failure */
+    return 0;
+  }
+  return 1;
+}

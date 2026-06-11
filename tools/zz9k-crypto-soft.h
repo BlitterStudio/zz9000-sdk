@@ -124,6 +124,36 @@ int zz9k_soft_rsa_verify_pkcs1_sha256(const uint8_t *signature,
                                       uint32_t n_bits,
                                       uint32_t e);
 
+/* ---- AES-128/256-GCM (NIST SP 800-38D) ---- */
+
+#define ZZ9K_SOFT_AES_GCM_NONCE_BYTES 12U /* 96-bit IV */
+#define ZZ9K_SOFT_AES_GCM_TAG_BYTES   16U
+
+/*
+ * AES-GCM authenticated encryption. `key_length` is 16 (AES-128) or 32
+ * (AES-256); `nonce` is 12 bytes. Writes `length` ciphertext bytes to
+ * `ciphertext` and the 16-byte authentication tag to `tag`. `aad` may be NULL
+ * when `aad_length` is 0. Returns 1 on success, 0 on a bad key length.
+ */
+int zz9k_soft_aes_gcm_encrypt(uint8_t *ciphertext,
+                              uint8_t tag[ZZ9K_SOFT_AES_GCM_TAG_BYTES],
+                              const uint8_t *plaintext, uint32_t length,
+                              const uint8_t *aad, uint32_t aad_length,
+                              const uint8_t *key, uint32_t key_length,
+                              const uint8_t nonce[ZZ9K_SOFT_AES_GCM_NONCE_BYTES]);
+
+/*
+ * AES-GCM authenticated decryption. Verifies `tag` in constant time before
+ * releasing plaintext. Returns 1 if the tag is valid (and `plaintext` holds
+ * the result), 0 on tag mismatch or bad key length (no plaintext released).
+ */
+int zz9k_soft_aes_gcm_decrypt(uint8_t *plaintext,
+                              const uint8_t *ciphertext, uint32_t length,
+                              const uint8_t *aad, uint32_t aad_length,
+                              const uint8_t tag[ZZ9K_SOFT_AES_GCM_TAG_BYTES],
+                              const uint8_t *key, uint32_t key_length,
+                              const uint8_t nonce[ZZ9K_SOFT_AES_GCM_NONCE_BYTES]);
+
 #ifdef __cplusplus
 }
 #endif
