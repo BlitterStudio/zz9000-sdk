@@ -74,6 +74,8 @@ static const OSSL_ALGORITHM *zz9k_query_operation(void *provctx,
     return zz9k_keymgmt_algorithms;
   case OSSL_OP_KEYEXCH:
     return zz9k_keyexch_algorithms;
+  case OSSL_OP_CIPHER:
+    return zz9k_cipher_algorithms;
   default:
     return NULL;
   }

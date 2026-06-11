@@ -35,6 +35,7 @@ int zz9k_prov_x25519(unsigned char out[32], const unsigned char scalar[32],
 /* Algorithm tables advertised by the provider's query-operation callback. */
 extern const OSSL_ALGORITHM zz9k_keymgmt_algorithms[];
 extern const OSSL_ALGORITHM zz9k_keyexch_algorithms[];
+extern const OSSL_ALGORITHM zz9k_cipher_algorithms[];
 
 #ifdef __cplusplus
 }
