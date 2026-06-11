@@ -294,7 +294,7 @@ static int test_service_flag_names(void)
 
 static int test_service_flag_iteration(void)
 {
-  if (zz9k_known_service_flag_count(ZZ9K_SERVICE_CRYPTO) != 4U) {
+  if (zz9k_known_service_flag_count(ZZ9K_SERVICE_CRYPTO) != 5U) {
     return 1;
   }
   if (zz9k_known_service_flag(ZZ9K_SERVICE_CRYPTO, 0) !=
@@ -305,8 +305,19 @@ static int test_service_flag_iteration(void)
       ZZ9K_SERVICE_FLAG_ZERO_COPY) {
     return 3;
   }
-  if (zz9k_known_service_flag(ZZ9K_SERVICE_CRYPTO, 4) != 0U) {
+  if (zz9k_known_service_flag(ZZ9K_SERVICE_CRYPTO, 4) !=
+      ZZ9K_SERVICE_FLAG_CRYPTO_X25519) {
     return 4;
+  }
+  if (zz9k_known_service_flag(ZZ9K_SERVICE_CRYPTO, 5) != 0U) {
+    return 40;
+  }
+  if (zz9k_service_flag_name(ZZ9K_SERVICE_CRYPTO,
+                             ZZ9K_SERVICE_FLAG_CRYPTO_X25519) == 0 ||
+      strcmp(zz9k_service_flag_name(ZZ9K_SERVICE_CRYPTO,
+                                    ZZ9K_SERVICE_FLAG_CRYPTO_X25519),
+             "x25519") != 0) {
+    return 41;
   }
   if (zz9k_known_service_flag_count(ZZ9K_SERVICE_IMAGE) != 15U) {
     return 5;

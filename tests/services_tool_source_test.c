@@ -103,6 +103,7 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "ZZ9K_SERVICE_FLAG_IMAGE_RGB888_OUTPUT");
   ok &= expect_contains(source, "ZZ9K_SERVICE_FLAG_CODEC_LZMA2");
   ok &= expect_contains(source, "ZZ9K_SERVICE_FLAG_AUDIO_MP3_STREAM");
+  ok &= expect_contains(source, "ZZ9K_SERVICE_FLAG_CRYPTO_X25519");
 
   free(source);
   return ok ? 0 : 1;

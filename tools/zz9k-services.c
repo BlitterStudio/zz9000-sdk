@@ -98,9 +98,10 @@ static const ReleaseServiceRequirement release_services[] = {
   {
     ZZ9K_SERVICE_CRYPTO,
     ZZ9K_CAP_CRYPTO,
-    ZZ9K_SERVICE_FLAG_FIRMWARE,
+    ZZ9K_SERVICE_FLAG_FIRMWARE |
+      ZZ9K_SERVICE_FLAG_CRYPTO_X25519,
     ZZ9K_SERVICE_CRYPTO,
-    3U
+    4U
   },
   {
     ZZ9K_SERVICE_DIAG,

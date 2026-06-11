@@ -152,6 +152,9 @@ static inline uint32_t zz9k_known_service_flag_count(uint32_t service_id)
   if (service_id == ZZ9K_SERVICE_CODEC) {
     return 17U;
   }
+  if (service_id == ZZ9K_SERVICE_CRYPTO) {
+    return 5U;
+  }
   return 4U;
 }
 
@@ -245,6 +248,15 @@ static inline uint32_t zz9k_known_service_flag(uint32_t service_id,
       return ZZ9K_SERVICE_FLAG_AUDIO_PCM16_STEREO;
     case 8:
       return ZZ9K_SERVICE_FLAG_AUDIO_MP3_STREAM;
+    default:
+      return 0U;
+    }
+  }
+
+  if (service_id == ZZ9K_SERVICE_CRYPTO) {
+    switch (index) {
+    case 4:
+      return ZZ9K_SERVICE_FLAG_CRYPTO_X25519;
     default:
       return 0U;
     }
@@ -389,6 +401,15 @@ static inline const char *zz9k_service_flag_name(uint32_t service_id,
       return "pcm16-stereo";
     case ZZ9K_SERVICE_FLAG_AUDIO_MP3_STREAM:
       return "mp3-stream";
+    default:
+      return 0;
+    }
+  }
+
+  if (service_id == ZZ9K_SERVICE_CRYPTO) {
+    switch (service_flag) {
+    case ZZ9K_SERVICE_FLAG_CRYPTO_X25519:
+      return "x25519";
     default:
       return 0;
     }
