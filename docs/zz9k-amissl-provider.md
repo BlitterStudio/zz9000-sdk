@@ -67,42 +67,74 @@ host unit tests. Two things make them use the hardware:
 ## Building an application
 
 Compile the provider objects together with your program and define
-`ZZ9K_PROVIDER_OFFLOAD`. Using the `sacredbanana/amiga-compiler:m68k-amigaos`
-image and an AmiSSL SDK checkout at `$AMISSL`:
+`ZZ9K_PROVIDER_OFFLOAD`. The build splits into two groups:
+
+* **OpenSSL-touching objects** (the provider operation files plus your
+  application) must be forced to include `<proto/amissl.h>` so every OpenSSL
+  call is redirected to the AmiSSL library. The simplest way is `-include
+  proto/amissl.h` on the command line, which avoids editing the portable
+  provider sources. AmiSSL must be opened with `AmiSSL_UsesOpenSSLStructs = TRUE`
+  at run time because the provider allocates non-opaque OpenSSL structures
+  directly (see registration below). No `-lcrypto`/`-lssl` is needed — the
+  redirected calls inline to `jsr` through the library base.
+* **Pure-SDK objects** (`zz9k_offload.c`, the SDK host implementation
+  `host/src/zz9k_host.c`, and the software reference `tools/zz9k-crypto-soft.c`)
+  use no OpenSSL and compile without the force-include.
+
+The `sacredbanana/amiga-compiler:m68k-amigaos` image already ships the AmiSSL
+SDK (headers and `libamisslauto.a`), so no separate `-I$AMISSL` is required.
+From the SDK root:
 
 ```sh
 CC=m68k-amigaos-gcc
-INC="-I$AMISSL/include -Iinclude -Ihost/include -Itools -Iamiga/provider"
-DEF="-DZZ9K_PROVIDER_OFFLOAD"
+INC="-Iinclude -Ihost/include -Itools -Iamiga/provider"
+CF="-noixemul -O2 -DZZ9K_PROVIDER_OFFLOAD"
 
-# Provider + offload + software reference (compile once, link into the app).
-$CC -noixemul -O2 $DEF $INC -c \
-    amiga/provider/zz9k_provider.c \
-    amiga/provider/zz9k_algorithms.c \
-    amiga/provider/zz9k_x25519.c \
-    amiga/provider/zz9k_aead.c \
-    amiga/provider/zz9k_ecdsa.c \
-    amiga/provider/zz9k_rsa.c \
-    amiga/provider/zz9k_offload.c \
-    amiga/provider/zz9k_amissl.c \
-    tools/zz9k-crypto-soft.c
+# Provider + application (OpenSSL): force-include the AmiSSL proto.
+for f in zz9k_provider zz9k_algorithms zz9k_x25519 zz9k_aead zz9k_ecdsa \
+         zz9k_rsa zz9k_amissl zz9k_amissl_selftest; do
+    $CC $CF -include proto/amissl.h $INC -c amiga/provider/$f.c -o $f.o
+done
+
+# Pure-SDK objects: no OpenSSL, no force-include.
+$CC $CF $INC -c amiga/provider/zz9k_offload.c -o zz9k_offload.o
+$CC $CF $INC -c host/src/zz9k_host.c           -o zz9k_host.o
+$CC $CF $INC -c tools/zz9k-crypto-soft.c       -o zz9k_crypto_soft.o
+
+# Link (manual AmiSSL model — the bases are opened by the program).
+$CC -noixemul -o zz9k_selftest *.o
 ```
 
-Link the resulting objects with your application and the ZZ9000 SDK library
-(`amiga/`), AmiSSL, and bsdsocket — exactly as a normal AmiSSL program links.
-The provider adds no link dependencies of its own beyond the SDK.
+This is exactly how the bundled self-test (`zz9k_amissl_selftest.c`) is built;
+running the block above produces a `loadseg()`able AmigaOS executable. For your
+own application, swap `zz9k_amissl_selftest.c` for your sources and link them in
+the same way.
 
 ## Registering the provider
 
-Call `zz9k_amissl_register()` once, **after** a successful `InitAmiSSL()` and
+Call `zz9k_amissl_register()` once, **after** AmiSSL is open and initialised and
 **before** any crypto. It registers the built-in provider, loads it alongside
 the default provider (kept for fallback), and sets the default property query to
-`?provider=zz9000` so ordinary EVP calls prefer the hardware:
+`?provider=zz9000` so ordinary EVP calls prefer the hardware.
+
+Open AmiSSL with `AmiSSL_UsesOpenSSLStructs = TRUE` and fetch **both** the main
+(`AmiSSLBase`) and extension (`AmiSSLExtBase`, which carries the
+`OSSL_PROVIDER_*` API) library bases. The `OpenAmiSSLTags()` call does this in
+one step (m68k shown):
 
 ```c
+#include <proto/amisslmaster.h>
 #include "zz9k_amissl.h"
 
-/* ... open libraries, OpenAmiSSL(), InitAmiSSL() ... */
+struct Library *AmiSSLBase, *AmiSSLExtBase;   /* externed by proto/amissl.h */
+
+OpenAmiSSLTags(AMISSL_CURRENT_VERSION,
+               AmiSSL_UsesOpenSSLStructs, TRUE,
+               AmiSSL_GetAmiSSLBase,    (ULONG)&AmiSSLBase,
+               AmiSSL_GetAmiSSLExtBase, (ULONG)&AmiSSLExtBase,
+               AmiSSL_SocketBase,       (ULONG)SocketBase,
+               AmiSSL_ErrNoPtr,         (ULONG)&errno,
+               TAG_DONE);
 
 if (!zz9k_amissl_register()) {
     /* registration failed — nothing is left registered; you can still run
@@ -111,13 +143,13 @@ if (!zz9k_amissl_register()) {
 
 /* ... use AmiSSL normally; offloadable operations now go to the ZZ9000 ... */
 
-zz9k_amissl_unregister();   /* before CleanupAmiSSL() */
-CleanupAmiSSLA(NULL);
+zz9k_amissl_unregister();   /* before CloseAmiSSL() */
+CloseAmiSSL();              /* also calls CleanupAmiSSL() */
 ```
 
 No other application change is required: existing `EVP_*`, `SSL_*` and
 `TLS` code transparently picks up the provider through the default property
-query.
+query. `zz9k_amissl_selftest.c` is a complete worked example of this sequence.
 
 ## Verifying on hardware
 

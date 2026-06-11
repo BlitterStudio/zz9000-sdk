@@ -17,6 +17,11 @@
  * software reference, so a correct round trip means the ZZ9000 produced a
  * standards-conformant ciphertext and tag — no memorised test vector needed.
  *
+ * AmiSSL is opened with AmiSSL_UsesOpenSSLStructs = TRUE because the provider
+ * allocates non-opaque OpenSSL structures (OSSL_PARAM / OSSL_DISPATCH /
+ * OSSL_ALGORITHM) directly. Both the main (AmiSSLBase) and extension
+ * (AmiSSLExtBase, which carries OSSL_PROVIDER_*) bases are fetched.
+ *
  * Build it together with the provider objects and define ZZ9K_PROVIDER_OFFLOAD;
  * see docs/zz9k-amissl-provider.md for the full command line.
  *
@@ -25,7 +30,6 @@
 
 #include <proto/exec.h>
 #include <proto/dos.h>
-#include <proto/utility.h>
 #include <proto/socket.h>
 #include <proto/amissl.h>
 #include <proto/amisslmaster.h>
@@ -43,15 +47,11 @@
 
 #include "zz9k_amissl.h"
 
-struct Library *AmiSSLMasterBase, *AmiSSLBase, *SocketBase, *UtilityBase;
-#ifdef __amigaos4__
-struct AmiSSLIFace *IAmiSSL;
-struct AmiSSLMasterIFace *IAmiSSLMaster;
-struct SocketIFace *ISocket;
-struct UtilityIFace *IUtility;
-#endif
+/* Library bases. proto/amissl.h externs AmiSSLBase and AmiSSLExtBase; this
+ * translation unit provides their single definition. */
+struct Library *AmiSSLMasterBase, *AmiSSLBase, *AmiSSLExtBase, *SocketBase;
 
-static int amissl_ready = 0;
+static int amissl_open = 0;
 
 static const char *provider_of_cipher(EVP_CIPHER *c)
 {
@@ -150,83 +150,56 @@ static int run_tests(void)
   return ok;
 }
 
+static int init_amissl(void)
+{
+  if (!(SocketBase = OpenLibrary((STRPTR)"bsdsocket.library", 4))) {
+    printf("Couldn't open bsdsocket.library v4\n");
+    return 0;
+  }
+  if (!(AmiSSLMasterBase = OpenLibrary((STRPTR)"amisslmaster.library",
+                                       AMISSLMASTER_MIN_VERSION))) {
+    printf("Couldn't open amisslmaster.library\n");
+    return 0;
+  }
+  /* OpenAmiSSLTags opens + initialises AmiSSL and returns both library bases.
+   * UsesOpenSSLStructs TRUE: the provider references non-opaque OpenSSL structs
+   * directly. CloseAmiSSL() later undoes all of this. */
+  if (OpenAmiSSLTags(AMISSL_CURRENT_VERSION,
+                     AmiSSL_UsesOpenSSLStructs, TRUE,
+                     AmiSSL_GetAmiSSLBase, (ULONG)&AmiSSLBase,
+                     AmiSSL_GetAmiSSLExtBase, (ULONG)&AmiSSLExtBase,
+                     AmiSSL_SocketBase, (ULONG)SocketBase,
+                     AmiSSL_ErrNoPtr, (ULONG)&errno,
+                     TAG_DONE) != 0) {
+    printf("Couldn't open and initialise AmiSSL\n");
+    return 0;
+  }
+  amissl_open = 1;
+  return 1;
+}
+
 static void cleanup(void)
 {
   zz9k_amissl_unregister();
-  if (amissl_ready) {
-    CleanupAmiSSLA(NULL);
-    amissl_ready = 0;
+  if (amissl_open) {
+    CloseAmiSSL();   /* also calls CleanupAmiSSL() */
+    amissl_open = 0;
   }
-#ifdef __amigaos4__
-  if (IAmiSSL) DropInterface((struct Interface *)IAmiSSL);
-#endif
-  if (AmiSSLBase) { CloseAmiSSL(); AmiSSLBase = NULL; }
-#ifdef __amigaos4__
-  if (IAmiSSLMaster) DropInterface((struct Interface *)IAmiSSLMaster);
-#endif
   if (AmiSSLMasterBase) { CloseLibrary(AmiSSLMasterBase); AmiSSLMasterBase = NULL; }
-#ifdef __amigaos4__
-  if (ISocket) DropInterface((struct Interface *)ISocket);
-#endif
   if (SocketBase) { CloseLibrary(SocketBase); SocketBase = NULL; }
-#ifdef __amigaos4__
-  if (IUtility) DropInterface((struct Interface *)IUtility);
-#endif
-  if (UtilityBase) { CloseLibrary(UtilityBase); UtilityBase = NULL; }
 }
 
 int main(void)
 {
   int rc = 20;
 
-  if (!(UtilityBase = OpenLibrary("utility.library", 37))) {
-    printf("Couldn't open utility.library\n");
+  if (!init_amissl()) {
     goto out;
   }
-  if (!(SocketBase = OpenLibrary("bsdsocket.library", 4))) {
-    printf("Couldn't open bsdsocket.library v4\n");
-    goto out;
-  }
-  if (!(AmiSSLMasterBase = OpenLibrary("amisslmaster.library",
-                                       AMISSLMASTER_MIN_VERSION))) {
-    printf("Couldn't open amisslmaster.library\n");
-    goto out;
-  }
-#ifdef __amigaos4__
-  if (!(IUtility = (struct UtilityIFace *)GetInterface(UtilityBase, "main", 1, NULL)) ||
-      !(ISocket = (struct SocketIFace *)GetInterface(SocketBase, "main", 1, NULL)) ||
-      !(IAmiSSLMaster = (struct AmiSSLMasterIFace *)GetInterface(AmiSSLMasterBase, "main", 1, NULL))) {
-    printf("Couldn't get OS4 interfaces\n");
-    goto out;
-  }
-#endif
-  if (!InitAmiSSLMaster(AMISSL_CURRENT_VERSION, TRUE)) {
-    printf("AmiSSL version is too old\n");
-    goto out;
-  }
-  if (!(AmiSSLBase = OpenAmiSSL())) {
-    printf("Couldn't open AmiSSL\n");
-    goto out;
-  }
-#ifdef __amigaos4__
-  if (!(IAmiSSL = (struct AmiSSLIFace *)GetInterface(AmiSSLBase, "main", 1, NULL))) {
-    printf("Couldn't get AmiSSL interface\n");
-    goto out;
-  }
-  if (InitAmiSSL(AmiSSL_ErrNoPtr, &errno, AmiSSL_ISocket, ISocket, TAG_DONE) != 0) {
-#else
-  if (InitAmiSSL(AmiSSL_ErrNoPtr, &errno, AmiSSL_SocketBase, SocketBase, TAG_DONE) != 0) {
-#endif
-    printf("Couldn't initialise AmiSSL\n");
-    goto out;
-  }
-  amissl_ready = 1;
-
   if (!zz9k_amissl_register()) {
     printf("Couldn't register the ZZ9000 provider\n");
     goto out;
   }
-
   rc = run_tests() ? 0 : 5;
 
 out:
