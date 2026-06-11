@@ -7,11 +7,12 @@ ZZ9000 ARM coprocessor. It records the economic reasoning behind the
 **handshake-first** roadmap and the Phase 0 benchmark plan that will replace the
 estimates below with hardware measurements.
 
-> Status: Phase 0 complete. Symmetric record sweep and mailbox round trip are
-> now measured on hardware (SDK ABI 2.0); see Measured results. The asymmetric
-> handshake costs remain first-order estimates, explicitly labelled, until a
-> firmware asymmetric service exists to benchmark. No firmware crypto additions
-> have been made yet.
+> Status: Phases 0-2 complete and measured on hardware (SDK ABI 2.0). The
+> symmetric record sweep, mailbox round trip, and the asymmetric handshake
+> primitives (X25519, P-256 ECDH, ECDSA-P256 verify, RSA-2048 verify) are all
+> measured; see Measured results. The firmware crypto service (BearSSL on the
+> ARM) advertises these via capability flags. Phase 3 (AES-GCM) and Phase 4
+> (OpenSSL provider) remain.
 
 ## Why offload, and where it pays
 
@@ -60,17 +61,19 @@ asymmetric service exists to benchmark.
 | Operation | Phase | m68k SW | ARM + mbox | Speedup | Per-op saving |
 |---|---|---|---|---|---|
 | X25519 scalar mult | handshake | 790.75 ms (meas.) | 6.36 ms (meas.) | 124x | 784 ms |
-| P-256 ECDHE/ECDSA-verify | handshake | ~700 ms (est.) | ~5 ms + 6.1 ms | ~63x | ~689 ms |
-| RSA-2048 verify (e=65537) | handshake | ~50 ms (est.) | ~0.6 ms + 6.1 ms | ~7.5x | ~43 ms |
+| P-256 ECDH | handshake | 9593 ms (meas.) | 12.25 ms (meas.) | 783x | 9581 ms |
+| ECDSA-P256 verify | handshake | 19123 ms (meas.) | 18.78 ms (meas.) | 1018x | 19104 ms |
+| RSA-2048 verify (e=65537) | handshake | 1379 ms (meas.) | 11.29 ms (meas.) | 122x | 1368 ms |
 | RSA-2048 sign (CRT) | handshake | ~1500 ms (est.) | ~10 ms + 6.1 ms | ~93x | ~1484 ms |
 | ChaCha20-Poly1305 16 KB record, sync | record | 162 KiB/s | 2539 KiB/s | 15.7x | measured |
 | ChaCha20-Poly1305 16 KB record, pipelined | record | 162 KiB/s | ~9539 KiB/s | ~59x | measured |
 
-Reading: even with the measured ~6.1 ms round trip, the asymmetric handshake
-operations still save tens to hundreds of milliseconds *per connection* at
-7-90x. They are single ops on the connection's critical path (not batchable),
-so each pays one round trip — negligible against their compute. They remain
-risk-free wins, which is why the roadmap is **handshake-first**.
+Reading: even with the measured ~6-19 ms offload round trip, the asymmetric
+handshake operations save **hundreds of milliseconds to tens of seconds** *per
+connection* at 122-1018x (measured). They are single ops on the connection's
+critical path (not batchable), so each pays one round trip — negligible against
+their compute. They are the clearest risk-free wins, which is why the roadmap is
+**handshake-first**.
 
 ## Measured results (hardware, SDK ABI 2.0, EClock 709 kHz)
 
@@ -122,6 +125,32 @@ records, this op is on the connection's critical path and pays exactly one round
 trip, so the full 124x is realised per connection. The earlier ~500 ms estimate
 under-counted the m68k cost; the measured saving is **784 ms per handshake**.
 
+### P-256 / ECDSA / RSA verify (Phase 2, measured)
+
+`zz9k-cryptobench` asymmetric sections (16 iterations, software m68k vs
+synchronous ZZ9000 offload), firmware crypto service with BearSSL on the ARM:
+
+| Primitive | Software (m68k) | Offload (ZZ9000) | Speedup |
+|---|---|---|---|
+| P-256 ECDH | 9593 ms/op | 12.25 ms/op | **783x** |
+| ECDSA-P256 verify | 19123 ms/op | 18.78 ms/op | **1018x** |
+| RSA-2048 verify (e=65537) | 1379 ms/op | 11.29 ms/op | **122x** |
+
+The offload column collapses to ~11-19 ms — one mailbox round trip plus the
+ARM's compute, which stays small. The headline is ECDSA-P256 verify at **1018x**:
+the m68k software path is *19 seconds* per verify, offloaded to 19 ms. P-256 ECDH
+is 9.6 s → 12 ms. These dwarf even X25519 and make the asymmetric handshake the
+single highest-value offload target, exactly as the handshake-first thesis
+predicted.
+
+The software (m68k) column is the SDK's **portable correctness-first reference**
+(the `zz9k-soft` fallback), not a hand-optimised m68k crypto library, so these
+speedups are the wins a client of *this* SDK sees on its own fallback path. They
+also re-baseline the earlier estimates, which badly under-counted m68k bignum and
+EC cost (P-256 estimated ~700 ms, measured 9593 ms). The conclusion is unchanged
+and stronger: asymmetric offload is a risk-free win of **1.4-19 s per handshake
+operation**.
+
 ## Data-collection plan
 
 1. **Symmetric record sweep — `zz9k-cryptobench`** — DONE (see Measured
@@ -139,20 +168,20 @@ under-counted the m68k cost; the measured saving is **784 ms per handshake**.
    before the provider work so the provider's batching design is grounded in a
    real curve.
 
-4. **Asymmetric micro-benchmark — X25519 DONE, P-256/RSA pending.** The
-   `zz9k-cryptobench` X25519 section is measured (790.75 ms m68k vs 6.36 ms
-   offload, 124x). P-256 ECDHE/ECDSA-verify and RSA-2048-verify sections follow
-   in Phase 2 and will replace their estimate rows once run on hardware. The
-   model in `zz9k-handshake-model.h` still lets us plug in any measured pair and
-   read the verdict.
+4. **Asymmetric micro-benchmark — DONE.** All four `zz9k-cryptobench`
+   handshake sections are measured on hardware: X25519 (790.75 ms vs 6.36 ms,
+   124x), P-256 ECDH (9593 ms vs 12.25 ms, 783x), ECDSA-P256 verify (19123 ms vs
+   18.78 ms, 1018x), and RSA-2048 verify (1379 ms vs 11.29 ms, 122x). The
+   estimate rows have been replaced with these figures.
 
 ## Roadmap (informed by this analysis)
 
-- **Phase 0 — Benchmark gate (current).** Software baseline + record sweep +
-  this economic model. SDK-only, host-tested, ready to drop onto hardware.
-- **Phase 1 — X25519** (firmware ARM service + ABI + SDK wrapper). The
-  handshake key-exchange win.
-- **Phase 2 — P-256 ECDHE/ECDSA + RSA verify.** Broader handshake coverage.
+- **Phase 0 — Benchmark gate. DONE.** Software baseline + record sweep + this
+  economic model, all measured on hardware.
+- **Phase 1 — X25519. DONE (measured, 124x).** Firmware ARM service + ABI + SDK
+  wrapper. The handshake key-exchange win.
+- **Phase 2 — P-256 ECDH/ECDSA + RSA verify. DONE (measured, 122-1018x).**
+  Broader handshake coverage, BearSSL on the ARM.
 - **Phase 3 — AES-GCM** (ARM software service). Closes the dominant-ciphersuite
   record gap so the provider accelerates the common case; sequenced after the
   `zz9k-cryptobench` result confirms the record-offload economics.
