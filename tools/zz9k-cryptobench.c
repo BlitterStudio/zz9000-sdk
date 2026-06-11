@@ -44,8 +44,6 @@
 #define ZZ9K_CRYPTOBENCH_TAG_BYTES 16U
 #define ZZ9K_CRYPTOBENCH_KEY_BYTES 32U
 #define ZZ9K_CRYPTOBENCH_NONCE_BYTES 12U
-#define ZZ9K_CRYPTOBENCH_X25519_ITERATIONS 10U
-#define ZZ9K_CRYPTOBENCH_X25519_KEY_BYTES 32U
 
 typedef uint64_t ZZ9KCryptoBenchTick;
 
@@ -229,61 +227,68 @@ static void zz9k_cryptobench_fill_pattern(uint8_t *data, uint32_t length)
 }
 
 /*
+ * RFC 7748 Section 5.2 test vector 1, shared by the software and offload
+ * timing paths so both always measure identical inputs and either result
+ * can be verified against the known shared secret.
+ */
+static const uint8_t
+zz9k_cryptobench_x25519_scalar[ZZ9K_CRYPTO_X25519_KEY_BYTES] = {
+  0xa5, 0x46, 0xe3, 0x6b, 0xf0, 0x52, 0x7c, 0x9d,
+  0x3b, 0x16, 0x15, 0x4b, 0x82, 0x46, 0x5e, 0xdd,
+  0x62, 0x14, 0x4c, 0x0a, 0xc1, 0xfc, 0x5a, 0x18,
+  0x50, 0x6a, 0x22, 0x44, 0xba, 0x44, 0x9a, 0xc4
+};
+static const uint8_t
+zz9k_cryptobench_x25519_point[ZZ9K_CRYPTO_X25519_KEY_BYTES] = {
+  0xe6, 0xdb, 0x68, 0x67, 0x58, 0x30, 0x30, 0xdb,
+  0x35, 0x94, 0xc1, 0xa4, 0x24, 0xb1, 0x5f, 0x7c,
+  0x72, 0x66, 0x24, 0xec, 0x26, 0xb3, 0x35, 0x3b,
+  0x10, 0xa9, 0x03, 0xa6, 0xd0, 0xab, 0x1c, 0x4c
+};
+static const uint8_t
+zz9k_cryptobench_x25519_shared[ZZ9K_CRYPTO_X25519_SHARED_BYTES] = {
+  0xc3, 0xda, 0x55, 0x37, 0x9d, 0xe9, 0xc6, 0x90,
+  0x8e, 0x94, 0xea, 0x4d, 0xf2, 0x8d, 0x08, 0x4f,
+  0x32, 0xec, 0xcf, 0x03, 0x49, 0x1c, 0x71, 0xf7,
+  0x54, 0xb4, 0x07, 0x55, 0x77, 0xa2, 0x85, 0x52
+};
+
+/*
  * Times software X25519 over `count` operations using the RFC 7748 section 5.2
  * test vector.  Returns ms*100 per op (hundredths of a millisecond) so the
- * caller can print "X.XX ms/op" without floating-point.
+ * caller can print "X.XX ms/op" without floating-point, or 0 if the computed
+ * shared secret does not match the known answer.
  */
 static uint32_t zz9k_cryptobench_x25519_soft_ms_x100(
     const ZZ9KCryptoBenchTimer *timer, uint32_t count)
 {
-  /* RFC 7748 Section 5.2 test vector 1 */
-  static const uint8_t scalar[ZZ9K_CRYPTOBENCH_X25519_KEY_BYTES] = {
-    0xa5, 0x46, 0xe3, 0x6b, 0xf0, 0x52, 0x7c, 0x9d,
-    0x3b, 0x16, 0x15, 0x4b, 0x82, 0x46, 0x5e, 0xdd,
-    0x62, 0x14, 0x4c, 0x0a, 0xc1, 0xfc, 0x5a, 0x18,
-    0x50, 0x6a, 0x22, 0x44, 0xba, 0x44, 0x9a, 0xc4
-  };
-  static const uint8_t point[ZZ9K_CRYPTOBENCH_X25519_KEY_BYTES] = {
-    0xe6, 0xdb, 0x68, 0x67, 0x58, 0x30, 0x30, 0xdb,
-    0x35, 0x94, 0xc1, 0xa4, 0x24, 0xb1, 0x5f, 0x7c,
-    0x72, 0x66, 0x24, 0xec, 0x26, 0xb3, 0x35, 0x3b,
-    0x10, 0xa9, 0x03, 0xa6, 0xd0, 0xab, 0x1c, 0x4c
-  };
-  uint8_t out[ZZ9K_CRYPTOBENCH_X25519_KEY_BYTES];
+  uint8_t out[ZZ9K_CRYPTO_X25519_SHARED_BYTES];
   ZZ9KCryptoBenchTick start;
   ZZ9KCryptoBenchTick elapsed;
   uint32_t i;
 
   start = zz9k_cryptobench_timer_now(timer);
   for (i = 0; i < count; i++) {
-    zz9k_soft_x25519(out, scalar, point);
+    zz9k_soft_x25519(out, zz9k_cryptobench_x25519_scalar,
+                     zz9k_cryptobench_x25519_point);
   }
   elapsed = zz9k_cryptobench_timer_now(timer) - start;
-  (void)out; /* prevent dead-store elimination */
+  if (memcmp(out, zz9k_cryptobench_x25519_shared, sizeof(out)) != 0) {
+    printf("x25519 software: RFC 7748 verification FAILED\n");
+    return 0U;
+  }
   return zz9k_cryptobench_ms_x100_per_op(elapsed, count,
                                           timer->ticks_per_second);
 }
 
 /*
- * Times ZZ9000 offload X25519 over `count` operations.
- * Returns ms*100 per op, or 0 on failure.
+ * Times ZZ9000 offload X25519 over `count` operations and verifies the
+ * computed shared secret against the RFC 7748 known answer.
+ * Returns ms*100 per op, or 0 on failure or verification mismatch.
  */
 static uint32_t zz9k_cryptobench_x25519_offload_ms_x100(
     ZZ9KContext *ctx, const ZZ9KCryptoBenchTimer *timer, uint32_t count)
 {
-  /* RFC 7748 Section 5.2 test vector 1 */
-  static const uint8_t scalar_data[ZZ9K_CRYPTOBENCH_X25519_KEY_BYTES] = {
-    0xa5, 0x46, 0xe3, 0x6b, 0xf0, 0x52, 0x7c, 0x9d,
-    0x3b, 0x16, 0x15, 0x4b, 0x82, 0x46, 0x5e, 0xdd,
-    0x62, 0x14, 0x4c, 0x0a, 0xc1, 0xfc, 0x5a, 0x18,
-    0x50, 0x6a, 0x22, 0x44, 0xba, 0x44, 0x9a, 0xc4
-  };
-  static const uint8_t point_data[ZZ9K_CRYPTOBENCH_X25519_KEY_BYTES] = {
-    0xe6, 0xdb, 0x68, 0x67, 0x58, 0x30, 0x30, 0xdb,
-    0x35, 0x94, 0xc1, 0xa4, 0x24, 0xb1, 0x5f, 0x7c,
-    0x72, 0x66, 0x24, 0xec, 0x26, 0xb3, 0x35, 0x3b,
-    0x10, 0xa9, 0x03, 0xa6, 0xd0, 0xab, 0x1c, 0x4c
-  };
   ZZ9KSharedBuffer scalar_buf;
   ZZ9KSharedBuffer point_buf;
   ZZ9KSharedBuffer out_buf;
@@ -299,21 +304,21 @@ static uint32_t zz9k_cryptobench_x25519_offload_ms_x100(
   memset(&point_buf,  0, sizeof(point_buf));
   memset(&out_buf,    0, sizeof(out_buf));
 
-  status = zz9k_alloc_shared(ctx, ZZ9K_CRYPTOBENCH_X25519_KEY_BYTES, 16U, 0,
+  status = zz9k_alloc_shared(ctx, ZZ9K_CRYPTO_X25519_KEY_BYTES, 16U, 0,
                              &scalar_buf);
   if (status != ZZ9K_STATUS_OK) {
     printf("x25519 offload scalar alloc: %s (%d)\n",
            zz9k_status_name(status), status);
     goto out;
   }
-  status = zz9k_alloc_shared(ctx, ZZ9K_CRYPTOBENCH_X25519_KEY_BYTES, 16U, 0,
+  status = zz9k_alloc_shared(ctx, ZZ9K_CRYPTO_X25519_KEY_BYTES, 16U, 0,
                              &point_buf);
   if (status != ZZ9K_STATUS_OK) {
     printf("x25519 offload point alloc: %s (%d)\n",
            zz9k_status_name(status), status);
     goto out;
   }
-  status = zz9k_alloc_shared(ctx, ZZ9K_CRYPTOBENCH_X25519_KEY_BYTES, 16U, 0,
+  status = zz9k_alloc_shared(ctx, ZZ9K_CRYPTO_X25519_SHARED_BYTES, 16U, 0,
                              &out_buf);
   if (status != ZZ9K_STATUS_OK) {
     printf("x25519 offload output alloc: %s (%d)\n",
@@ -321,8 +326,10 @@ static uint32_t zz9k_cryptobench_x25519_offload_ms_x100(
     goto out;
   }
 
-  memcpy((void *)scalar_buf.data, scalar_data, ZZ9K_CRYPTOBENCH_X25519_KEY_BYTES);
-  memcpy((void *)point_buf.data,  point_data,  ZZ9K_CRYPTOBENCH_X25519_KEY_BYTES);
+  memcpy((void *)scalar_buf.data, zz9k_cryptobench_x25519_scalar,
+         ZZ9K_CRYPTO_X25519_KEY_BYTES);
+  memcpy((void *)point_buf.data, zz9k_cryptobench_x25519_point,
+         ZZ9K_CRYPTO_X25519_KEY_BYTES);
 
   if (!zz9k_crypto_build_x25519_desc(&desc,
                                      scalar_buf.handle, 0U,
@@ -342,6 +349,14 @@ static uint32_t zz9k_cryptobench_x25519_offload_ms_x100(
     }
   }
   elapsed = zz9k_cryptobench_timer_now(timer) - start;
+
+  if (memcmp((const void *)out_buf.data, zz9k_cryptobench_x25519_shared,
+             ZZ9K_CRYPTO_X25519_SHARED_BYTES) != 0) {
+    printf("x25519 offload: RFC 7748 verification FAILED "
+           "(firmware computed a wrong shared secret)\n");
+    goto out;
+  }
+
   ms_x100 = zz9k_cryptobench_ms_x100_per_op(elapsed, count,
                                               timer->ticks_per_second);
 
@@ -572,10 +587,9 @@ int main(int argc, char **argv)
     ZZ9KServiceInfo crypto_service;
 
     printf("\nX25519 key exchange (%lu iterations):\n",
-           (unsigned long)ZZ9K_CRYPTOBENCH_X25519_ITERATIONS);
+           (unsigned long)iterations);
 
-    soft_ms_x100 = zz9k_cryptobench_x25519_soft_ms_x100(
-        &timer, ZZ9K_CRYPTOBENCH_X25519_ITERATIONS);
+    soft_ms_x100 = zz9k_cryptobench_x25519_soft_ms_x100(&timer, iterations);
     printf("  Software (m68k):  %lu.%02lu ms/op\n",
            (unsigned long)(soft_ms_x100 / 100U),
            (unsigned long)(soft_ms_x100 % 100U));
@@ -586,11 +600,11 @@ int main(int argc, char **argv)
       if (qs == ZZ9K_STATUS_OK &&
           (crypto_service.flags & ZZ9K_SERVICE_FLAG_CRYPTO_X25519) != 0U) {
         off_ms_x100 = zz9k_cryptobench_x25519_offload_ms_x100(
-            ctx, &timer, ZZ9K_CRYPTOBENCH_X25519_ITERATIONS);
+            ctx, &timer, iterations);
         if (off_ms_x100 > 0U && soft_ms_x100 > 0U) {
           uint32_t speedup_x100 = (uint32_t)(
               ((uint64_t)soft_ms_x100 * 100ULL) / off_ms_x100);
-          printf("  Offload (ZZ9000): %lu.%02lu ms/op  [%lu.%lux speedup]\n",
+          printf("  Offload (ZZ9000): %lu.%02lu ms/op  [%lu.%02lux speedup]\n",
                  (unsigned long)(off_ms_x100 / 100U),
                  (unsigned long)(off_ms_x100 % 100U),
                  (unsigned long)(speedup_x100 / 100U),
