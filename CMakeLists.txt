@@ -218,11 +218,14 @@ find_package(OpenSSL 3.0 QUIET COMPONENTS Crypto)
 if(OpenSSL_FOUND)
   set(ZZ9K_PROVIDER_SOURCES
     amiga/provider/zz9k_provider.c
+    amiga/provider/zz9k_algorithms.c
     amiga/provider/zz9k_x25519.c
     amiga/provider/zz9k_aead.c
+    amiga/provider/zz9k_ecdsa.c
     tools/zz9k-crypto-soft.c
   )
-  foreach(provtest provider_init_test provider_x25519_test provider_aead_test)
+  foreach(provtest provider_init_test provider_x25519_test provider_aead_test
+                   provider_ecdsa_test)
     add_executable(${provtest}
       tests/${provtest}.c
       ${ZZ9K_PROVIDER_SOURCES}

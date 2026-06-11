@@ -178,7 +178,7 @@ static const char *zz9k_x25519_keymgmt_query_operation_name(int operation_id)
   return NULL;
 }
 
-static const OSSL_DISPATCH zz9k_x25519_keymgmt_functions[] = {
+const OSSL_DISPATCH zz9k_x25519_keymgmt_functions[] = {
   { OSSL_FUNC_KEYMGMT_NEW, (void (*)(void))zz9k_x25519_keymgmt_new },
   { OSSL_FUNC_KEYMGMT_FREE, (void (*)(void))zz9k_x25519_keymgmt_free },
   { OSSL_FUNC_KEYMGMT_HAS, (void (*)(void))zz9k_x25519_keymgmt_has },
@@ -274,13 +274,8 @@ static const OSSL_DISPATCH zz9k_x25519_keyexch_functions[] = {
   { 0, NULL }
 };
 
-/* ---- Algorithm tables ---- */
-
-const OSSL_ALGORITHM zz9k_keymgmt_algorithms[] = {
-  { "X25519", "provider=zz9000", zz9k_x25519_keymgmt_functions,
-    "ZZ9000 X25519 key management" },
-  { NULL, NULL, NULL, NULL }
-};
+/* ---- Algorithm table ---- (the KEYMGMT table is assembled centrally in
+ * zz9k_algorithms.c since it spans several key types). */
 
 const OSSL_ALGORITHM zz9k_keyexch_algorithms[] = {
   { "X25519", "provider=zz9000", zz9k_x25519_keyexch_functions,
