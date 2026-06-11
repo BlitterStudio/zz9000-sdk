@@ -74,6 +74,56 @@ int zz9k_soft_chacha20_poly1305_decrypt(
 int zz9k_soft_x25519(uint8_t out[32], const uint8_t scalar[32],
                      const uint8_t point[32]);
 
+/* ---- P-256 (secp256r1) Diffie-Hellman and ECDSA ---- */
+
+#define ZZ9K_SOFT_P256_POINT_BYTES 65U   /* uncompressed: 0x04 || X(32) || Y(32) */
+#define ZZ9K_SOFT_P256_PRIVATE_BYTES 32U /* scalar in [1, n-1] */
+#define ZZ9K_SOFT_P256_SHARED_BYTES 32U  /* shared secret = X coordinate */
+
+/* P-256 ECDSA signature: raw r || s (two 32-byte big-endian integers). */
+#define ZZ9K_SOFT_ECDSA_P256_SIG_SIZE 64U
+
+/* RSA-2048 PKCS#1 v1.5 SHA-256 verification constants. */
+#define ZZ9K_SOFT_RSA_2048_KEY_BYTES 256U /* modulus in bytes */
+#define ZZ9K_SOFT_SHA256_DIGEST_SIZE 32U
+
+/*
+ * P-256 ECDH key exchange (RFC 5753 / SEC 1).
+ * `private_key` is a 32-byte scalar; `public_point` is an uncompressed
+ * 65-byte point (0x04 || X || Y). Writes the 32-byte X coordinate of
+ * shared_secret to `shared_secret`. Returns 1 on success, 0 on error.
+ */
+int zz9k_soft_p256_ecdh(uint8_t shared_secret[32],
+                        const uint8_t private_key[32],
+                        const uint8_t public_point[65]);
+
+/*
+ * ECDSA-P256 SHA-256 signature verification (SEC 1 / FIPS 186-4).
+ * `signature_r` and `signature_s` are each 32-byte big-endian integers.
+ * `message_hash` is the 32-byte SHA-256 digest of the message.
+ * `public_point` is an uncompressed 65-byte point (0x04 || X || Y).
+ * Returns 1 if valid, 0 otherwise.
+ */
+int zz9k_soft_ecdsa_verify_p256(const uint8_t signature_r[32],
+                                const uint8_t signature_s[32],
+                                const uint8_t message_hash[32],
+                                const uint8_t public_point[65]);
+
+/*
+ * RSA-2048 PKCS#1 v1.5 SHA-256 signature verification (RFC 8017).
+ * `signature` is `sig_len` bytes of the raw RSA signature (modular exponentiation result).
+ * `message_hash` is the 32-byte SHA-256 digest to verify against.
+ * `n` is the modulus as big-endian bytes; `n_bits` is its bit length.
+ * `e` is the public exponent (typically 65537).
+ * Returns 1 if valid, 0 otherwise.
+ */
+int zz9k_soft_rsa_verify_pkcs1_sha256(const uint8_t *signature,
+                                      uint32_t sig_len,
+                                      const uint8_t *message_hash,
+                                      const uint8_t *n,
+                                      uint32_t n_bits,
+                                      uint32_t e);
+
 #ifdef __cplusplus
 }
 #endif

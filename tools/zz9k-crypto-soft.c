@@ -681,3 +681,513 @@ int zz9k_soft_chacha20_poly1305_decrypt(
   zz9k_soft_chacha20_xor(plaintext, ciphertext, length, key, nonce, 1U);
   return 1;
 }
+
+/* ---- P-256 (secp256r1) ECDH / ECDSA verify and RSA PKCS#1 v1.5 verify ----
+ *
+ * Clean-room standard-form (non-Montgomery) reference, written for obvious
+ * correctness rather than speed: a generic little-endian uint32_t big-integer
+ * core (schoolbook multiply, binary long-division reduction, square-and-
+ * multiply modular exponentiation) underneath P-256 point arithmetic in
+ * Jacobian coordinates. Uses only 32x32->64 multiplies so an m68k compiler
+ * can emit it. Validated against RFC 7748 / FIPS 186-4 / RFC 8017 known-answer
+ * tests and cross-checked against OpenSSL. This is the KAT oracle and software
+ * fallback; the ARM firmware uses BearSSL for the real offload path.
+ */
+
+/* ===== Generic big-integer core (little-endian uint32_t limbs) ===== */
+
+#define BN_MAX_LIMBS 64            /* up to 2048-bit (RSA) */
+
+/* Compare a and b (len limbs). Returns -1, 0, or 1. */
+static int bn_cmp(const uint32_t *a, const uint32_t *b, int len)
+{
+  int i;
+  for (i = len - 1; i >= 0; i--) {
+    if (a[i] < b[i]) return -1;
+    if (a[i] > b[i]) return 1;
+  }
+  return 0;
+}
+
+/* r = a + b (len limbs). Returns the carry out (0 or 1). */
+static uint32_t bn_add(uint32_t *r, const uint32_t *a, const uint32_t *b,
+                       int len)
+{
+  uint32_t carry = 0;
+  int i;
+  for (i = 0; i < len; i++) {
+    uint64_t sum = (uint64_t)a[i] + b[i] + carry;
+    r[i] = (uint32_t)sum;
+    carry = (uint32_t)(sum >> 32);
+  }
+  return carry;
+}
+
+/* r = a - b (len limbs). Returns the borrow out (0 or 1). */
+static uint32_t bn_sub(uint32_t *r, const uint32_t *a, const uint32_t *b,
+                       int len)
+{
+  uint32_t borrow = 0;
+  int i;
+  for (i = 0; i < len; i++) {
+    uint64_t diff = (uint64_t)a[i] - b[i] - borrow;
+    r[i] = (uint32_t)diff;
+    borrow = (uint32_t)((diff >> 32) & 1U);
+  }
+  return borrow;
+}
+
+/* Full product r[2*len] = a[len] * b[len]. */
+static void bn_mul(uint32_t *r, const uint32_t *a, const uint32_t *b, int len)
+{
+  int i, j;
+  for (i = 0; i < 2 * len; i++) r[i] = 0;
+  for (i = 0; i < len; i++) {
+    uint64_t carry = 0;
+    for (j = 0; j < len; j++) {
+      carry += (uint64_t)a[i] * b[j] + r[i + j];
+      r[i + j] = (uint32_t)carry;
+      carry >>= 32;
+    }
+    r[i + len] = (uint32_t)carry;
+  }
+}
+
+/* Bit i of a (len limbs); 0 if out of range. */
+static int bn_bit(const uint32_t *a, int len, int i)
+{
+  int w = i >> 5;
+  if (w < 0 || w >= len) return 0;
+  return (int)((a[w] >> (i & 31)) & 1U);
+}
+
+/* Highest set bit position + 1 (bit length); 0 if a == 0. */
+static int bn_bitlen(const uint32_t *a, int len)
+{
+  int i, b;
+  for (i = len - 1; i >= 0; i--) {
+    if (a[i]) {
+      for (b = 31; b >= 0; b--) {
+        if ((a[i] >> b) & 1U) return i * 32 + b + 1;
+      }
+    }
+  }
+  return 0;
+}
+
+/* r[n] = x[xlen] mod m[n], by binary long division. n <= BN_MAX_LIMBS. */
+static void bn_mod(uint32_t *r, const uint32_t *x, int xlen,
+                   const uint32_t *m, int n)
+{
+  uint32_t acc[BN_MAX_LIMBS + 1];
+  uint32_t mm[BN_MAX_LIMBS + 1];
+  int bits = bn_bitlen(x, xlen);
+  int i, k;
+
+  for (i = 0; i <= n; i++) {
+    acc[i] = 0;
+    mm[i] = (i < n) ? m[i] : 0U;
+  }
+
+  for (i = bits - 1; i >= 0; i--) {
+    uint32_t carry = 0;
+    for (k = 0; k <= n; k++) {           /* acc <<= 1 across n+1 limbs */
+      uint32_t newcarry = acc[k] >> 31;
+      acc[k] = (acc[k] << 1) | carry;
+      carry = newcarry;
+    }
+    acc[0] |= (uint32_t)bn_bit(x, xlen, i);
+    if (bn_cmp(acc, mm, n + 1) >= 0) {
+      bn_sub(acc, acc, mm, n + 1);
+    }
+  }
+  for (i = 0; i < n; i++) r[i] = acc[i];
+}
+
+/* r[n] = a[n] * b[n] mod m[n]. */
+static void bn_mulmod(uint32_t *r, const uint32_t *a, const uint32_t *b,
+                      const uint32_t *m, int n)
+{
+  uint32_t prod[2 * BN_MAX_LIMBS];
+  bn_mul(prod, a, b, n);
+  bn_mod(r, prod, 2 * n, m, n);
+}
+
+/* r[n] = base^exp mod m[n]. exp is read as ebits bits from exp[] (LE). */
+static void bn_modexp(uint32_t *r, const uint32_t *base, const uint32_t *exp,
+                      int ebits, const uint32_t *m, int n)
+{
+  uint32_t acc[BN_MAX_LIMBS];
+  uint32_t b[BN_MAX_LIMBS];
+  int explimbs = (ebits + 31) / 32;
+  int i;
+
+  for (i = 0; i < n; i++) {
+    acc[i] = 0;
+    b[i] = base[i];
+  }
+  acc[0] = 1U;
+  bn_mod(b, b, n, m, n);                  /* reduce base in case base >= m */
+
+  for (i = ebits - 1; i >= 0; i--) {
+    bn_mulmod(acc, acc, acc, m, n);
+    if (bn_bit(exp, explimbs, i)) {
+      bn_mulmod(acc, acc, b, m, n);
+    }
+  }
+  for (i = 0; i < n; i++) r[i] = acc[i];
+}
+
+/* Load nbytes big-endian into LE limbs (nbytes a multiple of 4). */
+static void bn_from_be(uint32_t *r, const uint8_t *be, int nbytes)
+{
+  int n = nbytes / 4, i;
+  for (i = 0; i < n; i++) {
+    const uint8_t *p = be + (n - 1 - i) * 4;
+    r[i] = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+           ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+  }
+}
+
+/* Store n LE limbs as big-endian into n*4 bytes. */
+static void bn_to_be(uint8_t *be, const uint32_t *a, int n)
+{
+  int i;
+  for (i = 0; i < n; i++) {
+    uint32_t v = a[n - 1 - i];
+    be[i * 4]     = (uint8_t)(v >> 24);
+    be[i * 4 + 1] = (uint8_t)(v >> 16);
+    be[i * 4 + 2] = (uint8_t)(v >> 8);
+    be[i * 4 + 3] = (uint8_t)v;
+  }
+}
+
+/* ===== P-256 (secp256r1) ===== */
+
+#define P256_LIMBS 8
+
+/* Field prime p, group order n, curve coefficient b, and generator G
+ * (all little-endian uint32_t[8]). The curve coefficient a = -3 is implicit. */
+static const uint32_t p256_p[P256_LIMBS] = {
+  0xFFFFFFFFU, 0xFFFFFFFFU, 0xFFFFFFFFU, 0x00000000U,
+  0x00000000U, 0x00000000U, 0x00000001U, 0xFFFFFFFFU
+};
+static const uint32_t p256_n[P256_LIMBS] = {
+  0xFC632551U, 0xF3B9CAC2U, 0xA7179E84U, 0xBCE6FAADU,
+  0xFFFFFFFFU, 0xFFFFFFFFU, 0x00000000U, 0xFFFFFFFFU
+};
+static const uint32_t p256_b[P256_LIMBS] = {
+  0x27D2604BU, 0x3BCE3C3EU, 0xCC53B0F6U, 0x651D06B0U,
+  0x769886BCU, 0xB3EBBD55U, 0xAA3A93E7U, 0x5AC635D8U
+};
+static const uint32_t p256_gx[P256_LIMBS] = {
+  0xD898C296U, 0xF4A13945U, 0x2DEB33A0U, 0x77037D81U,
+  0x63A440F2U, 0xF8BCE6E5U, 0xE12C4247U, 0x6B17D1F2U
+};
+static const uint32_t p256_gy[P256_LIMBS] = {
+  0x37BF51F5U, 0xCBB64068U, 0x6B315ECEU, 0x2BCE3357U,
+  0x7C0F9E16U, 0x8EE7EB4AU, 0xFE1A7F9BU, 0x4FE342E2U
+};
+
+/* Field arithmetic over F_p (inputs assumed < p). */
+static void fp_add(uint32_t *r, const uint32_t *a, const uint32_t *b)
+{
+  uint32_t t[P256_LIMBS];
+  uint32_t c = bn_add(t, a, b, P256_LIMBS);
+  if (c || bn_cmp(t, p256_p, P256_LIMBS) >= 0) {
+    bn_sub(t, t, p256_p, P256_LIMBS);
+  }
+  memcpy(r, t, sizeof t);
+}
+
+static void fp_sub(uint32_t *r, const uint32_t *a, const uint32_t *b)
+{
+  uint32_t t[P256_LIMBS];
+  if (bn_sub(t, a, b, P256_LIMBS)) {
+    bn_add(t, t, p256_p, P256_LIMBS);
+  }
+  memcpy(r, t, sizeof t);
+}
+
+static void fp_mul(uint32_t *r, const uint32_t *a, const uint32_t *b)
+{
+  bn_mulmod(r, a, b, p256_p, P256_LIMBS);
+}
+
+static void fp_sqr(uint32_t *r, const uint32_t *a)
+{
+  bn_mulmod(r, a, a, p256_p, P256_LIMBS);
+}
+
+/* r = a^-1 mod p via Fermat (a^(p-2) mod p). */
+static void fp_inv(uint32_t *r, const uint32_t *a)
+{
+  uint32_t e[P256_LIMBS], two[P256_LIMBS];
+  int i;
+  for (i = 0; i < P256_LIMBS; i++) two[i] = 0;
+  two[0] = 2U;
+  bn_sub(e, p256_p, two, P256_LIMBS);      /* p - 2 */
+  bn_modexp(r, a, e, 256, p256_p, P256_LIMBS);
+}
+
+static int fp_is_zero(const uint32_t *a)
+{
+  int i;
+  uint32_t z = 0;
+  for (i = 0; i < P256_LIMBS; i++) z |= a[i];
+  return z == 0U;
+}
+
+/* Point in Jacobian coordinates: affine = (X/Z^2, Y/Z^3); infinity has Z = 0. */
+typedef struct {
+  uint32_t X[P256_LIMBS];
+  uint32_t Y[P256_LIMBS];
+  uint32_t Z[P256_LIMBS];
+} p256_pt;
+
+static void p256_set_infinity(p256_pt *r)
+{
+  int i;
+  for (i = 0; i < P256_LIMBS; i++) {
+    r->X[i] = 0;
+    r->Y[i] = 0;
+    r->Z[i] = 0;
+  }
+  r->X[0] = 1U;
+  r->Y[0] = 1U;
+}
+
+/* out = 2*P. out may alias P. */
+static void p256_double(p256_pt *out, const p256_pt *P)
+{
+  uint32_t S[P256_LIMBS], M[P256_LIMBS], Y2[P256_LIMBS];
+  uint32_t t1[P256_LIMBS], t2[P256_LIMBS];
+  uint32_t X3[P256_LIMBS], Y3[P256_LIMBS], Z3[P256_LIMBS];
+
+  if (fp_is_zero(P->Z) || fp_is_zero(P->Y)) {
+    p256_set_infinity(out);
+    return;
+  }
+  fp_sqr(Y2, P->Y);                         /* Y^2 */
+  fp_mul(S, P->X, Y2);                      /* X*Y^2 */
+  fp_add(S, S, S); fp_add(S, S, S);         /* S = 4*X*Y^2 */
+  fp_sqr(t1, P->Z);                         /* Z^2 */
+  fp_sub(t2, P->X, t1);                     /* X - Z^2 */
+  fp_add(t1, P->X, t1);                     /* X + Z^2 */
+  fp_mul(M, t2, t1);                        /* (X-Z^2)(X+Z^2) */
+  fp_add(t1, M, M); fp_add(M, t1, M);       /* M = 3*(X-Z^2)(X+Z^2) */
+  fp_sqr(X3, M); fp_sub(X3, X3, S); fp_sub(X3, X3, S);   /* X3 = M^2 - 2S */
+  fp_sub(t1, S, X3); fp_mul(Y3, M, t1);     /* M*(S - X3) */
+  fp_sqr(t2, Y2);                           /* Y^4 */
+  fp_add(t2, t2, t2); fp_add(t2, t2, t2); fp_add(t2, t2, t2); /* 8*Y^4 */
+  fp_sub(Y3, Y3, t2);                       /* Y3 = M*(S-X3) - 8*Y^4 */
+  fp_mul(Z3, P->Y, P->Z); fp_add(Z3, Z3, Z3);            /* Z3 = 2*Y*Z */
+  memcpy(out->X, X3, sizeof X3);
+  memcpy(out->Y, Y3, sizeof Y3);
+  memcpy(out->Z, Z3, sizeof Z3);
+}
+
+/* out = P + Q. out may alias P or Q. */
+static void p256_add(p256_pt *out, const p256_pt *P, const p256_pt *Q)
+{
+  uint32_t Z1Z1[P256_LIMBS], Z2Z2[P256_LIMBS];
+  uint32_t U1[P256_LIMBS], U2[P256_LIMBS], S1[P256_LIMBS], S2[P256_LIMBS];
+  uint32_t H[P256_LIMBS], R[P256_LIMBS], H2[P256_LIMBS], H3[P256_LIMBS];
+  uint32_t U1H2[P256_LIMBS], t[P256_LIMBS];
+  uint32_t X3[P256_LIMBS], Y3[P256_LIMBS], Z3[P256_LIMBS];
+
+  if (fp_is_zero(P->Z)) { *out = *Q; return; }
+  if (fp_is_zero(Q->Z)) { *out = *P; return; }
+
+  fp_sqr(Z1Z1, P->Z);
+  fp_sqr(Z2Z2, Q->Z);
+  fp_mul(U1, P->X, Z2Z2);                   /* U1 = X1*Z2^2 */
+  fp_mul(U2, Q->X, Z1Z1);                   /* U2 = X2*Z1^2 */
+  fp_mul(S1, P->Y, Q->Z); fp_mul(S1, S1, Z2Z2);   /* S1 = Y1*Z2^3 */
+  fp_mul(S2, Q->Y, P->Z); fp_mul(S2, S2, Z1Z1);   /* S2 = Y2*Z1^3 */
+
+  if (bn_cmp(U1, U2, P256_LIMBS) == 0) {
+    if (bn_cmp(S1, S2, P256_LIMBS) != 0) {  /* P = -Q -> infinity */
+      p256_set_infinity(out);
+      return;
+    }
+    p256_double(out, P);                    /* P = Q -> doubling */
+    return;
+  }
+
+  fp_sub(H, U2, U1);                        /* H = U2 - U1 */
+  fp_sub(R, S2, S1);                        /* R = S2 - S1 */
+  fp_sqr(H2, H); fp_mul(H3, H2, H);         /* H^2, H^3 */
+  fp_mul(U1H2, U1, H2);                     /* U1*H^2 */
+  fp_sqr(X3, R); fp_sub(X3, X3, H3);
+  fp_sub(X3, X3, U1H2); fp_sub(X3, X3, U1H2);           /* X3 = R^2-H^3-2U1H^2 */
+  fp_sub(t, U1H2, X3); fp_mul(Y3, R, t);
+  fp_mul(t, S1, H3); fp_sub(Y3, Y3, t);     /* Y3 = R*(U1H^2-X3) - S1*H^3 */
+  fp_mul(Z3, H, P->Z); fp_mul(Z3, Z3, Q->Z);            /* Z3 = H*Z1*Z2 */
+  memcpy(out->X, X3, sizeof X3);
+  memcpy(out->Y, Y3, sizeof Y3);
+  memcpy(out->Z, Z3, sizeof Z3);
+}
+
+/* out = k * P, left-to-right double-and-add. k is a 256-bit LE scalar. */
+static void p256_scalar(p256_pt *out, const uint32_t k[P256_LIMBS],
+                        const p256_pt *P)
+{
+  p256_pt acc;
+  int i;
+  p256_set_infinity(&acc);
+  for (i = 255; i >= 0; i--) {
+    p256_double(&acc, &acc);
+    if (bn_bit(k, P256_LIMBS, i)) {
+      p256_add(&acc, &acc, P);
+    }
+  }
+  *out = acc;
+}
+
+/* Affine x of P into x_out (LE limbs). Returns 0 if P is the infinity point. */
+static int p256_affine_x(uint32_t x_out[P256_LIMBS], const p256_pt *P)
+{
+  uint32_t zinv[P256_LIMBS], zinv2[P256_LIMBS];
+  if (fp_is_zero(P->Z)) return 0;
+  fp_inv(zinv, P->Z);
+  fp_sqr(zinv2, zinv);
+  fp_mul(x_out, P->X, zinv2);
+  return 1;
+}
+
+/* Validate affine (x, y) lies on the curve: y^2 == x^3 - 3x + b (mod p). */
+static int p256_point_valid(const uint32_t x[P256_LIMBS],
+                            const uint32_t y[P256_LIMBS])
+{
+  uint32_t lhs[P256_LIMBS], rhs[P256_LIMBS], three_x[P256_LIMBS];
+  if (bn_cmp(x, p256_p, P256_LIMBS) >= 0 ||
+      bn_cmp(y, p256_p, P256_LIMBS) >= 0) {
+    return 0;
+  }
+  fp_sqr(lhs, y);                           /* y^2 */
+  fp_sqr(rhs, x); fp_mul(rhs, rhs, x);      /* x^3 */
+  fp_add(three_x, x, x); fp_add(three_x, three_x, x);   /* 3x */
+  fp_sub(rhs, rhs, three_x);                /* x^3 - 3x */
+  fp_add(rhs, rhs, p256_b);                 /* x^3 - 3x + b */
+  return bn_cmp(lhs, rhs, P256_LIMBS) == 0;
+}
+
+/* Load an uncompressed (0x04 || X || Y) point into a Jacobian point with Z=1,
+ * validating it lies on the curve. Returns 0 on malformed/off-curve input. */
+static int p256_load_public(p256_pt *out, const uint8_t public_point[65])
+{
+  int i;
+  if (public_point[0] != 0x04U) return 0;
+  bn_from_be(out->X, public_point + 1, 32);
+  bn_from_be(out->Y, public_point + 33, 32);
+  if (!p256_point_valid(out->X, out->Y)) return 0;
+  for (i = 0; i < P256_LIMBS; i++) out->Z[i] = 0;
+  out->Z[0] = 1U;
+  return 1;
+}
+
+int zz9k_soft_p256_ecdh(uint8_t shared_secret[32],
+                        const uint8_t private_key[32],
+                        const uint8_t public_point[65])
+{
+  p256_pt Q, R;
+  uint32_t d[P256_LIMBS], x[P256_LIMBS];
+
+  if (!p256_load_public(&Q, public_point)) return 0;
+  bn_from_be(d, private_key, 32);
+  if (fp_is_zero(d) || bn_cmp(d, p256_n, P256_LIMBS) >= 0) return 0; /* d in [1,n) */
+  p256_scalar(&R, d, &Q);
+  if (!p256_affine_x(x, &R)) return 0;      /* result is infinity -> reject */
+  bn_to_be(shared_secret, x, P256_LIMBS);
+  return 1;
+}
+
+int zz9k_soft_ecdsa_verify_p256(const uint8_t signature_r[32],
+                                const uint8_t signature_s[32],
+                                const uint8_t message_hash[32],
+                                const uint8_t public_point[65])
+{
+  p256_pt G, Q, R1, R2, R;
+  uint32_t r[P256_LIMBS], s[P256_LIMBS], z[P256_LIMBS], w[P256_LIMBS];
+  uint32_t u1[P256_LIMBS], u2[P256_LIMBS], e[P256_LIMBS], two[P256_LIMBS];
+  uint32_t x[P256_LIMBS], v[P256_LIMBS];
+  int i;
+
+  bn_from_be(r, signature_r, 32);
+  bn_from_be(s, signature_s, 32);
+  bn_from_be(z, message_hash, 32);
+  if (fp_is_zero(r) || bn_cmp(r, p256_n, P256_LIMBS) >= 0) return 0; /* r in [1,n) */
+  if (fp_is_zero(s) || bn_cmp(s, p256_n, P256_LIMBS) >= 0) return 0; /* s in [1,n) */
+  if (!p256_load_public(&Q, public_point)) return 0;
+
+  for (i = 0; i < P256_LIMBS; i++) two[i] = 0;
+  two[0] = 2U;
+  bn_sub(e, p256_n, two, P256_LIMBS);       /* n - 2 */
+  bn_modexp(w, s, e, 256, p256_n, P256_LIMBS);          /* w = s^-1 mod n */
+  bn_mulmod(u1, z, w, p256_n, P256_LIMBS);  /* u1 = z*w mod n */
+  bn_mulmod(u2, r, w, p256_n, P256_LIMBS);  /* u2 = r*w mod n */
+
+  for (i = 0; i < P256_LIMBS; i++) {
+    G.X[i] = p256_gx[i];
+    G.Y[i] = p256_gy[i];
+    G.Z[i] = 0;
+  }
+  G.Z[0] = 1U;
+  p256_scalar(&R1, u1, &G);
+  p256_scalar(&R2, u2, &Q);
+  p256_add(&R, &R1, &R2);                    /* R = u1*G + u2*Q */
+  if (!p256_affine_x(x, &R)) return 0;       /* infinity -> invalid */
+  bn_mod(v, x, P256_LIMBS, p256_n, P256_LIMBS);         /* v = R.x mod n */
+  return bn_cmp(v, r, P256_LIMBS) == 0;
+}
+
+/* ===== RSA PKCS#1 v1.5 (SHA-256) signature verification ===== */
+
+int zz9k_soft_rsa_verify_pkcs1_sha256(const uint8_t *signature,
+                                      uint32_t sig_len,
+                                      const uint8_t *message_hash,
+                                      const uint8_t *n,
+                                      uint32_t n_bits,
+                                      uint32_t e)
+{
+  static const uint8_t sha256_digest_info[19] = {
+    0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01,
+    0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0x04, 0x20
+  };
+  uint32_t sig[BN_MAX_LIMBS], mod[BN_MAX_LIMBS], m[BN_MAX_LIMBS], ev[1];
+  uint8_t em[BN_MAX_LIMBS * 4];
+  int limbs = (int)(n_bits / 32U);
+  int emlen = limbs * 4;
+  int ebits, pos, ps_end, i;
+
+  if (n_bits == 0U || (n_bits % 32U) != 0U || limbs > BN_MAX_LIMBS) return 0;
+  if (sig_len != (uint32_t)emlen) return 0;
+
+  bn_from_be(sig, signature, emlen);
+  bn_from_be(mod, n, emlen);
+  if (bn_cmp(sig, mod, limbs) >= 0) return 0;           /* signature < modulus */
+
+  ev[0] = e;
+  ebits = bn_bitlen(ev, 1);
+  if (ebits == 0) return 0;
+  bn_modexp(m, sig, ev, ebits, mod, limbs);             /* m = sig^e mod n */
+  bn_to_be(em, m, limbs);
+
+  /* EM = 0x00 || 0x01 || PS(0xFF..) || 0x00 || DigestInfo || hash. */
+  if (em[0] != 0x00U || em[1] != 0x01U) return 0;
+  pos = 2;
+  while (pos < emlen && em[pos] == 0xFFU) pos++;
+  ps_end = pos;
+  if (ps_end - 2 < 8) return 0;                         /* PS must be >= 8 */
+  if (ps_end >= emlen || em[ps_end] != 0x00U) return 0;
+  pos = ps_end + 1;                                     /* start of T */
+  if (emlen - pos != 19 + 32) return 0;
+  for (i = 0; i < 19; i++) {
+    if (em[pos + i] != sha256_digest_info[i]) return 0;
+  }
+  for (i = 0; i < 32; i++) {
+    if (em[pos + 19 + i] != message_hash[i]) return 0;
+  }
+  return 1;
+}
