@@ -239,7 +239,8 @@ static inline int zz9k_crypto_build_x25519_desc(
     uint32_t point_handle, uint32_t point_offset,
     uint32_t dst_handle, uint32_t dst_offset)
 {
-  if (scalar_handle == ZZ9K_INVALID_HANDLE ||
+  if (!desc ||
+      scalar_handle == ZZ9K_INVALID_HANDLE ||
       point_handle  == ZZ9K_INVALID_HANDLE ||
       dst_handle    == ZZ9K_INVALID_HANDLE)
     return 0;

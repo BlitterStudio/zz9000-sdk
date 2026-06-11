@@ -201,6 +201,10 @@ static int test_kx_descriptor(void)
                                     3U, 0U))
     return 9;
 
+  /* NULL desc must be rejected like every other builder */
+  if (zz9k_crypto_build_x25519_desc(0, 1U, 0U, 2U, 0U, 3U, 0U))
+    return 10;
+
   return 0;
 }
 
