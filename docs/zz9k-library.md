@@ -8,7 +8,7 @@ The current library identity is:
 ```c
 #define ZZ9K_LIBRARY_NAME "zz9k.library"
 #define ZZ9K_LIBRARY_VERSION 2
-#define ZZ9K_LIBRARY_REVISION 23
+#define ZZ9K_LIBRARY_REVISION 24
 ```
 
 Open the library with at least version 2:
@@ -1382,6 +1382,14 @@ if (ZZ9KBase->lib_Revision < ZZ9K_LIBRARY_MIN_REVISION_CRYPTO_KX) {
 The firmware additionally advertises X25519 support through the crypto
 service flags; gate hardware use on `ZZ9K_SERVICE_FLAG_CRYPTO_X25519` from
 `ZZ9KQueryService()`.
+
+Library revision 24 added P-256 ECDH (the same `ZZ9KCryptoKeyExchange()` with
+`ZZ9K_CRYPTO_KX_P256` and a 65-byte uncompressed peer point) and signature
+verification via `ZZ9KCryptoVerify()`, which checks ECDSA-P256 or
+RSA-PKCS1-2048 signatures over a SHA-256 digest. Gate these on
+`ZZ9K_LIBRARY_MIN_REVISION_CRYPTO_VERIFY` and the
+`ZZ9K_SERVICE_FLAG_CRYPTO_P256`, `ZZ9K_SERVICE_FLAG_CRYPTO_ECDSA_P256`, and
+`ZZ9K_SERVICE_FLAG_CRYPTO_RSA_2048` service flags.
 `ZZ9KAudioStreamBeginDesc.low_water_bytes` is reserved for input-ring refill
 policy. `high_water_bytes` caps the amount of PCM firmware should produce in a
 single mailbox call; pass zero for the firmware default, or a value below the

@@ -482,6 +482,29 @@ static inline int zz9k_reply_crypto_result(const ZZ9KMailboxEntry *reply,
   return ZZ9K_STATUS_OK;
 }
 
+static inline int zz9k_reply_crypto_verify(const ZZ9KMailboxEntry *reply,
+                                            int *valid)
+{
+  const uint8_t *payload;
+  int status;
+
+  if (!valid) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  *valid = 0;
+  status = zz9k_reply_require(reply, ZZ9K_OP_CRYPTO_VERIFY,
+                              sizeof(ZZ9KCryptoVerifyPayload));
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  payload = reply->payload.inline_data;
+  *valid = (zz9k_get_be32(&payload[0]) != 0U);
+
+  return ZZ9K_STATUS_OK;
+}
+
 static inline int zz9k_reply_decompress_result(
     const ZZ9KMailboxEntry *reply, ZZ9KDecompressResult *result)
 {

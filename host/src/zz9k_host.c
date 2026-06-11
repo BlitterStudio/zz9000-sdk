@@ -1416,6 +1416,32 @@ int zz9k_crypto_kx(ZZ9KContext *ctx, const ZZ9KCryptoKxDesc *desc,
   return zz9k_reply_crypto_result(&reply, ZZ9K_OP_CRYPTO_KX, result);
 }
 
+int zz9k_crypto_verify(ZZ9KContext *ctx, const ZZ9KCryptoVerifyDesc *desc,
+                       int *valid)
+{
+  ZZ9KRequest request;
+  ZZ9KMailboxEntry reply;
+  int status;
+
+  if (!ctx || !desc || !valid) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  *valid = 0;
+  memset(&reply, 0, sizeof(reply));
+  status = zz9k_request_crypto_verify(&request, desc);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  status = zz9k_call(ctx, &request, &reply, ZZ9K_DEFAULT_TIMEOUT_TICKS);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  return zz9k_reply_crypto_verify(&reply, valid);
+}
+
 int zz9k_decompress(ZZ9KContext *ctx, const ZZ9KDecompressDesc *desc,
                     ZZ9KDecompressResult *result)
 {

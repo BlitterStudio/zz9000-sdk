@@ -174,6 +174,9 @@ int ZZ9KCryptoAeadBatch(ZZ9KLibrary *library,
 int ZZ9KCryptoKeyExchange(ZZ9KLibrary *library,
                           const ZZ9KCryptoKxDesc *desc,
                           ZZ9KCryptoResult *result);
+int ZZ9KCryptoVerify(ZZ9KLibrary *library,
+                     const ZZ9KCryptoVerifyDesc *desc,
+                     int *valid);
 int ZZ9KReadDiag(ZZ9KLibrary *library, ZZ9KDiagInfo *diag);
 
 #endif /* ZZ9K_LIBRARY_TYPES_ONLY */

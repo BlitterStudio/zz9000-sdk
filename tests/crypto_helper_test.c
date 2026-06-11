@@ -205,6 +205,59 @@ static int test_kx_descriptor(void)
   if (zz9k_crypto_build_x25519_desc(0, 1U, 0U, 2U, 0U, 3U, 0U))
     return 10;
 
+  /* P-256 reuses the KX descriptor but stamps the P-256 algorithm. */
+  if (!zz9k_crypto_build_p256_desc(&desc, 4U, 8U, 5U, 16U, 6U, 0U))
+    return 11;
+  if (desc.algorithm != ZZ9K_CRYPTO_KX_P256) return 12;
+  if (desc.scalar_handle != 4U || desc.scalar_offset != 8U) return 13;
+  if (desc.point_handle != 5U || desc.point_offset != 16U) return 14;
+  if (desc.dst_handle != 6U) return 15;
+  if (zz9k_crypto_build_p256_desc(&desc, 4U, 0U, ZZ9K_INVALID_HANDLE, 0U,
+                                  6U, 0U))
+    return 16;
+
+  return 0;
+}
+
+static int test_verify_descriptor(void)
+{
+  ZZ9KCryptoVerifyDesc desc;
+
+  /* ECDSA-P256: hash, signature and public-key handles all populated. */
+  if (!zz9k_crypto_build_verify_desc(&desc,
+                                     ZZ9K_CRYPTO_VERIFY_ECDSA_P256_SHA256,
+                                     1U, 0U, 32U, 2U, 4U, 64U, 3U, 8U, 65U))
+    return 1;
+  if (desc.algorithm != ZZ9K_CRYPTO_VERIFY_ECDSA_P256_SHA256) return 2;
+  if (desc.hash_handle != 1U || desc.hash_length != 32U) return 3;
+  if (desc.sig_handle != 2U || desc.sig_offset != 4U || desc.sig_length != 64U)
+    return 4;
+  if (desc.key_handle != 3U || desc.key_offset != 8U || desc.key_length != 65U)
+    return 5;
+
+  /* RSA-PKCS1 algorithm id is also accepted. */
+  if (!zz9k_crypto_build_verify_desc(&desc,
+                                     ZZ9K_CRYPTO_VERIFY_RSA_PKCS1_2048_SHA256,
+                                     1U, 0U, 32U, 2U, 0U, 256U, 3U, 0U, 256U))
+    return 6;
+
+  /* Missing public key (or any handle) must be rejected. */
+  if (zz9k_crypto_build_verify_desc(&desc,
+                                    ZZ9K_CRYPTO_VERIFY_ECDSA_P256_SHA256,
+                                    1U, 0U, 32U, 2U, 0U, 64U,
+                                    ZZ9K_INVALID_HANDLE, 0U, 65U))
+    return 7;
+
+  /* Unknown algorithm must be rejected. */
+  if (zz9k_crypto_build_verify_desc(&desc, 0U,
+                                    1U, 0U, 32U, 2U, 0U, 64U, 3U, 0U, 65U))
+    return 8;
+
+  /* NULL desc must be rejected. */
+  if (zz9k_crypto_build_verify_desc(0, ZZ9K_CRYPTO_VERIFY_ECDSA_P256_SHA256,
+                                    1U, 0U, 32U, 2U, 0U, 64U, 3U, 0U, 65U))
+    return 9;
+
   return 0;
 }
 
@@ -226,6 +279,9 @@ int main(void)
 
   result = test_kx_descriptor();
   if (result) return 130 + result;
+
+  result = test_verify_descriptor();
+  if (result) return 160 + result;
 
   return 0;
 }

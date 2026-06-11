@@ -748,6 +748,36 @@ static inline int zz9k_request_crypto_kx(ZZ9KRequest *request,
   return ZZ9K_STATUS_OK;
 }
 
+static inline int zz9k_request_crypto_verify(ZZ9KRequest *request,
+                                              const ZZ9KCryptoVerifyDesc *desc)
+{
+  struct ZZ9KCryptoVerifyPayload *payload;
+
+  if (!request || !desc ||
+      desc->hash_handle == ZZ9K_INVALID_HANDLE ||
+      desc->sig_handle == ZZ9K_INVALID_HANDLE ||
+      desc->key_handle == ZZ9K_INVALID_HANDLE ||
+      (desc->algorithm != ZZ9K_CRYPTO_VERIFY_ECDSA_P256_SHA256 &&
+       desc->algorithm != ZZ9K_CRYPTO_VERIFY_RSA_PKCS1_2048_SHA256)) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  zz9k_request_init(request, ZZ9K_OP_CRYPTO_VERIFY);
+  request->entry.payload_len = sizeof(struct ZZ9KCryptoVerifyPayload);
+  payload = (struct ZZ9KCryptoVerifyPayload *)request->entry.payload.inline_data;
+  zz9k_put_be32(payload->algorithm, desc->algorithm);
+  zz9k_put_be32(payload->hash_handle, desc->hash_handle);
+  zz9k_put_be32(payload->hash_offset, desc->hash_offset);
+  zz9k_put_be32(payload->hash_length, desc->hash_length);
+  zz9k_put_be32(payload->sig_handle, desc->sig_handle);
+  zz9k_put_be32(payload->sig_offset, desc->sig_offset);
+  zz9k_put_be32(payload->sig_length, desc->sig_length);
+  zz9k_put_be32(payload->key_handle, desc->key_handle);
+  zz9k_put_be32(payload->key_offset, desc->key_offset);
+  zz9k_put_be32(payload->key_length, desc->key_length);
+  return ZZ9K_STATUS_OK;
+}
+
 static inline int zz9k_request_decompress(ZZ9KRequest *request,
                                           const ZZ9KDecompressDesc *desc)
 {

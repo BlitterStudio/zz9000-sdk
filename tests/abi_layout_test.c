@@ -230,6 +230,18 @@ int main(void)
   if (ZZ9K_CRYPTO_X25519_SHARED_BYTES != 32U) return 74;
   if (ZZ9K_SERVICE_FLAG_CRYPTO_X25519 != (1U << 16)) return 75;
 
+  if ((int)ZZ9K_CRYPTO_KX_P256 != 2) return 76;
+  if (ZZ9K_CRYPTO_P256_POINT_BYTES != 65U) return 77;
+  if (ZZ9K_CRYPTO_P256_SHARED_BYTES != 32U) return 78;
+  if (ZZ9K_SERVICE_FLAG_CRYPTO_P256 != (1U << 17)) return 79;
+
+  if (sizeof(ZZ9KCryptoVerifyPayload) != 48U) return 80;
+  if ((int)ZZ9K_OP_CRYPTO_VERIFY != 0x0804) return 81;
+  if ((int)ZZ9K_CRYPTO_VERIFY_ECDSA_P256_SHA256 != 1) return 82;
+  if ((int)ZZ9K_CRYPTO_VERIFY_RSA_PKCS1_2048_SHA256 != 2) return 83;
+  if (ZZ9K_SERVICE_FLAG_CRYPTO_ECDSA_P256 != (1U << 18)) return 84;
+  if (ZZ9K_SERVICE_FLAG_CRYPTO_RSA_2048 != (1U << 19)) return 85;
+
   zz9k_put_be16(data, 0x1234U);
   if (zz9k_get_be16(data) != 0x1234U) return 1;
 

@@ -163,6 +163,7 @@ enum ZZ9KOpcode {
   ZZ9K_OP_CRYPTO_STREAM = ZZ9K_SERVICE_CRYPTO + 0x01,
   ZZ9K_OP_CRYPTO_AEAD = ZZ9K_SERVICE_CRYPTO + 0x02,
   ZZ9K_OP_CRYPTO_KX        = ZZ9K_SERVICE_CRYPTO + 0x03,
+  ZZ9K_OP_CRYPTO_VERIFY    = ZZ9K_SERVICE_CRYPTO + 0x04,
 
   ZZ9K_OP_DIAG_READ = ZZ9K_SERVICE_DIAG + 0x00,
   ZZ9K_OP_DIAG_TIMING = ZZ9K_SERVICE_DIAG + 0x01
@@ -227,7 +228,10 @@ enum ZZ9KServiceFlags {
   ZZ9K_SERVICE_FLAG_CODEC_GZIP_FEED = 1U << 27,
   ZZ9K_SERVICE_FLAG_CODEC_LZMA2 = 1U << 28,
 
-  ZZ9K_SERVICE_FLAG_CRYPTO_X25519     = 1U << 16
+  ZZ9K_SERVICE_FLAG_CRYPTO_X25519     = 1U << 16,
+  ZZ9K_SERVICE_FLAG_CRYPTO_P256       = 1U << 17,
+  ZZ9K_SERVICE_FLAG_CRYPTO_ECDSA_P256 = 1U << 18,
+  ZZ9K_SERVICE_FLAG_CRYPTO_RSA_2048   = 1U << 19
 };
 
 enum ZZ9KAudioSampleFormat {
@@ -631,6 +635,20 @@ struct ZZ9KCryptoKxPayload {
   uint8_t reserved[16];
 };
 
+typedef struct ZZ9KCryptoVerifyPayload {
+  uint8_t algorithm[4];
+  uint8_t hash_handle[4];
+  uint8_t hash_offset[4];
+  uint8_t hash_length[4];
+  uint8_t sig_handle[4];
+  uint8_t sig_offset[4];
+  uint8_t sig_length[4];
+  uint8_t key_handle[4];
+  uint8_t key_offset[4];
+  uint8_t key_length[4];
+  uint8_t reserved[8];
+} ZZ9KCryptoVerifyPayload;
+
 typedef struct ZZ9KDecompressPayload {
   uint8_t src_handle[4];
   uint8_t src_offset[4];
@@ -789,6 +807,9 @@ typedef char ZZ9KCryptoAeadPayload_must_be_48_bytes[
 ];
 typedef char ZZ9KCryptoResultPayload_must_be_48_bytes[
   (sizeof(ZZ9KCryptoResultPayload) == 48U) ? 1 : -1
+];
+typedef char ZZ9KCryptoVerifyPayload_must_be_48_bytes[
+  (sizeof(ZZ9KCryptoVerifyPayload) == 48U) ? 1 : -1
 ];
 typedef char ZZ9KDecompressPayload_must_be_48_bytes[
   (sizeof(ZZ9KDecompressPayload) == 48U) ? 1 : -1
@@ -1343,11 +1364,23 @@ enum ZZ9KCryptoAeadAlgorithm {
 
 typedef enum ZZ9KCryptoKxAlgorithm {
   ZZ9K_CRYPTO_KX_NONE    = 0,
-  ZZ9K_CRYPTO_KX_X25519  = 1
+  ZZ9K_CRYPTO_KX_X25519  = 1U,
+  ZZ9K_CRYPTO_KX_P256    = 2U
 } ZZ9KCryptoKxAlgorithm;
+
+typedef enum ZZ9KCryptoVerifyAlgorithm {
+  ZZ9K_CRYPTO_VERIFY_NONE                     = 0,
+  ZZ9K_CRYPTO_VERIFY_ECDSA_P256_SHA256        = 1U,
+  ZZ9K_CRYPTO_VERIFY_RSA_PKCS1_2048_SHA256    = 2U
+} ZZ9KCryptoVerifyAlgorithm;
 
 #define ZZ9K_CRYPTO_X25519_KEY_BYTES    32U
 #define ZZ9K_CRYPTO_X25519_SHARED_BYTES 32U
+
+/* P-256 public point is the uncompressed SEC1 form: 0x04 || X(32) || Y(32). */
+#define ZZ9K_CRYPTO_P256_POINT_BYTES   65U
+#define ZZ9K_CRYPTO_P256_PRIVATE_BYTES 32U
+#define ZZ9K_CRYPTO_P256_SHARED_BYTES  32U
 
 enum ZZ9KCryptoAeadFlags {
   ZZ9K_CRYPTO_AEAD_FLAG_DECRYPT = 1U << 0

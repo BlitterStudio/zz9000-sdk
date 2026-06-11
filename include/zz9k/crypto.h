@@ -233,8 +233,23 @@ typedef struct ZZ9KCryptoKxDesc {
   uint32_t flags;
 } ZZ9KCryptoKxDesc;
 
-static inline int zz9k_crypto_build_x25519_desc(
-    ZZ9KCryptoKxDesc *desc,
+typedef struct ZZ9KCryptoVerifyDesc {
+  uint32_t hash_handle;
+  uint32_t hash_offset;
+  uint32_t hash_length;
+  uint32_t sig_handle;
+  uint32_t sig_offset;
+  uint32_t sig_length;
+  uint32_t key_handle;
+  uint32_t key_offset;
+  uint32_t key_length;
+  uint32_t algorithm;
+} ZZ9KCryptoVerifyDesc;
+
+/* Fill a key-exchange descriptor for the given scalar-mult algorithm.
+ * Used by both the X25519 and P-256 builders below. */
+static inline int zz9k_crypto_build_kx_desc(
+    ZZ9KCryptoKxDesc *desc, uint32_t algorithm,
     uint32_t scalar_handle, uint32_t scalar_offset,
     uint32_t point_handle, uint32_t point_offset,
     uint32_t dst_handle, uint32_t dst_offset)
@@ -251,8 +266,65 @@ static inline int zz9k_crypto_build_x25519_desc(
   desc->point_offset  = point_offset;
   desc->dst_handle    = dst_handle;
   desc->dst_offset    = dst_offset;
-  desc->algorithm     = ZZ9K_CRYPTO_KX_X25519;
+  desc->algorithm     = algorithm;
   desc->flags         = 0U;
+  return 1;
+}
+
+static inline int zz9k_crypto_build_x25519_desc(
+    ZZ9KCryptoKxDesc *desc,
+    uint32_t scalar_handle, uint32_t scalar_offset,
+    uint32_t point_handle, uint32_t point_offset,
+    uint32_t dst_handle, uint32_t dst_offset)
+{
+  return zz9k_crypto_build_kx_desc(desc, ZZ9K_CRYPTO_KX_X25519,
+                                   scalar_handle, scalar_offset,
+                                   point_handle, point_offset,
+                                   dst_handle, dst_offset);
+}
+
+/* P-256 ECDH. The point buffer holds the uncompressed peer public key
+ * (0x04 || X || Y, ZZ9K_CRYPTO_P256_POINT_BYTES) and dst receives the
+ * 32-byte shared X coordinate. */
+static inline int zz9k_crypto_build_p256_desc(
+    ZZ9KCryptoKxDesc *desc,
+    uint32_t scalar_handle, uint32_t scalar_offset,
+    uint32_t point_handle, uint32_t point_offset,
+    uint32_t dst_handle, uint32_t dst_offset)
+{
+  return zz9k_crypto_build_kx_desc(desc, ZZ9K_CRYPTO_KX_P256,
+                                   scalar_handle, scalar_offset,
+                                   point_handle, point_offset,
+                                   dst_handle, dst_offset);
+}
+
+/* Signature verification (ECDSA-P256 or RSA-PKCS1-2048, both over SHA-256).
+ * hash_* references the message digest, sig_* the signature, key_* the public
+ * key (uncompressed P-256 point, or RSA modulus). */
+static inline int zz9k_crypto_build_verify_desc(
+    ZZ9KCryptoVerifyDesc *desc, uint32_t algorithm,
+    uint32_t hash_handle, uint32_t hash_offset, uint32_t hash_length,
+    uint32_t sig_handle, uint32_t sig_offset, uint32_t sig_length,
+    uint32_t key_handle, uint32_t key_offset, uint32_t key_length)
+{
+  if (!desc ||
+      hash_handle == ZZ9K_INVALID_HANDLE ||
+      sig_handle  == ZZ9K_INVALID_HANDLE ||
+      key_handle  == ZZ9K_INVALID_HANDLE ||
+      (algorithm != ZZ9K_CRYPTO_VERIFY_ECDSA_P256_SHA256 &&
+       algorithm != ZZ9K_CRYPTO_VERIFY_RSA_PKCS1_2048_SHA256))
+    return 0;
+  memset(desc, 0, sizeof(*desc));
+  desc->hash_handle = hash_handle;
+  desc->hash_offset = hash_offset;
+  desc->hash_length = hash_length;
+  desc->sig_handle  = sig_handle;
+  desc->sig_offset  = sig_offset;
+  desc->sig_length  = sig_length;
+  desc->key_handle  = key_handle;
+  desc->key_offset  = key_offset;
+  desc->key_length  = key_length;
+  desc->algorithm   = algorithm;
   return 1;
 }
 

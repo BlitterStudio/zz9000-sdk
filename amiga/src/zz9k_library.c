@@ -888,6 +888,17 @@ int ZZ9KCryptoKeyExchange(ZZ9KLibrary *library,
   return zz9k_crypto_kx(library->ctx, desc, result);
 }
 
+int ZZ9KCryptoVerify(ZZ9KLibrary *library,
+                     const ZZ9KCryptoVerifyDesc *desc,
+                     int *valid)
+{
+  if (!zz9k_library_has_context(library)) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  return zz9k_crypto_verify(library->ctx, desc, valid);
+}
+
 int ZZ9KReadDiag(ZZ9KLibrary *library, ZZ9KDiagInfo *diag)
 {
   if (!zz9k_library_has_context(library)) {

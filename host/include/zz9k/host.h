@@ -181,6 +181,8 @@ int zz9k_crypto_aead(ZZ9KContext *ctx, const ZZ9KCryptoAeadDesc *desc,
                      ZZ9KCryptoResult *result);
 int zz9k_crypto_kx(ZZ9KContext *ctx, const ZZ9KCryptoKxDesc *desc,
                    ZZ9KCryptoResult *result);
+int zz9k_crypto_verify(ZZ9KContext *ctx, const ZZ9KCryptoVerifyDesc *desc,
+                       int *valid);
 int zz9k_crypto_aead_batch(ZZ9KContext *ctx,
                            const ZZ9KCryptoAeadDesc *descs,
                            ZZ9KCryptoResult *results,

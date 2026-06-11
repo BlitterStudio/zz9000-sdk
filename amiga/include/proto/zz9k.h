@@ -808,6 +808,23 @@ static __inline int __ZZ9KCryptoKeyExchangeInline(
 #define ZZ9KCryptoKeyExchange(desc, result) \
   __ZZ9KCryptoKeyExchangeInline((desc), (result))
 
+static __inline int __ZZ9KCryptoVerifyInline(
+    const ZZ9KCryptoVerifyDesc *desc,
+    int *valid)
+{
+  register int zz9k_d0 __asm("d0");
+  register struct Library *zz9k_a6 __asm("a6") = ZZ9KBase;
+  register const ZZ9KCryptoVerifyDesc *zz9k_a0 __asm("a0") = desc;
+  register int *zz9k_a1 __asm("a1") = valid;
+  __asm volatile("jsr -294(a6)"
+                 : "=r"(zz9k_d0)
+                 : "r"(zz9k_a6), "r"(zz9k_a0), "r"(zz9k_a1)
+                 : ZZ9K_INLINE_CLOBBERS);
+  return zz9k_d0;
+}
+#define ZZ9KCryptoVerify(desc, valid) \
+  __ZZ9KCryptoVerifyInline((desc), (valid))
+
 #endif
 
 #ifdef __cplusplus

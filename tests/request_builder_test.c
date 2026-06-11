@@ -1046,6 +1046,54 @@ static int test_crypto_kx_builder_encodes_descriptor(void)
   if (zz9k_get_be32(payload->dst_offset)    != 0x30U) return 9;
   if (zz9k_get_be32(payload->algorithm) != ZZ9K_CRYPTO_KX_X25519) return 10;
   if (zz9k_get_be32(payload->flags) != 0U) return 11;
+
+  /* P-256 reuses the same payload with the P-256 algorithm id. */
+  if (!zz9k_crypto_build_p256_desc(&desc, 0x11U, 0U, 0x22U, 0U, 0x33U, 0U))
+    return 12;
+  zz9k_request_crypto_kx(&request, &desc);
+  payload =
+      (const struct ZZ9KCryptoKxPayload *)request.entry.payload.inline_data;
+  if (zz9k_get_be32(payload->algorithm) != ZZ9K_CRYPTO_KX_P256) return 13;
+  return 0;
+}
+
+static int test_crypto_verify_builder_encodes_descriptor(void)
+{
+  ZZ9KCryptoVerifyDesc desc;
+  ZZ9KRequest request;
+  const ZZ9KCryptoVerifyPayload *payload;
+
+  if (!zz9k_crypto_build_verify_desc(&desc,
+                                     ZZ9K_CRYPTO_VERIFY_ECDSA_P256_SHA256,
+                                     0xA1U, 0x01U, 32U,
+                                     0xB2U, 0x02U, 64U,
+                                     0xC3U, 0x03U, 65U))
+    return 1;
+  if (zz9k_request_crypto_verify(&request, &desc) != ZZ9K_STATUS_OK) return 2;
+  if (request.entry.opcode != ZZ9K_OP_CRYPTO_VERIFY) return 3;
+  if (request.entry.payload_len != sizeof(ZZ9KCryptoVerifyPayload)) return 4;
+  payload =
+      (const ZZ9KCryptoVerifyPayload *)request.entry.payload.inline_data;
+  if (zz9k_get_be32(payload->algorithm) !=
+      ZZ9K_CRYPTO_VERIFY_ECDSA_P256_SHA256) return 5;
+  if (zz9k_get_be32(payload->hash_handle) != 0xA1U) return 6;
+  if (zz9k_get_be32(payload->hash_offset) != 0x01U) return 7;
+  if (zz9k_get_be32(payload->hash_length) != 32U) return 8;
+  if (zz9k_get_be32(payload->sig_handle) != 0xB2U) return 9;
+  if (zz9k_get_be32(payload->sig_offset) != 0x02U) return 10;
+  if (zz9k_get_be32(payload->sig_length) != 64U) return 11;
+  if (zz9k_get_be32(payload->key_handle) != 0xC3U) return 12;
+  if (zz9k_get_be32(payload->key_offset) != 0x03U) return 13;
+  if (zz9k_get_be32(payload->key_length) != 65U) return 14;
+
+  /* A descriptor missing the public key must not produce a request. */
+  if (!zz9k_crypto_build_verify_desc(&desc,
+                                     ZZ9K_CRYPTO_VERIFY_ECDSA_P256_SHA256,
+                                     0xA1U, 0U, 32U, 0xB2U, 0U, 64U,
+                                     0xC3U, 0U, 65U))
+    return 15;
+  desc.key_handle = ZZ9K_INVALID_HANDLE;
+  if (zz9k_request_crypto_verify(&request, &desc) == ZZ9K_STATUS_OK) return 16;
   return 0;
 }
 
@@ -1091,6 +1139,9 @@ int main(void)
 
   result = test_crypto_kx_builder_encodes_descriptor();
   if (result) return 200 + result;
+
+  result = test_crypto_verify_builder_encodes_descriptor();
+  if (result) return 220 + result;
 
   return 0;
 }
