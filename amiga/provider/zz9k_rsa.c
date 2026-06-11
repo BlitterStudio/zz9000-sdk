@@ -7,7 +7,8 @@
  * default provider). The SIGNATURE verify handles only PKCS#1 v1.5 with
  * SHA-256 and declines other padding (e.g. PSS) or digests so those fall back
  * too. zz9k_prov_rsa_verify() is the offload hook: the ZZ9000 firmware verifies
- * RSA-2048; larger moduli and the host path use the software reference.
+ * RSA-2048/3072/4096 (BearSSL is size-agnostic up to 4096-bit); the host path
+ * uses the software reference.
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
