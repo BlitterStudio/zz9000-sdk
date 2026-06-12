@@ -93,6 +93,7 @@ extern const OSSL_DISPATCH zz9k_rsa_signature_functions[];
 extern const OSSL_ALGORITHM zz9k_keymgmt_algorithms[];
 extern const OSSL_ALGORITHM zz9k_keyexch_algorithms[];
 extern const OSSL_ALGORITHM zz9k_cipher_algorithms[];
+extern const OSSL_ALGORITHM zz9k_cipher_algorithms_chacha_only[];
 extern const OSSL_ALGORITHM zz9k_signature_algorithms[];
 
 #ifdef __cplusplus

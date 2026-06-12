@@ -321,6 +321,26 @@ static int run_tests(void)
    * without a reboot or Avail FLUSH). */
   printf("Library: %s | %s\n", OpenSSL_version(OPENSSL_VERSION),
          OpenSSL_version(OPENSSL_BUILT_ON));
+  /* The zz9000 provider version is the unambiguous library marker (the
+   * OpenSSL build stamp above does not change across incremental relinks). */
+  {
+    EVP_KEYMGMT *km = EVP_KEYMGMT_fetch(NULL, "X25519", NULL);
+    if (km != NULL) {
+      const OSSL_PROVIDER *pr = EVP_KEYMGMT_get0_provider(km);
+      OSSL_PARAM p[2];
+      const char *ver = NULL;
+      memset(p, 0, sizeof(p));
+      p[0].key = "version";
+      p[0].data_type = OSSL_PARAM_UTF8_PTR;
+      p[0].data = &ver;
+      p[0].data_size = sizeof(ver);
+      if (pr != NULL && OSSL_PROVIDER_get_params(pr, p) && ver != NULL) {
+        printf("X25519 served by: %s, provider version %s\n",
+               OSSL_PROVIDER_get0_name(pr), ver);
+      }
+      EVP_KEYMGMT_free(km);
+    }
+  }
   printf("--------------------------------\n");
   /* Key exchange first: this is what every TLS handshake does. */
   ok &= x25519_agreement();

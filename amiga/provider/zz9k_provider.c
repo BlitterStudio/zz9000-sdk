@@ -26,7 +26,7 @@
 #include "zz9k_offload.h"
 #endif
 
-#define ZZ9K_PROVIDER_VERSION "0.1.0"
+#define ZZ9K_PROVIDER_VERSION "0.2.0"
 
 static const OSSL_PARAM zz9k_param_types[] = {
   OSSL_PARAM_DEFN(OSSL_PROV_PARAM_NAME, OSSL_PARAM_UTF8_PTR, NULL, 0),
@@ -76,6 +76,46 @@ static const OSSL_ALGORITHM *zz9k_query_operation(void *provctx,
 {
   (void)provctx;
   *no_store = 0;
+#if defined(ZZ9K_PROVIDER_OFFLOAD) && !defined(ZZ9K_PROVIDER_TEST_ALL)
+  /* On the Amiga, algorithms are advertised only when the board can actually
+   * serve them; everything else falls through to AmiSSL's default provider at
+   * FETCH time, so the provider's portable software paths never execute
+   * inside amissl.library. That is deliberate: the in-library (gcc 2.95,
+   * base-relative) build of the software ChaCha tag path computes wrong tags
+   * on real hardware even though the same code passes its KATs in every
+   * standalone build — root cause undetermined — and a software fallback
+   * would be no faster than the default provider anyway. Host builds keep
+   * every table unconditional so the parity tests cover the software code. */
+  {
+    ZZ9K_PROV_CTX *ctx = (ZZ9K_PROV_CTX *)provctx;
+    int have_board = (ctx != NULL && ctx->sdk_ctx != NULL);
+
+    switch (operation_id) {
+    case OSSL_OP_KEYMGMT:
+      return (have_board &&
+              (ctx->service_flags & ZZ9K_SERVICE_FLAG_CRYPTO_X25519) != 0U)
+                 ? zz9k_keymgmt_algorithms
+                 : NULL;
+    case OSSL_OP_KEYEXCH:
+      return (have_board &&
+              (ctx->service_flags & ZZ9K_SERVICE_FLAG_CRYPTO_X25519) != 0U)
+                 ? zz9k_keyexch_algorithms
+                 : NULL;
+    case OSSL_OP_CIPHER:
+      if (!have_board) {
+        return NULL;
+      }
+      /* ChaCha20-Poly1305 is the firmware's legacy AEAD default (available
+       * whenever the crypto service is); AES-GCM additionally needs its
+       * capability flag. */
+      return ((ctx->service_flags & ZZ9K_SERVICE_FLAG_CRYPTO_AES_GCM) != 0U)
+                 ? zz9k_cipher_algorithms
+                 : zz9k_cipher_algorithms_chacha_only;
+    default:
+      return NULL;
+    }
+  }
+#else
   switch (operation_id) {
   case OSSL_OP_KEYMGMT:
     return zz9k_keymgmt_algorithms;
@@ -90,6 +130,7 @@ static const OSSL_ALGORITHM *zz9k_query_operation(void *provctx,
   default:
     return NULL;
   }
+#endif
 }
 
 /* TLS-GROUP capabilities. libssl only keeps a TLS group when the keymgmt

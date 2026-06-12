@@ -32,22 +32,23 @@ int zz9k_prov_x25519(unsigned char out[32], const unsigned char scalar[32],
                      const unsigned char point[32], ZZ9K_PROV_CTX *provctx)
 {
 #ifdef ZZ9K_PROVIDER_OFFLOAD
-  /* On the Amiga, when the firmware advertises X25519, run the key exchange on
-   * the hardware (zz9k_crypto_kx via the offload backend). A negative return
-   * means the offload could not run, so fall through to the portable software
-   * reference (the same code the firmware was validated against). On the host
-   * ZZ9K_PROVIDER_OFFLOAD is undefined and the software reference is always
-   * used. */
-  if (ZZ9K_PROV_CAN_OFFLOAD(provctx, ZZ9K_SERVICE_FLAG_CRYPTO_X25519)) {
-    int r = zz9k_offload_x25519(provctx->sdk_ctx, out, scalar, point);
-    if (r >= 0) {
-      return r;
-    }
+  /* On the Amiga the key exchange always runs on the hardware — X25519 is
+   * only advertised when the firmware has its capability flag (see
+   * zz9k_query_operation). A failed offload FAILS the operation instead of
+   * falling back to the portable software reference: that code is not
+   * trusted inside the base-relative amissl.library build (see the AEAD hook
+   * for the full story), and a failed handshake beats a silently wrong one.
+   * On the host ZZ9K_PROVIDER_OFFLOAD is undefined and the software
+   * reference below is what the parity tests cover. */
+  if (!ZZ9K_PROV_CAN_OFFLOAD(provctx, ZZ9K_SERVICE_FLAG_CRYPTO_X25519)) {
+    return 0;
   }
+  return zz9k_offload_x25519(provctx->sdk_ctx, out, scalar, point) > 0 ? 1
+                                                                       : 0;
 #else
   (void)provctx;
-#endif
   return zz9k_soft_x25519(out, scalar, point);
+#endif
 }
 
 /* ---- KEYMGMT ---- */

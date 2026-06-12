@@ -95,34 +95,34 @@ static int zz9k_prov_aead(int alg, int enc, const unsigned char *key,
                           ZZ9K_PROV_CTX *provctx)
 {
 #ifdef ZZ9K_PROVIDER_OFFLOAD
-  /* Route to zz9k_crypto_aead when the firmware supports the algorithm. A
-   * negative return means the offload could not run (allocation/mailbox error)
-   * so fall through to the software reference; for a decrypt with a bad tag the
-   * offload also returns negative and the software path then returns 0, which
-   * is the correct authentication failure.
+  /* On the Amiga every record offloads — the AEAD ciphers are only advertised
+   * when the board's crypto service is live (see zz9k_query_operation), and
+   * AES-GCM additionally only with its capability flag, because AEAD firmware
+   * that predates the algorithm bits in the descriptor flags treats them as
+   * don't-care and would run the legacy ChaCha20-Poly1305 while reporting
+   * success.
    *
-   * AES-GCM requires its capability flag: AEAD firmware that predates the
-   * algorithm bits in the descriptor flags treats them as don't-care and would
-   * run the legacy default (ChaCha20-Poly1305) while reporting success. The
-   * offload wins at every record size, so it carries no size gate.
-   * ChaCha20-Poly1305 is that legacy default — available whenever the crypto
-   * service is — but software beats the synchronous offload below the measured
-   * ~2 KB break-even (docs/zz9k-crypto-acceleration.md), so small records stay
-   * on the CPU. */
+   * A failed offload (allocation/mailbox error, or a decrypt with a bad tag —
+   * both return negative) FAILS the operation rather than falling back to the
+   * portable software reference: that code computes wrong ChaCha tags inside
+   * the base-relative amissl.library build despite passing its KATs in every
+   * standalone build (root cause undetermined), and silent wrong crypto is
+   * far worse than a failed record. The host build (no ZZ9K_PROVIDER_OFFLOAD)
+   * runs the software reference below, which is what the parity tests cover. */
   {
     int aes = (alg != ZZ9K_AEAD_CHACHA20_POLY1305);
-    int use_offload = aes
-        ? ZZ9K_PROV_CAN_OFFLOAD(provctx, ZZ9K_SERVICE_FLAG_CRYPTO_AES_GCM)
-        : (ZZ9K_PROV_CAN_OFFLOAD_SERVICE(provctx) &&
-           inlen >= ZZ9K_CHACHA_OFFLOAD_MIN);
-    if (use_offload) {
-      int r = zz9k_offload_aead(provctx->sdk_ctx, aes, (unsigned int)keylen,
-                                !enc, key, iv, aad, (unsigned int)aadlen, in,
-                                (unsigned int)inlen, out, tag);
-      if (r >= 0) {
-        return r;
-      }
+    int r;
+    if (aes && !ZZ9K_PROV_CAN_OFFLOAD(provctx,
+                                      ZZ9K_SERVICE_FLAG_CRYPTO_AES_GCM)) {
+      return 0;
     }
+    if (!ZZ9K_PROV_CAN_OFFLOAD_SERVICE(provctx)) {
+      return 0;
+    }
+    r = zz9k_offload_aead(provctx->sdk_ctx, aes, (unsigned int)keylen, !enc,
+                          key, iv, aad, (unsigned int)aadlen, in,
+                          (unsigned int)inlen, out, tag);
+    return r > 0 ? 1 : 0;
   }
 #else
   (void)provctx;
@@ -703,6 +703,15 @@ const OSSL_ALGORITHM zz9k_cipher_algorithms[] = {
     "ZZ9000 AES-128-GCM" },
   { "AES-256-GCM", "provider=zz9000", zz9k_aes256gcm_functions,
     "ZZ9000 AES-256-GCM" },
+  { "ChaCha20-Poly1305", "provider=zz9000", zz9k_chachapoly_functions,
+    "ZZ9000 ChaCha20-Poly1305" },
+  { NULL, NULL, NULL, NULL }
+};
+
+/* Advertised instead of the full table when the firmware has the crypto
+ * service but not the AES-GCM capability flag (ChaCha20-Poly1305 is the
+ * legacy AEAD default every crypto-service firmware provides). */
+const OSSL_ALGORITHM zz9k_cipher_algorithms_chacha_only[] = {
   { "ChaCha20-Poly1305", "provider=zz9000", zz9k_chachapoly_functions,
     "ZZ9000 ChaCha20-Poly1305" },
   { NULL, NULL, NULL, NULL }
