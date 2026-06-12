@@ -127,6 +127,23 @@ static int zz9k_prov_aead(int alg, int enc, const unsigned char *key,
 #else
   (void)provctx;
 #endif
+#ifdef ZZ9K_AEAD_DEBUG
+  /* Diagnostic build only: dump exactly what reaches the software AEAD so a
+   * divergence between caller intent and callee inputs is directly visible. */
+  {
+    extern int printf(const char *, ...);
+    size_t di;
+    printf("[aead] alg=%d enc=%d keylen=%lu inlen=%lu aadlen=%lu\n", alg, enc,
+           (unsigned long)keylen, (unsigned long)inlen,
+           (unsigned long)aadlen);
+    printf("[aead] key="); for (di = 0; di < keylen; di++) printf("%02x", key[di]);
+    printf("\n[aead] iv=");  for (di = 0; di < 12; di++) printf("%02x", iv[di]);
+    printf("\n[aead] aad="); for (di = 0; di < aadlen; di++) printf("%02x", aad[di]);
+    printf("\n[aead] in[0..15]=");
+    for (di = 0; di < (inlen < 16 ? inlen : 16); di++) printf("%02x", in[di]);
+    printf("\n");
+  }
+#endif
   switch (alg) {
   case ZZ9K_AEAD_AES128_GCM:
   case ZZ9K_AEAD_AES256_GCM:
@@ -142,6 +159,15 @@ static int zz9k_prov_aead(int alg, int enc, const unsigned char *key,
     if (enc) {
       zz9k_soft_chacha20_poly1305_encrypt(out, tag, in, (uint32_t)inlen, aad,
                                           (uint32_t)aadlen, key, iv);
+#ifdef ZZ9K_AEAD_DEBUG
+      {
+        extern int printf(const char *, ...);
+        int di;
+        printf("[aead] soft chacha tag=");
+        for (di = 0; di < 16; di++) printf("%02x", tag[di]);
+        printf("\n");
+      }
+#endif
       return 1;
     }
     return zz9k_soft_chacha20_poly1305_decrypt(out, in, (uint32_t)inlen, aad,
