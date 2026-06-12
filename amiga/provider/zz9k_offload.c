@@ -23,6 +23,16 @@
 
 #define ZZ9K_OFFLOAD_ALIGN 16U
 
+/* The provider-local verify ids mirror the ABI enum so the operation files can
+ * stay free of SDK headers; these compile-time checks (portable to gcc 2.95,
+ * which builds this file inside amissl.library) keep the two in lockstep. */
+typedef char zz9k_offload_assert_ecdsa_id[
+    (ZZ9K_OFFLOAD_VERIFY_ECDSA_P256 == ZZ9K_CRYPTO_VERIFY_ECDSA_P256_SHA256)
+        ? 1 : -1];
+typedef char zz9k_offload_assert_rsa_id[
+    (ZZ9K_OFFLOAD_VERIFY_RSA_PKCS1 == ZZ9K_CRYPTO_VERIFY_RSA_PKCS1_2048_SHA256)
+        ? 1 : -1];
+
 int zz9k_offload_x25519(void *vctx, unsigned char out[32],
                         const unsigned char scalar[32],
                         const unsigned char point[32])
