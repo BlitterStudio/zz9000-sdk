@@ -29,6 +29,15 @@
 #include <stdlib.h>
 #endif
 
+#if ZZ9K_HOST_AMIGA
+/* FindConfigDev() dispatches through this global library base. Standalone
+ * tools normally receive a definition from libnix's auto-open stubs, but a
+ * resident library linked with -nostdlib (e.g. amissl.library carrying the
+ * provider) has none, so the definition lives here. zz9k_find_board() opens
+ * expansion.library itself and save/restores this base around the call. */
+struct ExpansionBase *ExpansionBase;
+#endif
+
 #define ZZ9K_SYNC_COOKIE_MASK 0x5aa55aa5UL
 #define ZZ9K_MAILBOX_SEMAPHORE_NAME "zz9000.sdk.mailbox"
 
