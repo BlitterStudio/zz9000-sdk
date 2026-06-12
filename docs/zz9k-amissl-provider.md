@@ -44,10 +44,16 @@ host unit tests. Two things make them use the hardware:
   back to the bundled software reference — the same code the firmware was
   validated against. With the macro undefined (the host build) every operation
   uses the software reference, which is why the host unit tests stay meaningful.
-* **An open SDK context.** `zz9k_provider_init` calls `zz9k_open()` once for the
-  provider's lifetime and records the advertised crypto service flags. If the
-  board is absent the provider still loads and every operation transparently
-  uses software.
+* **An open offload context.** `zz9k_provider_init` opens the board once for
+  the provider's lifetime (`zz9k_offload_open`), keeps it only when the
+  firmware's crypto service responds, and records the advertised service
+  flags. Each operation additionally gates its offload on the matching
+  `ZZ9K_SERVICE_FLAG_CRYPTO_*` bit, so firmware that lacks one algorithm never
+  pays a failing mailbox round trip for it. If the board (or the crypto
+  service) is absent the provider still loads and every operation transparently
+  uses software. The context also holds persistent shared scratch buffers:
+  allocation is a full mailbox round trip, so a warm operation costs exactly
+  one round trip — the figure the published benchmarks measured.
 
 ## Source files
 
@@ -56,7 +62,7 @@ host unit tests. Two things make them use the hardware:
 | `amiga/provider/zz9k_provider.c` | Provider core: params, operation query, init/teardown (opens the SDK context under `ZZ9K_PROVIDER_OFFLOAD`). |
 | `amiga/provider/zz9k_algorithms.c` | Central `OSSL_ALGORITHM` tables. |
 | `amiga/provider/zz9k_x25519.c` | X25519 KEYMGMT + KEYEXCH. |
-| `amiga/provider/zz9k_aead.c` | AES-128/256-GCM and ChaCha20-Poly1305 ciphers. |
+| `amiga/provider/zz9k_aead.c` | AES-128/256-GCM and ChaCha20-Poly1305 ciphers, including the TLS 1.2 record-layer controls (`EVP_CTRL_AEAD_TLS1_AAD` / `SET_IV_FIXED`) libssl drives per record. |
 | `amiga/provider/zz9k_ecdsa.c` | EC P-256 KEYMGMT + ECDSA verify. |
 | `amiga/provider/zz9k_rsa.c` | RSA KEYMGMT + RSA-PKCS1-SHA256 verify (2048/3072/4096). |
 | `amiga/provider/zz9k_offload.c` | SDK bridge: marshals an operation into shared buffers and runs it through the SDK. **Amiga-only.** |
@@ -213,10 +219,18 @@ handle.
 
 * Operations not advertised by the provider resolve to the default provider via
   the `?` (optional) property query.
+* Algorithms the firmware does not advertise (per-algorithm
+  `ZZ9K_SERVICE_FLAG_CRYPTO_*` bits) stay in software with no mailbox traffic.
 * RSA-PSS, non-SHA-256 digests, and moduli above 4096 bits are declined by the
-  RSA operation, so they fall back to software.
+  RSA operation, so they fall back to software. An "invalid" verdict from the
+  board for a modulus wider than 2048 bits is also re-checked in software, in
+  case the deployed firmware predates the wider sizes.
+* ChaCha20-Poly1305 records below the measured ~2 KB break-even stay on the
+  CPU (software is faster there); AES-GCM offloads at every size.
 * A decrypt whose tag fails to authenticate returns the correct authentication
   failure (the offload reports an error and the software reference then rejects
   the tag).
 * If the board is missing or a mailbox call fails, the operation completes in
   software. The only observable difference is timing.
+* `zz9k_amissl_unregister()` is a no-op when registration never ran, so an
+  application's cleanup path is safe even after a failed `InitAmiSSL()`.

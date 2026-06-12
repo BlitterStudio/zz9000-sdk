@@ -20,12 +20,14 @@ The integration is deliberately thin:
 
 * **The provider sources stay in this repo** (`amiga/provider/`, `host/src/`,
   `tools/`). They are versioned, reviewed, and host-tested here.
-* **`amissl-zz9000.patch`** is the only change to AmiSSL — two hunks:
-  1. `Makefile`: compile our objects (referenced by `$(ZZ9000_SDK)` path) and
-     add them to `LIBOBJS`.
-  2. `src/amissl_library.c`: call `zz9k_provider_register_builtin()` inside
-     `InitAmiSSLA`, after OpenSSL is set up, so each application's default
-     context prefers the ZZ9000 (`?provider=zz9000`) with software fallback.
+* **`amissl-zz9000.patch`** is the only change to AmiSSL:
+  1. `Makefile`: compile our objects (referenced by `$(ZZ9000_SDK)` path), add
+     them to `LIBOBJS`, and give `amissl_library.o` the provider include path
+     so the registration call is checked against its real prototype.
+  2. `src/amissl_library.c`: include `zz9k_amissl_builtin.h` and call
+     `zz9k_provider_register_builtin()` inside `InitAmiSSLA`, after OpenSSL is
+     set up, so each application's default context prefers the ZZ9000
+     (`?provider=zz9000`) with software fallback.
 
 Inside the library the provider links directly against the statically-linked
 OpenSSL core — no AmiSSL inline redirection, no register-convention boundary.
@@ -56,10 +58,13 @@ binary releases.
 ### `build.sh` (used by the workflow; also for local builds)
 
 `build.sh` does the actual work — fetch/locate AmiSSL at `AMISSL_REF`, apply the
-patch, `make OS=os3-68020 ZZ9000_SDK=…`. It needs the adtools m68k toolchain on
-`PATH` (`/opt/m68k-amigaos/bin` for the cross-gcc, `/usr/local/amiga/bin` for
-`bumprev`/utils). `OS=os3-68020` (default) builds the 68020+ library;
-`OS=os3-68060` builds the 68060 one. Output lands in `work/out/` (gitignored).
+patch, `make OS=os3-68020 ZZ9000_SDK=… DEBUG=`. It needs the adtools m68k
+toolchain on `PATH` (`/opt/m68k-amigaos/bin` for the cross-gcc,
+`/usr/local/amiga/bin` for `bumprev`/utils). `OS=os3-68020` (default) builds
+the 68020+ library; `OS=os3-68060` builds the 68060 one. Builds are release
+(`DEBUG=` passed to make, like AmiSSL's own release targets) unless `DEBUG` is
+exported with AmiSSL's debug flags. Output lands in `work/out/<OS>/`
+(gitignored), and the script fails if no library was produced.
 
 **Local-build caveats** (why CI is recommended): the adtools 2017 gcc is a 32-bit
 binary that overflows on Windows bind-mount inodes (`Value too large for defined

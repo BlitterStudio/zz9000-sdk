@@ -49,7 +49,9 @@ cmake -B build-cmake && cmake --build build-cmake && ctest --test-dir build-cmak
 | `tools/` | CLI tool implementations (`zz9k-info.c`, `zz9k-jpeg.c`, etc.) |
 | `tools/lha-unix/` | Third-party LHa decoder subset (jca02266/lha 1.14i) |
 | `examples/amiga-*/` | Example programs (library, jpeg-stream, typed-decode, crypto) |
-| `tests/` | ~75 C test executables (host-side, CMake-driven) |
+| `amiga/provider/` | ZZ9000 OpenSSL 3 provider (crypto offload for AmiSSL) |
+| `integration/amissl/` | AmiSSL drop-in build: pinned ref, patch, build script |
+| `tests/` | ~80 C test executables (host-side, CMake-driven) |
 | `docs/` | Prose documentation (`zz9k-library.md`, `zz9k-modules.md`, etc.) |
 | `scripts/` | Build and package scripts (.ps1 + .sh pairs) |
 
@@ -79,9 +81,20 @@ JPEG/PNG datatype descriptor binaries live as `.b64` files in `amiga/datatypes/d
 
 The PowerShell package script enforces that `$OutputDir` stays under `build/package/`. Changing this path requires modifying the validation logic.
 
-### No CI, No Pre-commit
+### CI Covers Only the AmiSSL Build
 
-No `.github/workflows`, no pre-commit hooks, no linting config. Quality gates are the CMake test suite and manual hardware smoke tests (documented in `docs/zz9k-release-smoke.md`).
+One workflow exists: `.github/workflows/build-amissl-provider.yml` builds the
+ZZ9000-provider-enabled `amissl.library` (see `integration/amissl/`). There is
+no CI for the SDK itself, no pre-commit hooks, no linting config. Quality gates
+are the CMake test suite and manual hardware smoke tests (documented in
+`docs/zz9k-release-smoke.md`).
+
+### Provider Tests Need OpenSSL 3
+
+The `provider_*` host tests build only when CMake finds an OpenSSL 3
+development install (`find_package(OpenSSL 3.0)`). On hosts without it (e.g. a
+plain Windows setup) they are silently skipped — run the suite in a Linux
+container with `libssl-dev` to cover the provider.
 
 ### Third-Party Code Boundary
 
