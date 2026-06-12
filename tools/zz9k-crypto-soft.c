@@ -353,8 +353,15 @@ static void zz9k_soft_chacha20_poly1305_tag(
   ZZ9KSoftPoly1305 st;
   uint8_t otk[64];
   uint8_t lengths[16];
-  static const uint8_t zero_block[64] = { 0 };
+  uint8_t zero_block[32];
 
+  /* Explicitly zeroed local, NOT a zero-initialized static: statics with an
+   * all-zero initializer are placed in BSS, and inside a base-relative
+   * resident library (the AmiSSL Path A build) that BSS is not reliably
+   * zeroed — a garbage zero_block poisons the Poly1305 one-time key and
+   * produces a random tag over a perfectly good ciphertext. Found the hard
+   * way on real hardware. */
+  memset(zero_block, 0, sizeof(zero_block));
   zz9k_soft_chacha20_xor(otk, zero_block, 32U, key, nonce, 0U);
   zz9k_soft_poly1305_init(&st, otk);
 
