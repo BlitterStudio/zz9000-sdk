@@ -63,7 +63,10 @@ toolchain on `PATH` (`/opt/m68k-amigaos/bin` for the cross-gcc,
 `/usr/local/amiga/bin` for `bumprev`/utils). `OS=os3-68020` (default) builds
 the 68020+ library; `OS=os3-68060` builds the 68060 one. Builds are release
 (`DEBUG=` passed to make, like AmiSSL's own release targets) unless `DEBUG` is
-exported with AmiSSL's debug flags. Output lands in `work/out/<OS>/`
+exported with AmiSSL's debug flags. The collected library is stripped exactly
+as AmiSSL's release packaging does (`strip -p -R.comment`) — the link step
+otherwise leaves a ~3.4 MB stabs hunk that doubles the file size and is absent
+from the official Aminet release. Output lands in `work/out/<OS>/`
 (gitignored), and the script fails if no library was produced.
 
 **Local-build caveats** (why CI is recommended): the adtools 2017 gcc is a 32-bit

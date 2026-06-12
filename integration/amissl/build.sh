@@ -56,14 +56,20 @@ echo ">> Building amissl.library (OS=$OS, DEBUG='${DEBUG-}', ZZ9000_SDK=$ZZ9000_
 make -C "$SRC" OS="$OS" ZZ9000_SDK="$ZZ9000_SDK" DEBUG="${DEBUG-}"
 
 # Collect the build products deterministically and fail loudly if the expected
-# library is missing — a green run must mean a usable artifact.
+# library is missing — a green run must mean a usable artifact. The library is
+# stripped exactly as AmiSSL's own release packaging does (tools/mkrelease.sh:
+# `strip -p -R.comment`): the link step leaves a ~3.4 MB stabs/symbol hunk
+# (LDFLAGS carries -g -gstabs unconditionally), which doubles the file size and
+# is not present in the official Aminet release. m68k strip for both os3
+# targets; override via STRIP for other toolchains.
 OUT="$WORK/out/$OS"
+STRIP=${STRIP:-m68k-amigaos-strip}
 mkdir -p "$OUT"
-echo ">> Collecting built libraries into $OUT"
+echo ">> Collecting and stripping built libraries into $OUT"
 FOUND=0
 for lib in "$SRC/build_$OS"/amissl_v*.library; do
   [ -f "$lib" ] || continue
-  cp -v "$lib" "$OUT/"
+  "$STRIP" -p -R.comment "$lib" -o "$OUT/$(basename "$lib")"
   FOUND=1
 done
 if [ "$FOUND" != 1 ]; then
