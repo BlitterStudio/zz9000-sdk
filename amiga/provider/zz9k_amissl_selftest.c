@@ -314,6 +314,13 @@ static int run_tests(void)
 {
   int ok = 1;
   printf("ZZ9000 AmiSSL provider self-test\n");
+  /* Identify the EXACT library binary serving this run: the OpenSSL build
+   * timestamp is baked into amissl.library at build time, so this line
+   * proves whether a newly installed library is actually the one loaded
+   * (AmigaOS keeps libraries resident — copying the file is not enough
+   * without a reboot or Avail FLUSH). */
+  printf("Library: %s | %s\n", OpenSSL_version(OPENSSL_VERSION),
+         OpenSSL_version(OPENSSL_BUILT_ON));
   printf("--------------------------------\n");
   /* Key exchange first: this is what every TLS handshake does. */
   ok &= x25519_agreement();
