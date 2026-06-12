@@ -34,12 +34,14 @@ static int zz9k_prov_rsa_verify(const unsigned char *sig, uint32_t siglen,
                                 uint32_t e, ZZ9K_PROV_CTX *provctx)
 {
 #ifdef ZZ9K_PROVIDER_OFFLOAD
-  /* Verify on the ZZ9000 (zz9k_crypto_verify) when provctx carries a live
-   * context. The firmware accepts RSA-2048/3072/4096 (BearSSL is size-agnostic
-   * up to 4096-bit). The key is marshalled as modulus || exponent, the
-   * exponent in 4 big-endian bytes. A negative return falls through to the
-   * software reference. */
-  if (provctx != NULL && provctx->sdk_ctx != NULL) {
+  /* Verify on the ZZ9000 (zz9k_crypto_verify) when the firmware advertises
+   * RSA verify. Current firmware accepts RSA-2048/3072/4096 (BearSSL is
+   * size-agnostic up to 4096-bit) under the single RSA_PKCS1 algorithm id.
+   * The key is marshalled as modulus || exponent, the exponent in 4 big-endian
+   * bytes. A negative return falls through to the software reference — as does
+   * an "invalid" verdict for moduli wider than 2048 bits, in case the deployed
+   * firmware predates the wider sizes and bound-checks rather than errors. */
+  if (ZZ9K_PROV_CAN_OFFLOAD(provctx, ZZ9K_SERVICE_FLAG_CRYPTO_RSA_2048)) {
     unsigned int nbytes = nbits / 8U;
     if (nbytes <= ZZ9K_RSA_MAX_BYTES) {
       unsigned char key[ZZ9K_RSA_MAX_BYTES + 4];
@@ -50,7 +52,8 @@ static int zz9k_prov_rsa_verify(const unsigned char *sig, uint32_t siglen,
       key[nbytes + 2] = (unsigned char)(e >> 8);
       key[nbytes + 3] = (unsigned char)(e);
       if (zz9k_offload_verify(provctx->sdk_ctx, ZZ9K_OFFLOAD_VERIFY_RSA_PKCS1,
-                              hash, sig, siglen, key, nbytes + 4U, &valid) >= 0) {
+                              hash, sig, siglen, key, nbytes + 4U, &valid) >= 0 &&
+          (valid || nbytes <= 256U)) {
         return valid;
       }
     }
