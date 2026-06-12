@@ -1389,11 +1389,16 @@ static void zz9k_put_be32_local(uint8_t *p, uint32_t v)
 /* Core GCM: derive H, J0, tag mask, run CTR over in->out, compute the tag.
  * `ct` points at the ciphertext for GHASH (== out for encrypt, == in for
  * decrypt), since GHASH is always computed over the ciphertext. */
+/* `ghash_first` orders the GHASH-over-ciphertext pass relative to the CTR
+ * pass so that in == out (in-place processing, the TLS record pattern) works
+ * in both directions: decrypt must GHASH the ciphertext before the CTR pass
+ * overwrites it, encrypt must GHASH the ciphertext after producing it. */
 static void zz9k_aes_gcm_core(const zz9k_aes_ctx *c,
                               const uint8_t nonce[12],
                               const uint8_t *aad, uint32_t aad_length,
                               const uint8_t *in, uint8_t *out, uint32_t length,
-                              const uint8_t *ct, uint8_t tag[16])
+                              const uint8_t *ct, uint8_t tag[16],
+                              int ghash_first)
 {
   uint8_t h[16];
   uint8_t j0[16];
@@ -1410,6 +1415,14 @@ static void zz9k_aes_gcm_core(const zz9k_aes_ctx *c,
   for (i = 0; i < 12U; i++) j0[i] = nonce[i];    /* J0 = IV || 0^31 1 */
   j0[12] = 0; j0[13] = 0; j0[14] = 0; j0[15] = 1;
 
+  /* GHASH(AAD || C || len(AAD)||len(C)); the C part runs before or after the
+   * CTR pass per ghash_first. */
+  for (i = 0; i < 16U; i++) y[i] = 0;
+  zz9k_ghash_update(y, h, aad, aad_length);
+  if (ghash_first) {
+    zz9k_ghash_update(y, h, ct, length);
+  }
+
   /* CTR encryption starting from inc32(J0). */
   for (i = 0; i < 16U; i++) counter[i] = j0[i];
   off = 0;
@@ -1424,10 +1437,9 @@ static void zz9k_aes_gcm_core(const zz9k_aes_ctx *c,
     off += n;
   }
 
-  /* GHASH(AAD || C || len(AAD)||len(C)). */
-  for (i = 0; i < 16U; i++) y[i] = 0;
-  zz9k_ghash_update(y, h, aad, aad_length);
-  zz9k_ghash_update(y, h, ct, length);
+  if (!ghash_first) {
+    zz9k_ghash_update(y, h, ct, length);
+  }
   zz9k_put_be32_local(&lenblk[0], 0U);
   zz9k_put_be32_local(&lenblk[4], aad_length * 8U);
   zz9k_put_be32_local(&lenblk[8], 0U);
@@ -1450,7 +1462,7 @@ int zz9k_soft_aes_gcm_encrypt(uint8_t *ciphertext,
   zz9k_aes_ctx c;
   if (!zz9k_aes_init(&c, key, key_length)) return 0;
   zz9k_aes_gcm_core(&c, nonce, aad, aad_length, plaintext, ciphertext, length,
-                    ciphertext, tag);
+                    ciphertext, tag, 0);
   return 1;
 }
 
@@ -1467,9 +1479,10 @@ int zz9k_soft_aes_gcm_decrypt(uint8_t *plaintext,
   uint32_t i;
 
   if (!zz9k_aes_init(&c, key, key_length)) return 0;
-  /* CTR over ciphertext->plaintext; GHASH over the ciphertext input. */
+  /* CTR over ciphertext->plaintext; GHASH over the ciphertext input, before
+   * the CTR pass so decrypting in place (TLS records) stays correct. */
   zz9k_aes_gcm_core(&c, nonce, aad, aad_length, ciphertext, plaintext, length,
-                    ciphertext, expected);
+                    ciphertext, expected, 1);
   for (i = 0; i < 16U; i++) diff |= (uint8_t)(expected[i] ^ tag[i]);
   if (diff != 0U) {
     for (i = 0; i < length; i++) plaintext[i] = 0;  /* withhold on failure */
