@@ -4,20 +4,17 @@
 # every application that opens the library gets accelerated TLS with no changes
 # of its own (Path A — see README.md).
 #
-# Run this inside an AmiSSL m68k build environment. The
-# sacredbanana/amiga-compiler:m68k-amigaos image has everything needed
-# (m68k-amigaos-gcc, sfdc, clib2, make). Example:
-#
-#   docker run --rm \
-#     -v "$PWD:/sdk" -v "$PWD/../amissl:/amissl" \
-#     sacredbanana/amiga-compiler:m68k-amigaos \
-#     sh -c 'AMISSL_DIR=/amissl ZZ9000_SDK=/sdk /sdk/integration/amissl/build.sh'
+# Needs the adtools m68k build environment AmiSSL's own CI uses; the supported
+# way to run it is the GitHub workflow (.github/workflows/build-amissl-provider.yml)
+# or an equivalent ubuntu container. See README.md ("Building") for the
+# environment details and local-build caveats.
 #
 # Environment overrides:
 #   ZZ9000_SDK   path to the zz9000-sdk checkout      (default: repo root)
 #   AMISSL_DIR   use an existing AmiSSL checkout       (default: clone into work/)
 #   AMISSL_REPO  git URL to clone when AMISSL_DIR unset
-#   OS           AmiSSL build target                   (default: os3-68020 = m68k)
+#   OS           AmiSSL build target                   (default: os3-68020)
+#   DEBUG        AmiSSL DEBUG flags; empty = release   (default: empty)
 #   WORK         scratch directory                     (default: integration/amissl/work)
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
@@ -52,11 +49,26 @@ echo ">> Applying integration patch"
 git -C "$SRC" checkout -- Makefile src/amissl_library.c 2>/dev/null || true
 git -C "$SRC" apply "$PATCH"
 
-echo ">> Building amissl.library (OS=$OS, ZZ9000_SDK=$ZZ9000_SDK)"
-make -C "$SRC" OS="$OS" ZZ9000_SDK="$ZZ9000_SDK"
+# AmiSSL's Makefile hard-assigns DEBUG (-DDEBUG -g -gstabs), so a release
+# build needs the override on the make command line, exactly like AmiSSL's
+# own release targets (`make OS=... DEBUG=`).
+echo ">> Building amissl.library (OS=$OS, DEBUG='${DEBUG-}', ZZ9000_SDK=$ZZ9000_SDK)"
+make -C "$SRC" OS="$OS" ZZ9000_SDK="$ZZ9000_SDK" DEBUG="${DEBUG-}"
 
-mkdir -p "$WORK/out"
-echo ">> Collecting built libraries"
-find "$SRC" -name 'amissl*.library' -newer "$PATCH" -exec cp -v {} "$WORK/out/" \; || true
-echo ">> Done. Output in $WORK/out/"
-ls -l "$WORK/out/" 2>/dev/null || true
+# Collect the build products deterministically and fail loudly if the expected
+# library is missing — a green run must mean a usable artifact.
+OUT="$WORK/out/$OS"
+mkdir -p "$OUT"
+echo ">> Collecting built libraries into $OUT"
+FOUND=0
+for lib in "$SRC/build_$OS"/amissl_v*.library; do
+  [ -f "$lib" ] || continue
+  cp -v "$lib" "$OUT/"
+  FOUND=1
+done
+if [ "$FOUND" != 1 ]; then
+  echo "!! No amissl_v*.library produced in $SRC/build_$OS" >&2
+  exit 1
+fi
+ls -l "$OUT/"
+echo ">> Done."
