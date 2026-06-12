@@ -121,16 +121,20 @@ int zz9k_provider_init(const OSSL_CORE_HANDLE *handle, const OSSL_DISPATCH *in,
   ctx->handle = handle;
 #ifdef ZZ9K_PROVIDER_OFFLOAD
   /* Open the ZZ9000 once for the provider's lifetime and remember which crypto
-   * services the firmware advertises. If the board is absent or unsupported the
-   * provider still loads and every operation transparently uses its software
-   * reference (the per-op hooks check sdk_ctx before offloading). */
+   * services the firmware advertises. The context is kept only when the crypto
+   * service responds: a board without it (older firmware) must behave exactly
+   * like an absent board, or every operation would pay a failing mailbox round
+   * trip before its software fallback. The per-op hooks additionally gate each
+   * algorithm on its ZZ9K_SERVICE_FLAG_CRYPTO_* bit (see zz9k_prov_local.h). */
   {
     ZZ9KContext *sdk = NULL;
     if (zz9k_open(&sdk) == ZZ9K_STATUS_OK) {
       ZZ9KServiceInfo svc;
-      ctx->sdk_ctx = sdk;
       if (zz9k_query_service(sdk, ZZ9K_SERVICE_CRYPTO, &svc) == ZZ9K_STATUS_OK) {
+        ctx->sdk_ctx = sdk;
         ctx->service_flags = svc.flags;
+      } else {
+        zz9k_close(sdk);
       }
     }
   }

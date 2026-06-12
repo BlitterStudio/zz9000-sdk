@@ -32,11 +32,11 @@ static int zz9k_prov_ecdsa_verify(const unsigned char r[32],
                                   ZZ9K_PROV_CTX *provctx)
 {
 #ifdef ZZ9K_PROVIDER_OFFLOAD
-  /* Verify on the ZZ9000 (zz9k_crypto_verify) when provctx carries a live
-   * context. The signature is passed as r||s (64 bytes) and the key as the
+  /* Verify on the ZZ9000 (zz9k_crypto_verify) when the firmware advertises
+   * ECDSA-P256. The signature is passed as r||s (64 bytes) and the key as the
    * 65-byte uncompressed point. A negative return falls through to the
    * software reference. */
-  if (provctx != NULL && provctx->sdk_ctx != NULL) {
+  if (ZZ9K_PROV_CAN_OFFLOAD(provctx, ZZ9K_SERVICE_FLAG_CRYPTO_ECDSA_P256)) {
     unsigned char sig[64];
     int valid = 0;
     memcpy(sig, r, 32);

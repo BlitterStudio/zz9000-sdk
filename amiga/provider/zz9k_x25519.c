@@ -31,13 +31,13 @@ int zz9k_prov_x25519(unsigned char out[32], const unsigned char scalar[32],
                      const unsigned char point[32], ZZ9K_PROV_CTX *provctx)
 {
 #ifdef ZZ9K_PROVIDER_OFFLOAD
-  /* On the Amiga, when provctx carries an open ZZ9000 context, run the key
-   * exchange on the hardware (zz9k_crypto_kx via the offload backend). A
-   * negative return means the offload could not run, so fall through to the
-   * portable software reference (the same code the firmware was validated
-   * against). On the host ZZ9K_PROVIDER_OFFLOAD is undefined and the software
-   * reference is always used. */
-  if (provctx != NULL && provctx->sdk_ctx != NULL) {
+  /* On the Amiga, when the firmware advertises X25519, run the key exchange on
+   * the hardware (zz9k_crypto_kx via the offload backend). A negative return
+   * means the offload could not run, so fall through to the portable software
+   * reference (the same code the firmware was validated against). On the host
+   * ZZ9K_PROVIDER_OFFLOAD is undefined and the software reference is always
+   * used. */
+  if (ZZ9K_PROV_CAN_OFFLOAD(provctx, ZZ9K_SERVICE_FLAG_CRYPTO_X25519)) {
     int r = zz9k_offload_x25519(provctx->sdk_ctx, out, scalar, point);
     if (r >= 0) {
       return r;

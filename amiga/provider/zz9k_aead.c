@@ -44,6 +44,11 @@ enum {
 #define ZZ9K_AEAD_IVLEN  12
 #define ZZ9K_AEAD_TAGLEN 16
 
+/* Measured synchronous-offload break-even for ChaCha20-Poly1305 on m68k
+ * (docs/zz9k-crypto-acceleration.md): below ~2 KB the software reference is
+ * faster than the mailbox round trip. */
+#define ZZ9K_CHACHA_OFFLOAD_MIN 2048U
+
 typedef struct {
   ZZ9K_PROV_CTX *provctx;
   int alg;
@@ -73,18 +78,33 @@ static int zz9k_prov_aead(int alg, int enc, const unsigned char *key,
                           ZZ9K_PROV_CTX *provctx)
 {
 #ifdef ZZ9K_PROVIDER_OFFLOAD
-  /* Route to zz9k_crypto_aead when provctx carries a live ZZ9000 context. A
+  /* Route to zz9k_crypto_aead when the firmware supports the algorithm. A
    * negative return means the offload could not run (allocation/mailbox error)
    * so fall through to the software reference; for a decrypt with a bad tag the
    * offload also returns negative and the software path then returns 0, which
-   * is the correct authentication failure. */
-  if (provctx != NULL && provctx->sdk_ctx != NULL) {
+   * is the correct authentication failure.
+   *
+   * AES-GCM requires its capability flag: AEAD firmware that predates the
+   * algorithm bits in the descriptor flags treats them as don't-care and would
+   * run the legacy default (ChaCha20-Poly1305) while reporting success. The
+   * offload wins at every record size, so it carries no size gate.
+   * ChaCha20-Poly1305 is that legacy default — available whenever the crypto
+   * service is — but software beats the synchronous offload below the measured
+   * ~2 KB break-even (docs/zz9k-crypto-acceleration.md), so small records stay
+   * on the CPU. */
+  {
     int aes = (alg != ZZ9K_AEAD_CHACHA20_POLY1305);
-    int r = zz9k_offload_aead(provctx->sdk_ctx, aes, (unsigned int)keylen, !enc,
-                              key, iv, aad, (unsigned int)aadlen, in,
-                              (unsigned int)inlen, out, tag);
-    if (r >= 0) {
-      return r;
+    int use_offload = aes
+        ? ZZ9K_PROV_CAN_OFFLOAD(provctx, ZZ9K_SERVICE_FLAG_CRYPTO_AES_GCM)
+        : (ZZ9K_PROV_CAN_OFFLOAD_SERVICE(provctx) &&
+           inlen >= ZZ9K_CHACHA_OFFLOAD_MIN);
+    if (use_offload) {
+      int r = zz9k_offload_aead(provctx->sdk_ctx, aes, (unsigned int)keylen,
+                                !enc, key, iv, aad, (unsigned int)aadlen, in,
+                                (unsigned int)inlen, out, tag);
+      if (r >= 0) {
+        return r;
+      }
     }
   }
 #else
