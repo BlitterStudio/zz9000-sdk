@@ -104,6 +104,14 @@ void *zz9k_offload_open(unsigned int *service_flags)
   if (service_flags != NULL) {
     *service_flags = 0U;
   }
+  /* Diagnostic kill switch: with ENV:ZZ9K_DISABLE_OFFLOAD set, the provider
+   * still loads and is preferred, but never touches the board — every
+   * operation runs in the portable software reference. Lets a failure be
+   * bisected on hardware between the firmware-offload marshalling and the
+   * provider/software glue without rebuilding. */
+  if (getenv("ZZ9K_DISABLE_OFFLOAD") != NULL) {
+    return NULL;
+  }
   if (zz9k_open(&sdk) != ZZ9K_STATUS_OK) {
     return NULL;
   }
