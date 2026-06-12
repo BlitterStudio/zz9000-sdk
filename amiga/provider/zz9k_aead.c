@@ -24,6 +24,7 @@
 #include <openssl/core_names.h>
 #include <openssl/params.h>
 #include <openssl/crypto.h>
+#include <openssl/rand.h>
 
 #include "zz9k-crypto-soft.h"
 #include "zz9k_offload.h"
@@ -49,6 +50,11 @@ enum {
  * faster than the mailbox round trip. */
 #define ZZ9K_CHACHA_OFFLOAD_MIN 2048U
 
+/* TLS 1.2 record framing (RFC 5288 / RFC 7905). */
+#define ZZ9K_TLS_AAD_LEN     13
+#define ZZ9K_TLS_EXPLICIT_IV 8
+#define ZZ9K_TLS_TAG_LEN     16
+
 typedef struct {
   ZZ9K_PROV_CTX *provctx;
   int alg;
@@ -66,6 +72,17 @@ typedef struct {
   unsigned char *aad;
   size_t aadlen;
   size_t aadcap;
+  /* TLS 1.2 record-layer state, driven by libssl through
+   * EVP_CTRL_AEAD_SET_IV_FIXED / EVP_CTRL_AEAD_TLS1_AAD. For GCM `tls_iv` is
+   * the working 12-byte nonce (4-byte salt + 8-byte invocation field,
+   * randomised at SET_IV_FIXED and incremented per record); for ChaCha it is
+   * the full 12-byte fixed IV, XORed with the record sequence number per
+   * record. `tls_aad_set` arms the one-shot record path for the next data
+   * update and is cleared after each record. */
+  unsigned char tls_aad[ZZ9K_TLS_AAD_LEN];
+  unsigned char tls_iv[ZZ9K_AEAD_IVLEN];
+  int tls_iv_set;
+  int tls_aad_set;
 } ZZ9K_AEAD_CTX;
 
 /* One-shot AEAD over a whole record. `tag` is an output for encrypt and an
@@ -134,6 +151,97 @@ static int zz9k_prov_aead(int alg, int enc, const unsigned char *key,
   }
 }
 
+/* Increment the 64-bit big-endian invocation field of a GCM TLS nonce. */
+static void zz9k_ctr64_inc(unsigned char *counter)
+{
+  int n = 8;
+  while (n > 0) {
+    if (++counter[--n] != 0) {
+      return;
+    }
+  }
+}
+
+/* One TLS 1.2 record, armed by the EVP_CTRL_AEAD_TLS1_AAD control. Mirrors
+ * the default provider's gcm_tls_cipher / chacha20-poly1305 TLS path: GCM
+ * records are explicit-IV(8) || payload || tag(16) with the nonce salt(4) ||
+ * explicit-IV; ChaCha records are payload || tag(16) with the nonce = fixed IV
+ * XOR record sequence number (RFC 7905). Encrypt returns the whole record in
+ * *outl, decrypt returns the payload length, written after the explicit IV —
+ * exactly the contract libssl's record layer expects. */
+static int zz9k_aead_tls_record(ZZ9K_AEAD_CTX *ctx, unsigned char *out,
+                                size_t *outl, size_t outsize,
+                                const unsigned char *in, size_t inl)
+{
+  unsigned char nonce[ZZ9K_AEAD_IVLEN];
+  unsigned char tag[ZZ9K_TLS_TAG_LEN];
+  size_t payload;
+  int i;
+
+  ctx->tls_aad_set = 0;            /* one record per AAD control */
+  if (!ctx->have_key || !ctx->tls_iv_set || out == NULL) {
+    return 0;
+  }
+  if (ctx->alg != ZZ9K_AEAD_CHACHA20_POLY1305) {
+    if (inl < ZZ9K_TLS_EXPLICIT_IV + ZZ9K_TLS_TAG_LEN || outsize < inl) {
+      return 0;
+    }
+    payload = inl - ZZ9K_TLS_EXPLICIT_IV - ZZ9K_TLS_TAG_LEN;
+    if (ctx->enc) {
+      /* The explicit IV is the current invocation field; bump it after use. */
+      memcpy(nonce, ctx->tls_iv, ZZ9K_AEAD_IVLEN);
+      memcpy(out, nonce + 4, ZZ9K_TLS_EXPLICIT_IV);
+      zz9k_ctr64_inc(ctx->tls_iv + 4);
+      if (!zz9k_prov_aead(ctx->alg, 1, ctx->key, ctx->keylen, nonce,
+                          ctx->tls_aad, ZZ9K_TLS_AAD_LEN,
+                          in + ZZ9K_TLS_EXPLICIT_IV, payload,
+                          out + ZZ9K_TLS_EXPLICIT_IV, tag, ctx->provctx)) {
+        return 0;
+      }
+      memcpy(out + ZZ9K_TLS_EXPLICIT_IV + payload, tag, ZZ9K_TLS_TAG_LEN);
+      *outl = inl;
+      return 1;
+    }
+    memcpy(nonce, ctx->tls_iv, 4);
+    memcpy(nonce + 4, in, ZZ9K_TLS_EXPLICIT_IV);
+    memcpy(tag, in + ZZ9K_TLS_EXPLICIT_IV + payload, ZZ9K_TLS_TAG_LEN);
+    if (!zz9k_prov_aead(ctx->alg, 0, ctx->key, ctx->keylen, nonce,
+                        ctx->tls_aad, ZZ9K_TLS_AAD_LEN,
+                        in + ZZ9K_TLS_EXPLICIT_IV, payload,
+                        out + ZZ9K_TLS_EXPLICIT_IV, tag, ctx->provctx)) {
+      return 0;
+    }
+    *outl = payload;
+    return 1;
+  }
+  /* ChaCha20-Poly1305 */
+  if (inl < ZZ9K_TLS_TAG_LEN || outsize < inl) {
+    return 0;
+  }
+  payload = inl - ZZ9K_TLS_TAG_LEN;
+  memcpy(nonce, ctx->tls_iv, ZZ9K_AEAD_IVLEN);
+  for (i = 0; i < 8; i++) {
+    nonce[4 + i] ^= ctx->tls_aad[i];   /* sequence number */
+  }
+  if (ctx->enc) {
+    if (!zz9k_prov_aead(ctx->alg, 1, ctx->key, ctx->keylen, nonce,
+                        ctx->tls_aad, ZZ9K_TLS_AAD_LEN, in, payload, out, tag,
+                        ctx->provctx)) {
+      return 0;
+    }
+    memcpy(out + payload, tag, ZZ9K_TLS_TAG_LEN);
+    *outl = inl;
+    return 1;
+  }
+  memcpy(tag, in + payload, ZZ9K_TLS_TAG_LEN);
+  if (!zz9k_prov_aead(ctx->alg, 0, ctx->key, ctx->keylen, nonce, ctx->tls_aad,
+                      ZZ9K_TLS_AAD_LEN, in, payload, out, tag, ctx->provctx)) {
+    return 0;
+  }
+  *outl = payload;
+  return 1;
+}
+
 /* ---- context lifecycle ---- */
 
 static void *zz9k_aead_newctx(void *provctx, int alg, size_t keylen)
@@ -188,6 +296,7 @@ static int zz9k_aead_init(void *vctx, const unsigned char *key, size_t keylen,
   ctx->enc = enc;
   ctx->done = 0;
   ctx->aadlen = 0;
+  ctx->tls_aad_set = 0;
   if (iv != NULL) {
     if (ivlen != ctx->ivlen) {
       return 0;
@@ -244,6 +353,11 @@ static int zz9k_aead_update(void *vctx, unsigned char *out, size_t *outl,
     }
     *outl = inl;
     return 1;
+  }
+  /* TLS 1.2 record path: armed by EVP_CTRL_AEAD_TLS1_AAD, one whole record
+   * per update, reusable across records without re-init. */
+  if (ctx->tls_aad_set) {
+    return zz9k_aead_tls_record(ctx, out, outl, outsize, in, inl);
   }
   /* Record data: processed in a single one-shot call. */
   if (ctx->done || !ctx->have_key || !ctx->have_iv || outsize < inl) {
@@ -318,6 +432,12 @@ static int zz9k_aead_get_ctx_params(void *vctx, OSSL_PARAM params[])
   if (p != NULL && !OSSL_PARAM_set_size_t(p, ctx->taglen)) {
     return 0;
   }
+  /* TLS 1.2: the record layer reads back the pad the TLS1_AAD control implies
+   * (the tag appended to every record). */
+  p = OSSL_PARAM_locate(params, OSSL_CIPHER_PARAM_AEAD_TLS1_AAD_PAD);
+  if (p != NULL && !OSSL_PARAM_set_size_t(p, ZZ9K_TLS_TAG_LEN)) {
+    return 0;
+  }
   return 1;
 }
 
@@ -354,6 +474,58 @@ static int zz9k_aead_set_ctx_params(void *vctx, const OSSL_PARAM params[])
       return 0;
     }
   }
+  /* TLS 1.2 record-layer controls (EVP_CTRL_AEAD_TLS1_AAD /
+   * EVP_CTRL_AEAD_SET_IV_FIXED), mirroring the default provider: the 13-byte
+   * AAD is stashed with its length field corrected for the explicit IV (GCM)
+   * and, on decrypt, the tag; the fixed IV seeds the working nonce (GCM: 4-byte
+   * salt plus a randomised invocation field, ChaCha: all 12 bytes). */
+  p = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_AEAD_TLS1_AAD);
+  if (p != NULL) {
+    size_t len;
+    if (p->data_type != OSSL_PARAM_OCTET_STRING ||
+        p->data_size != ZZ9K_TLS_AAD_LEN) {
+      return 0;
+    }
+    memcpy(ctx->tls_aad, p->data, ZZ9K_TLS_AAD_LEN);
+    len = ((size_t)ctx->tls_aad[ZZ9K_TLS_AAD_LEN - 2] << 8) |
+          ctx->tls_aad[ZZ9K_TLS_AAD_LEN - 1];
+    if (ctx->alg != ZZ9K_AEAD_CHACHA20_POLY1305) {
+      if (len < ZZ9K_TLS_EXPLICIT_IV) {
+        return 0;
+      }
+      len -= ZZ9K_TLS_EXPLICIT_IV;
+    }
+    if (!ctx->enc) {
+      if (len < ZZ9K_TLS_TAG_LEN) {
+        return 0;
+      }
+      len -= ZZ9K_TLS_TAG_LEN;
+    }
+    ctx->tls_aad[ZZ9K_TLS_AAD_LEN - 2] = (unsigned char)(len >> 8);
+    ctx->tls_aad[ZZ9K_TLS_AAD_LEN - 1] = (unsigned char)(len & 0xff);
+    ctx->tls_aad_set = 1;
+  }
+  p = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_AEAD_TLS1_IV_FIXED);
+  if (p != NULL) {
+    if (p->data_type != OSSL_PARAM_OCTET_STRING) {
+      return 0;
+    }
+    if (ctx->alg == ZZ9K_AEAD_CHACHA20_POLY1305) {
+      if (p->data_size != ZZ9K_AEAD_IVLEN) {
+        return 0;
+      }
+      memcpy(ctx->tls_iv, p->data, ZZ9K_AEAD_IVLEN);
+    } else {
+      if (p->data_size != 4) {
+        return 0;
+      }
+      memcpy(ctx->tls_iv, p->data, 4);
+      if (ctx->enc && RAND_bytes(ctx->tls_iv + 4, ZZ9K_TLS_EXPLICIT_IV) <= 0) {
+        return 0;
+      }
+    }
+    ctx->tls_iv_set = 1;
+  }
   return 1;
 }
 
@@ -365,6 +537,7 @@ static const OSSL_PARAM *zz9k_aead_gettable_ctx_params(void *cctx,
     OSSL_PARAM_size_t(OSSL_CIPHER_PARAM_IVLEN, NULL),
     OSSL_PARAM_size_t(OSSL_CIPHER_PARAM_AEAD_TAGLEN, NULL),
     OSSL_PARAM_octet_string(OSSL_CIPHER_PARAM_AEAD_TAG, NULL, 0),
+    OSSL_PARAM_size_t(OSSL_CIPHER_PARAM_AEAD_TLS1_AAD_PAD, NULL),
     OSSL_PARAM_END
   };
   (void)cctx;
@@ -379,6 +552,8 @@ static const OSSL_PARAM *zz9k_aead_settable_ctx_params(void *cctx,
     OSSL_PARAM_size_t(OSSL_CIPHER_PARAM_KEYLEN, NULL),
     OSSL_PARAM_size_t(OSSL_CIPHER_PARAM_IVLEN, NULL),
     OSSL_PARAM_octet_string(OSSL_CIPHER_PARAM_AEAD_TAG, NULL, 0),
+    OSSL_PARAM_octet_string(OSSL_CIPHER_PARAM_AEAD_TLS1_AAD, NULL, 0),
+    OSSL_PARAM_octet_string(OSSL_CIPHER_PARAM_AEAD_TLS1_IV_FIXED, NULL, 0),
     OSSL_PARAM_END
   };
   (void)cctx;

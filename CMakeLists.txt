@@ -226,7 +226,7 @@ if(OpenSSL_FOUND)
     tools/zz9k-crypto-soft.c
   )
   foreach(provtest provider_init_test provider_x25519_test provider_aead_test
-                   provider_ecdsa_test provider_rsa_test)
+                   provider_tls_test provider_ecdsa_test provider_rsa_test)
     add_executable(${provtest}
       tests/${provtest}.c
       ${ZZ9K_PROVIDER_SOURCES}
@@ -235,6 +235,7 @@ if(OpenSSL_FOUND)
       PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/amiga/provider
         ${CMAKE_CURRENT_SOURCE_DIR}/tools
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
     target_link_libraries(${provtest} PRIVATE OpenSSL::Crypto)
     add_test(NAME ${provtest} COMMAND ${provtest})
