@@ -222,6 +222,94 @@ done:
   return ok;
 }
 
+/* RFC 8439 section 2.8.2 ChaCha20-Poly1305 known-answer vector, run through
+ * EVP against a specific provider. Unlike a round trip, this compares the
+ * ciphertext and tag byte-for-byte against the RFC, so it tells us WHICH side
+ * of a failing round trip deviates from the standard, through the full
+ * EVP/library stack on real hardware. */
+static int chacha_evp_kat(const char *props)
+{
+  static const unsigned char kkey[32] = {
+    0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87,
+    0x88, 0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f,
+    0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97,
+    0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f
+  };
+  static const unsigned char knonce[12] = {
+    0x07, 0x00, 0x00, 0x00, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47
+  };
+  static const unsigned char kaad[12] = {
+    0x50, 0x51, 0x52, 0x53, 0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7
+  };
+  static const unsigned char kpt[114] =
+    "Ladies and Gentlemen of the class of '99: If I could offer "
+    "you only one tip for the future, sunscreen would be it.";
+  static const unsigned char kct[114] = {
+    0xd3, 0x1a, 0x8d, 0x34, 0x64, 0x8e, 0x60, 0xdb,
+    0x7b, 0x86, 0xaf, 0xbc, 0x53, 0xef, 0x7e, 0xc2,
+    0xa4, 0xad, 0xed, 0x51, 0x29, 0x6e, 0x08, 0xfe,
+    0xa9, 0xe2, 0xb5, 0xa7, 0x36, 0xee, 0x62, 0xd6,
+    0x3d, 0xbe, 0xa4, 0x5e, 0x8c, 0xa9, 0x67, 0x12,
+    0x82, 0xfa, 0xfb, 0x69, 0xda, 0x92, 0x72, 0x8b,
+    0x1a, 0x71, 0xde, 0x0a, 0x9e, 0x06, 0x0b, 0x29,
+    0x05, 0xd6, 0xa5, 0xb6, 0x7e, 0xcd, 0x3b, 0x36,
+    0x92, 0xdd, 0xbd, 0x7f, 0x2d, 0x77, 0x8b, 0x8c,
+    0x98, 0x03, 0xae, 0xe3, 0x28, 0x09, 0x1b, 0x58,
+    0xfa, 0xb3, 0x24, 0xe4, 0xfa, 0xd6, 0x75, 0x94,
+    0x55, 0x85, 0x80, 0x8b, 0x48, 0x31, 0xd7, 0xbc,
+    0x3f, 0xf4, 0xde, 0xf0, 0x8e, 0x4b, 0x7a, 0x9d,
+    0xe5, 0x76, 0xd2, 0x65, 0x86, 0xce, 0xc6, 0x4b,
+    0x61, 0x16
+  };
+  static const unsigned char ktag[16] = {
+    0x1a, 0xe1, 0x0b, 0x59, 0x4f, 0x09, 0xe2, 0x6a,
+    0x7e, 0x90, 0x2e, 0xcb, 0xd0, 0x60, 0x06, 0x91
+  };
+  unsigned char ct[114], tag[16];
+  EVP_CIPHER *c = NULL;
+  EVP_CIPHER_CTX *ctx = NULL;
+  int outl = 0, tmpl = 0, ok = 0, i;
+
+  c = EVP_CIPHER_fetch(NULL, "ChaCha20-Poly1305", props);
+  ctx = EVP_CIPHER_CTX_new();
+  if (c == NULL || ctx == NULL) {
+    printf("  chacha-kat[%-16s] FAIL (fetch)\n", props);
+    goto done;
+  }
+  if (!EVP_EncryptInit_ex2(ctx, c, kkey, knonce, NULL) ||
+      !EVP_EncryptUpdate(ctx, NULL, &outl, kaad, (int)sizeof(kaad)) ||
+      !EVP_EncryptUpdate(ctx, ct, &outl, kpt, (int)sizeof(kpt)) ||
+      !EVP_EncryptFinal_ex(ctx, ct + outl, &tmpl) ||
+      !EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_GET_TAG, 16, tag)) {
+    printf("  chacha-kat[%-16s] FAIL (EVP call, served by '%s')\n", props,
+           provider_of_cipher(c));
+    goto done;
+  }
+  for (i = 0; i < 114; i++) {
+    if (ct[i] != kct[i]) {
+      printf("  chacha-kat[%-16s] FAIL (ct first diff @%d: %02x != %02x, "
+             "served by '%s')\n", props, i, ct[i], kct[i],
+             provider_of_cipher(c));
+      goto done;
+    }
+  }
+  if (memcmp(tag, ktag, 16) != 0) {
+    printf("  chacha-kat[%-16s] FAIL (ct ok, TAG wrong: "
+           "%02x%02x%02x%02x... != %02x%02x%02x%02x..., served by '%s')\n",
+           props, tag[0], tag[1], tag[2], tag[3], ktag[0], ktag[1], ktag[2],
+           ktag[3], provider_of_cipher(c));
+    goto done;
+  }
+  printf("  chacha-kat[%-16s] PASS (RFC 8439, served by '%s')\n", props,
+         provider_of_cipher(c));
+  ok = 1;
+
+done:
+  EVP_CIPHER_CTX_free(ctx);
+  EVP_CIPHER_free(c);
+  return ok;
+}
+
 static int run_tests(void)
 {
   int ok = 1;
@@ -233,6 +321,17 @@ static int run_tests(void)
    * advertises the service), decrypt via the software default for cross-check. */
   ok &= aead_roundtrip("AES-256-GCM", NULL, "provider=default", 32);
   ok &= aead_roundtrip("ChaCha20-Poly1305", NULL, "provider=default", 32);
+  /* ChaCha diagnosis: the RFC vector through EVP against each provider tells
+   * us which implementation deviates; the 2x2 round-trip matrix localizes a
+   * mismatch to the encrypt or decrypt side. */
+  ok &= chacha_evp_kat("provider=zz9000");
+  ok &= chacha_evp_kat("provider=default");
+  ok &= aead_roundtrip("ChaCha20-Poly1305", "provider=zz9000",
+                       "provider=zz9000", 32);
+  ok &= aead_roundtrip("ChaCha20-Poly1305", "provider=default",
+                       "provider=default", 32);
+  ok &= aead_roundtrip("ChaCha20-Poly1305", "provider=default",
+                       "provider=zz9000", 32);
   printf("--------------------------------\n");
   printf("Result: %s\n", ok ? "ALL PASS" : "FAILURES");
   return ok;
