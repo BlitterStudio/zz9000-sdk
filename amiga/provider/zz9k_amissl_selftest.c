@@ -136,11 +136,99 @@ done:
   return ok;
 }
 
+/* X25519 key agreement across providers: keypair A through the default
+ * "?provider=zz9000" query (keygen + derive offloaded on the board), keypair B
+ * pinned to provider=default (AmiSSL software). Both directions must produce
+ * the same shared secret, which proves the offloaded keygen/derive — the
+ * exact operations a TLS key share uses — are mathematically correct against
+ * an independent implementation. */
+static int x25519_agreement(void)
+{
+  EVP_PKEY_CTX *gctx = NULL, *dctx = NULL;
+  EVP_PKEY *a = NULL, *b = NULL, *apub = NULL, *bpub = NULL;
+  EVP_KEYMGMT *km = NULL;
+  unsigned char *aenc = NULL, *benc = NULL;
+  unsigned char sec_a[32], sec_b[32];
+  size_t alen = 0, blen = 0, na = sizeof(sec_a), nb = sizeof(sec_b);
+  int ok = 0;
+
+  km = EVP_KEYMGMT_fetch(NULL, "X25519", NULL);
+  printf("  %-22s keymgmt via '%s'\n", "X25519",
+         km ? OSSL_PROVIDER_get0_name(EVP_KEYMGMT_get0_provider(km))
+            : "(fetch failed)");
+
+  /* A: preferred provider (zz9000 when the board is present). */
+  gctx = EVP_PKEY_CTX_new_from_name(NULL, "X25519", NULL);
+  if (gctx == NULL || EVP_PKEY_keygen_init(gctx) <= 0 ||
+      EVP_PKEY_keygen(gctx, &a) <= 0) {
+    printf("  %-22s FAIL (keygen via preferred provider)\n", "X25519");
+    goto done;
+  }
+  EVP_PKEY_CTX_free(gctx);
+  /* B: pinned software default. */
+  gctx = EVP_PKEY_CTX_new_from_name(NULL, "X25519", "provider=default");
+  if (gctx == NULL || EVP_PKEY_keygen_init(gctx) <= 0 ||
+      EVP_PKEY_keygen(gctx, &b) <= 0) {
+    printf("  %-22s FAIL (keygen via provider=default)\n", "X25519");
+    goto done;
+  }
+
+  alen = EVP_PKEY_get1_encoded_public_key(a, &aenc);
+  blen = EVP_PKEY_get1_encoded_public_key(b, &benc);
+  if (alen != 32 || blen != 32) {
+    printf("  %-22s FAIL (encoded pub: a=%lu b=%lu)\n", "X25519",
+           (unsigned long)alen, (unsigned long)blen);
+    goto done;
+  }
+
+  /* A derives with the preferred provider against B's public key... */
+  bpub = EVP_PKEY_new_raw_public_key_ex(NULL, "X25519", NULL, benc, blen);
+  dctx = EVP_PKEY_CTX_new_from_pkey(NULL, a, NULL);
+  if (bpub == NULL || dctx == NULL || EVP_PKEY_derive_init(dctx) <= 0 ||
+      EVP_PKEY_derive_set_peer(dctx, bpub) <= 0 ||
+      EVP_PKEY_derive(dctx, sec_a, &na) <= 0) {
+    printf("  %-22s FAIL (derive via preferred provider)\n", "X25519");
+    goto done;
+  }
+  EVP_PKEY_CTX_free(dctx);
+  /* ...and B derives with the software default against A's public key. */
+  apub = EVP_PKEY_new_raw_public_key_ex(NULL, "X25519", "provider=default",
+                                        aenc, alen);
+  dctx = EVP_PKEY_CTX_new_from_pkey(NULL, b, "provider=default");
+  if (apub == NULL || dctx == NULL || EVP_PKEY_derive_init(dctx) <= 0 ||
+      EVP_PKEY_derive_set_peer(dctx, apub) <= 0 ||
+      EVP_PKEY_derive(dctx, sec_b, &nb) <= 0) {
+    printf("  %-22s FAIL (derive via provider=default)\n", "X25519");
+    goto done;
+  }
+  if (na != 32 || nb != 32 || memcmp(sec_a, sec_b, 32) != 0) {
+    printf("  %-22s FAIL (shared secrets DISAGREE - offloaded X25519 is "
+           "producing wrong results)\n", "X25519");
+    goto done;
+  }
+  printf("  %-22s PASS (cross-provider key agreement)\n", "X25519");
+  ok = 1;
+
+done:
+  EVP_PKEY_CTX_free(gctx);
+  EVP_PKEY_CTX_free(dctx);
+  EVP_KEYMGMT_free(km);
+  EVP_PKEY_free(a);
+  EVP_PKEY_free(b);
+  EVP_PKEY_free(apub);
+  EVP_PKEY_free(bpub);
+  OPENSSL_free(aenc);
+  OPENSSL_free(benc);
+  return ok;
+}
+
 static int run_tests(void)
 {
   int ok = 1;
   printf("ZZ9000 AmiSSL provider self-test\n");
   printf("--------------------------------\n");
+  /* Key exchange first: this is what every TLS handshake does. */
+  ok &= x25519_agreement();
   /* Encrypt via the default "?provider=zz9000" query (offloaded when the board
    * advertises the service), decrypt via the software default for cross-check. */
   ok &= aead_roundtrip("AES-256-GCM", NULL, "provider=default", 32);
