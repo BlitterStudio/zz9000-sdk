@@ -23,27 +23,49 @@ else fall through to AmiSSL's own (default) provider.
   AmiSSL / OpenSSL 3 core ── property query "?provider=zz9000"
     │                                   │
     ├── zz9000 provider                 └── default provider (software fallback)
-    │     KEYEXCH  X25519                       everything not offloaded
-    │     CIPHER   AES-128/256-GCM, ChaCha20-Poly1305
-    │     SIGNATURE ECDSA-P256, RSA-PKCS1 (2048/3072/4096) verify
+    │     KEYMGMT  X25519 (full)                everything not offloaded,
+    │     KEYEXCH  X25519                       including ECDSA / RSA
+    │     CIPHER   AES-128/256-GCM,             certificate verification and
+    │              ChaCha20-Poly1305            all EC/RSA key operations
     │       │
     │       ▼  zz9k_offload.c
-    │     ZZ9000 SDK  (zz9k_crypto_kx / _aead / _verify, shared buffers, mailbox)
+    │     ZZ9000 SDK  (zz9k_crypto_kx / _aead, shared buffers, mailbox)
     │       │
     │       ▼
     └─────► ZZ9000 firmware (ARM Cortex-A9)
 ```
 
+A provider that sets the default property query to `?provider=zz9000` is
+*preferred* for every algorithm it advertises, so libssl will fetch **our**
+implementation for the whole of any key type we name — not just the leaf
+operation we accelerate. The provider therefore only advertises algorithms it
+can own end-to-end through a TLS handshake: **X25519** (key generation, key
+exchange, and all the parameter round-trips libssl performs) and the **AEAD
+record ciphers** (AES-GCM and ChaCha20-Poly1305, including the TLS 1.2
+record-layer controls). The SDK also accelerates **ECDSA-P256 and RSA verify**,
+but advertising EC/RSA key types here would force libssl to fetch our keymgmt
+for ECDH key generation, signing, and RSA-PSS — operations we do not implement
+— and would break the handshake; certificate verification therefore stays in
+AmiSSL's software default provider. Accelerating it needs a keymgmt that
+delegates the non-accelerated operations to the default provider, which is
+deferred (the `zz9k_ecdsa.c` / `zz9k_rsa.c` verify code and its host
+cross-provider tests remain in the tree for that work). The single
+per-handshake certificate verify is a small cost next to the key exchange and
+bulk record crypto, which the provider does accelerate.
+
 The provider operation files are portable OpenSSL 3 code and are shared with the
 host unit tests. Two things make them use the hardware:
 
 * **`-DZZ9K_PROVIDER_OFFLOAD`** at compile time enables the offload hooks. Each
-  operation (`zz9k_prov_x25519`, `zz9k_prov_aead`, `zz9k_prov_ecdsa_verify`,
-  `zz9k_prov_rsa_verify`) first tries `zz9k_offload_*`; if the offload cannot
-  run (no board, allocation/mailbox error, or a decrypt tag failure) it falls
-  back to the bundled software reference — the same code the firmware was
-  validated against. With the macro undefined (the host build) every operation
-  uses the software reference, which is why the host unit tests stay meaningful.
+  accelerated operation (`zz9k_prov_x25519`, `zz9k_prov_aead`) first tries
+  `zz9k_offload_*`; if the offload cannot run (no board, allocation/mailbox
+  error, or a decrypt tag failure) it falls back to the bundled software
+  reference — the same code the firmware was validated against. With the macro
+  undefined (the host build) every operation uses the software reference, which
+  is why the host unit tests stay meaningful. (`zz9k_prov_ecdsa_verify` /
+  `zz9k_prov_rsa_verify` share the same shape and are exercised by the host
+  tests under `ZZ9K_PROVIDER_TEST_ALL`, but are not advertised in production —
+  see above.)
 * **An open offload context.** `zz9k_provider_init` opens the board once for
   the provider's lifetime (`zz9k_offload_open`), keeps it only when the
   firmware's crypto service responds, and records the advertised service
@@ -61,10 +83,10 @@ host unit tests. Two things make them use the hardware:
 | --- | --- |
 | `amiga/provider/zz9k_provider.c` | Provider core: params, operation query, init/teardown (opens the SDK context under `ZZ9K_PROVIDER_OFFLOAD`). |
 | `amiga/provider/zz9k_algorithms.c` | Central `OSSL_ALGORITHM` tables. |
-| `amiga/provider/zz9k_x25519.c` | X25519 KEYMGMT + KEYEXCH. |
-| `amiga/provider/zz9k_aead.c` | AES-128/256-GCM and ChaCha20-Poly1305 ciphers, including the TLS 1.2 record-layer controls (`EVP_CTRL_AEAD_TLS1_AAD` / `SET_IV_FIXED`) libssl drives per record. |
-| `amiga/provider/zz9k_ecdsa.c` | EC P-256 KEYMGMT + ECDSA verify. |
-| `amiga/provider/zz9k_rsa.c` | RSA KEYMGMT + RSA-PKCS1-SHA256 verify (2048/3072/4096). |
+| `amiga/provider/zz9k_x25519.c` | X25519 KEYMGMT (keygen, import/export, params) + KEYEXCH. The full surface libssl needs for a TLS key share. |
+| `amiga/provider/zz9k_aead.c` | AES-128/256-GCM and ChaCha20-Poly1305 ciphers, including the TLS 1.2 record-layer controls (`EVP_CTRL_AEAD_TLS1_AAD` / `SET_IV_FIXED`, and ChaCha's init-delivered fixed IV) libssl drives per record. |
+| `amiga/provider/zz9k_ecdsa.c` | EC P-256 KEYMGMT + ECDSA verify. Not advertised in production (see above); host-tested under `ZZ9K_PROVIDER_TEST_ALL`. |
+| `amiga/provider/zz9k_rsa.c` | RSA KEYMGMT + RSA-PKCS1-SHA256 verify (2048/3072/4096). Not advertised in production; host-tested under `ZZ9K_PROVIDER_TEST_ALL`. |
 | `amiga/provider/zz9k_offload.c` | SDK bridge: marshals an operation into shared buffers and runs it through the SDK. **Amiga-only.** |
 | `amiga/provider/zz9k_amissl.c` | `zz9k_amissl_register()` / `zz9k_amissl_unregister()` — registers the provider with AmiSSL's default library context. **Amiga-only.** |
 | `amiga/provider/zz9k_amissl_selftest.c` | Standalone hardware self-test program. **Amiga-only.** |
@@ -205,12 +227,21 @@ The equivalent introspection exists for the other operation classes
 
 ### Full TLS handshake
 
-To exercise the handshake path (X25519 + ECDSA/RSA verify) end to end, adapt the
-AmiSSL `test/https.c` example: add the provider objects to its build, define
-`ZZ9K_PROVIDER_OFFLOAD`, and call `zz9k_amissl_register()` right after the
-existing `InitAmiSSL()`. A successful HTTPS GET against a server that negotiates
-`X25519` + an ECDSA-P256 or RSA certificate confirms the offloaded key exchange
-and certificate verification produced a valid handshake.
+The host test `tests/provider_tls_handshake_test.c` is the authoritative proof
+that the provider is a working drop-in: it runs real TLS 1.3 and TLS 1.2
+handshakes (client through the zz9000 provider with `?provider=zz9000`, server
+through the default provider, over memory BIOs) across X25519 and P-256 key
+exchange, ECDSA-P256 and RSA certificates, and AES-GCM and ChaCha20-Poly1305
+records, then exchanges application data. It builds whenever an OpenSSL 3
+install with libssl is found.
+
+On hardware, adapt the AmiSSL `test/https.c` example: add the provider objects
+to its build, define `ZZ9K_PROVIDER_OFFLOAD`, and call `zz9k_amissl_register()`
+right after the existing `InitAmiSSL()` (the in-library Path A build needs no
+such call). A successful HTTPS GET against a server negotiating `X25519` + an
+ECDSA-P256 or RSA certificate confirms the offloaded key exchange and record
+crypto produced a valid handshake; the certificate verification itself runs in
+AmiSSL software (see *How it fits together*).
 
 ## Fallback semantics
 
@@ -218,13 +249,10 @@ The provider is conservative: it never breaks an operation it cannot fully
 handle.
 
 * Operations not advertised by the provider resolve to the default provider via
-  the `?` (optional) property query.
+  the `?` (optional) property query — this includes all certificate signature
+  verification (ECDSA, RSA, RSA-PSS) and every EC/RSA key operation.
 * Algorithms the firmware does not advertise (per-algorithm
   `ZZ9K_SERVICE_FLAG_CRYPTO_*` bits) stay in software with no mailbox traffic.
-* RSA-PSS, non-SHA-256 digests, and moduli above 4096 bits are declined by the
-  RSA operation, so they fall back to software. An "invalid" verdict from the
-  board for a modulus wider than 2048 bits is also re-checked in software, in
-  case the deployed firmware predates the wider sizes.
 * ChaCha20-Poly1305 records below the measured ~2 KB break-even stay on the
   CPU (software is faster there); AES-GCM offloads at every size.
 * A decrypt whose tag fails to authenticate returns the correct authentication
