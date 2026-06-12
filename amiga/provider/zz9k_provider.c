@@ -18,6 +18,9 @@
 #include <openssl/core_names.h>
 #include <openssl/params.h>
 #include <openssl/crypto.h>
+#include <openssl/prov_ssl.h>   /* TLS1_VERSION for the TLS-GROUP capability */
+
+#include <string.h>
 
 #ifdef ZZ9K_PROVIDER_OFFLOAD
 #include "zz9k_offload.h"
@@ -81,10 +84,57 @@ static const OSSL_ALGORITHM *zz9k_query_operation(void *provctx,
   case OSSL_OP_CIPHER:
     return zz9k_cipher_algorithms;
   case OSSL_OP_SIGNATURE:
+    /* Empty in production (see zz9k_algorithms.c); populated only under
+     * ZZ9K_PROVIDER_TEST_ALL for the host cross-provider verify tests. */
     return zz9k_signature_algorithms;
   default:
     return NULL;
   }
+}
+
+/* TLS-GROUP capabilities. libssl only keeps a TLS group when the keymgmt
+ * fetch for the group's algorithm resolves to the SAME provider that declared
+ * the group — and with the "?provider=zz9000" default property query, fetches
+ * for the key types we advertise resolve to us. So every group whose key type
+ * this provider shadows must be declared here too, or it silently vanishes
+ * from the application's group list (no X25519 key shares at all). Values
+ * mirror the default provider's table. */
+static const unsigned int zz9k_group_id_x25519 = 29;           /* 0x001d */
+static const unsigned int zz9k_group_secbits_x25519 = 128;
+static const int zz9k_group_min_tls = TLS1_VERSION;
+static const int zz9k_group_max_tls = 0;                       /* no max */
+static const int zz9k_group_no_dtls = -1;                      /* disabled */
+static const int zz9k_group_is_not_kem = 0;
+
+static const OSSL_PARAM zz9k_tls_group_x25519[] = {
+  OSSL_PARAM_utf8_string(OSSL_CAPABILITY_TLS_GROUP_NAME, "x25519", 7),
+  OSSL_PARAM_utf8_string(OSSL_CAPABILITY_TLS_GROUP_NAME_INTERNAL, "X25519", 7),
+  OSSL_PARAM_utf8_string(OSSL_CAPABILITY_TLS_GROUP_ALG, "X25519", 7),
+  OSSL_PARAM_uint(OSSL_CAPABILITY_TLS_GROUP_ID,
+                  (unsigned int *)&zz9k_group_id_x25519),
+  OSSL_PARAM_uint(OSSL_CAPABILITY_TLS_GROUP_SECURITY_BITS,
+                  (unsigned int *)&zz9k_group_secbits_x25519),
+  OSSL_PARAM_int(OSSL_CAPABILITY_TLS_GROUP_MIN_TLS,
+                 (int *)&zz9k_group_min_tls),
+  OSSL_PARAM_int(OSSL_CAPABILITY_TLS_GROUP_MAX_TLS,
+                 (int *)&zz9k_group_max_tls),
+  OSSL_PARAM_int(OSSL_CAPABILITY_TLS_GROUP_MIN_DTLS,
+                 (int *)&zz9k_group_no_dtls),
+  OSSL_PARAM_int(OSSL_CAPABILITY_TLS_GROUP_MAX_DTLS,
+                 (int *)&zz9k_group_no_dtls),
+  OSSL_PARAM_int(OSSL_CAPABILITY_TLS_GROUP_IS_KEM,
+                 (int *)&zz9k_group_is_not_kem),
+  OSSL_PARAM_END
+};
+
+static int zz9k_get_capabilities(void *provctx, const char *capability,
+                                 OSSL_CALLBACK *cb, void *arg)
+{
+  (void)provctx;
+  if (strcmp(capability, "TLS-GROUP") == 0) {
+    return cb(zz9k_tls_group_x25519, arg);
+  }
+  return 1;   /* unknown capability: nothing to add, not an error */
 }
 
 static void zz9k_teardown(void *provctx)
@@ -104,6 +154,8 @@ static const OSSL_DISPATCH zz9k_dispatch_table[] = {
   { OSSL_FUNC_PROVIDER_GETTABLE_PARAMS, (void (*)(void))zz9k_gettable_params },
   { OSSL_FUNC_PROVIDER_GET_PARAMS, (void (*)(void))zz9k_get_params },
   { OSSL_FUNC_PROVIDER_QUERY_OPERATION, (void (*)(void))zz9k_query_operation },
+  { OSSL_FUNC_PROVIDER_GET_CAPABILITIES,
+    (void (*)(void))zz9k_get_capabilities },
   { 0, NULL }   /* OSSL_DISPATCH terminator (portable across OpenSSL 3.0-3.6) */
 };
 
@@ -112,12 +164,22 @@ int zz9k_provider_init(const OSSL_CORE_HANDLE *handle, const OSSL_DISPATCH *in,
 {
   ZZ9K_PROV_CTX *ctx;
 
-  (void)in;
   ctx = OPENSSL_zalloc(sizeof(*ctx));
   if (ctx == NULL) {
     return 0;
   }
   ctx->handle = handle;
+  /* The application's library context, used to reach the default provider
+   * when an operation must be delegated. For a built-in (non-FIPS) provider
+   * the core context IS the library context. */
+  for (; in != NULL && in->function_id != 0; in++) {
+    if (in->function_id == OSSL_FUNC_CORE_GET_LIBCTX) {
+      OSSL_FUNC_core_get_libctx_fn *get_libctx =
+          OSSL_FUNC_core_get_libctx(in);
+      ctx->libctx = (void *)get_libctx(handle);
+      break;
+    }
+  }
 #ifdef ZZ9K_PROVIDER_OFFLOAD
   /* Open the ZZ9000 once for the provider's lifetime and remember which crypto
    * services the firmware advertises. zz9k_offload_open returns NULL when the

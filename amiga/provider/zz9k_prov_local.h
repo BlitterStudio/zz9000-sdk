@@ -24,6 +24,10 @@ extern "C" {
  * On the host both stay NULL/0 and everything uses the software reference. */
 typedef struct zz9k_prov_ctx_st {
   const OSSL_CORE_HANDLE *handle;
+  void *libctx;             /* OSSL_LIB_CTX of the application (via
+                               core_get_libctx); used to delegate operations
+                               the board does not accelerate to the default
+                               provider in the same context */
   void *sdk_ctx;            /* offload context when running on hardware, else NULL */
   unsigned int service_flags;
 } ZZ9K_PROV_CTX;
@@ -39,6 +43,36 @@ typedef struct zz9k_prov_ctx_st {
   ((p) != NULL && (p)->sdk_ctx != NULL)
 #define ZZ9K_PROV_CAN_OFFLOAD(p, flag) \
   (ZZ9K_PROV_CAN_OFFLOAD_SERVICE(p) && ((p)->service_flags & (flag)) != 0U)
+
+/* Hand-rolled OSSL_PARAM construction. The OSSL_PARAM_construct_* helpers
+ * return the struct by value, which cannot cross AmiSSL's m68k inline-call
+ * boundary in application-side builds (the _amiga out-param variants exist
+ * for that); filling the fields directly is equivalent and portable
+ * everywhere this code builds. */
+#define ZZ9K_PARAM_OCTET(pp, k, d, n)                  \
+  do {                                                 \
+    (pp)->key = (k);                                   \
+    (pp)->data_type = OSSL_PARAM_OCTET_STRING;         \
+    (pp)->data = (void *)(d);                          \
+    (pp)->data_size = (n);                             \
+    (pp)->return_size = OSSL_PARAM_UNMODIFIED;         \
+  } while (0)
+#define ZZ9K_PARAM_UTF8(pp, k, s)                      \
+  do {                                                 \
+    (pp)->key = (k);                                   \
+    (pp)->data_type = OSSL_PARAM_UTF8_STRING;          \
+    (pp)->data = (void *)(s);                          \
+    (pp)->data_size = strlen(s);                       \
+    (pp)->return_size = OSSL_PARAM_UNMODIFIED;         \
+  } while (0)
+#define ZZ9K_PARAM_END(pp)                             \
+  do {                                                 \
+    (pp)->key = NULL;                                  \
+    (pp)->data_type = 0;                               \
+    (pp)->data = NULL;                                 \
+    (pp)->data_size = 0;                               \
+    (pp)->return_size = 0;                             \
+  } while (0)
 
 /* X25519 scalar multiplication used by the key-exchange derive. Routes to the
  * ZZ9000 offload when `provctx` carries a live SDK context with the X25519

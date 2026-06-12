@@ -16,6 +16,7 @@
 #include <openssl/core_names.h>
 #include <openssl/params.h>
 #include <openssl/crypto.h>
+#include <openssl/rand.h>
 
 #include "zz9k-crypto-soft.h"
 #include "zz9k_offload.h"
@@ -152,9 +153,9 @@ static const OSSL_PARAM *zz9k_x25519_keymgmt_import_types(int selection)
 
 static int zz9k_x25519_keymgmt_get_params(void *keydata, OSSL_PARAM params[])
 {
+  ZZ9K_X25519_KEY *key = keydata;
   OSSL_PARAM *p;
 
-  (void)keydata;
   p = OSSL_PARAM_locate(params, OSSL_PKEY_PARAM_BITS);
   if (p != NULL && !OSSL_PARAM_set_int(p, 253)) {
     return 0;
@@ -167,6 +168,28 @@ static int zz9k_x25519_keymgmt_get_params(void *keydata, OSSL_PARAM params[])
   if (p != NULL && !OSSL_PARAM_set_int(p, ZZ9K_X25519_KEYLEN)) {
     return 0;
   }
+  /* libssl serializes the key share via ENCODED_PUBLIC_KEY (raw u-coord). */
+  p = OSSL_PARAM_locate(params, OSSL_PKEY_PARAM_ENCODED_PUBLIC_KEY);
+  if (p != NULL) {
+    if (!key->has_pub ||
+        !OSSL_PARAM_set_octet_string(p, key->pub, ZZ9K_X25519_KEYLEN)) {
+      return 0;
+    }
+  }
+  p = OSSL_PARAM_locate(params, OSSL_PKEY_PARAM_PUB_KEY);
+  if (p != NULL) {
+    if (!key->has_pub ||
+        !OSSL_PARAM_set_octet_string(p, key->pub, ZZ9K_X25519_KEYLEN)) {
+      return 0;
+    }
+  }
+  p = OSSL_PARAM_locate(params, OSSL_PKEY_PARAM_PRIV_KEY);
+  if (p != NULL) {
+    if (!key->has_priv ||
+        !OSSL_PARAM_set_octet_string(p, key->priv, ZZ9K_X25519_KEYLEN)) {
+      return 0;
+    }
+  }
   return 1;
 }
 
@@ -176,10 +199,217 @@ static const OSSL_PARAM *zz9k_x25519_keymgmt_gettable_params(void *provctx)
     OSSL_PARAM_int(OSSL_PKEY_PARAM_BITS, NULL),
     OSSL_PARAM_int(OSSL_PKEY_PARAM_SECURITY_BITS, NULL),
     OSSL_PARAM_int(OSSL_PKEY_PARAM_MAX_SIZE, NULL),
+    OSSL_PARAM_octet_string(OSSL_PKEY_PARAM_ENCODED_PUBLIC_KEY, NULL, 0),
+    OSSL_PARAM_octet_string(OSSL_PKEY_PARAM_PUB_KEY, NULL, 0),
+    OSSL_PARAM_octet_string(OSSL_PKEY_PARAM_PRIV_KEY, NULL, 0),
     OSSL_PARAM_END
   };
   (void)provctx;
   return types;
+}
+
+/* libssl installs the peer key share with EVP_PKEY_set1_encoded_public_key. */
+static int zz9k_x25519_keymgmt_set_params(void *keydata,
+                                          const OSSL_PARAM params[])
+{
+  ZZ9K_X25519_KEY *key = keydata;
+  const OSSL_PARAM *p;
+
+  if (key == NULL) {
+    return 0;
+  }
+  p = OSSL_PARAM_locate_const(params, OSSL_PKEY_PARAM_ENCODED_PUBLIC_KEY);
+  if (p != NULL) {
+    if (p->data_type != OSSL_PARAM_OCTET_STRING ||
+        p->data_size != ZZ9K_X25519_KEYLEN) {
+      return 0;
+    }
+    memcpy(key->pub, p->data, ZZ9K_X25519_KEYLEN);
+    key->has_pub = 1;
+  }
+  return 1;
+}
+
+static const OSSL_PARAM *zz9k_x25519_keymgmt_settable_params(void *provctx)
+{
+  static const OSSL_PARAM types[] = {
+    OSSL_PARAM_octet_string(OSSL_PKEY_PARAM_ENCODED_PUBLIC_KEY, NULL, 0),
+    OSSL_PARAM_END
+  };
+  (void)provctx;
+  return types;
+}
+
+static int zz9k_x25519_keymgmt_match(const void *keydata1, const void *keydata2,
+                                     int selection)
+{
+  const ZZ9K_X25519_KEY *a = keydata1;
+  const ZZ9K_X25519_KEY *b = keydata2;
+
+  if (a == NULL || b == NULL) {
+    return 0;
+  }
+  if ((selection & OSSL_KEYMGMT_SELECT_PUBLIC_KEY) != 0) {
+    if (!a->has_pub || !b->has_pub ||
+        memcmp(a->pub, b->pub, ZZ9K_X25519_KEYLEN) != 0) {
+      return 0;
+    }
+  }
+  if ((selection & OSSL_KEYMGMT_SELECT_PRIVATE_KEY) != 0) {
+    if (!a->has_priv || !b->has_priv ||
+        memcmp(a->priv, b->priv, ZZ9K_X25519_KEYLEN) != 0) {
+      return 0;
+    }
+  }
+  return 1;
+}
+
+static void *zz9k_x25519_keymgmt_dup(const void *keydata_from, int selection)
+{
+  const ZZ9K_X25519_KEY *from = keydata_from;
+  ZZ9K_X25519_KEY *to;
+
+  if (from == NULL) {
+    return NULL;
+  }
+  to = OPENSSL_zalloc(sizeof(*to));
+  if (to == NULL) {
+    return NULL;
+  }
+  to->provctx = from->provctx;
+  if ((selection & OSSL_KEYMGMT_SELECT_PUBLIC_KEY) != 0 && from->has_pub) {
+    memcpy(to->pub, from->pub, ZZ9K_X25519_KEYLEN);
+    to->has_pub = 1;
+  }
+  if ((selection & OSSL_KEYMGMT_SELECT_PRIVATE_KEY) != 0 && from->has_priv) {
+    memcpy(to->priv, from->priv, ZZ9K_X25519_KEYLEN);
+    to->has_priv = 1;
+  }
+  return to;
+}
+
+static int zz9k_x25519_keymgmt_export(void *keydata, int selection,
+                                      OSSL_CALLBACK *param_cb, void *cbarg)
+{
+  ZZ9K_X25519_KEY *key = keydata;
+  OSSL_PARAM params[3];
+  int n = 0;
+
+  if (key == NULL) {
+    return 0;
+  }
+  if ((selection & OSSL_KEYMGMT_SELECT_PUBLIC_KEY) != 0 && key->has_pub) {
+    ZZ9K_PARAM_OCTET(&params[n], OSSL_PKEY_PARAM_PUB_KEY, key->pub,
+                     ZZ9K_X25519_KEYLEN);
+    n++;
+  }
+  if ((selection & OSSL_KEYMGMT_SELECT_PRIVATE_KEY) != 0 && key->has_priv) {
+    ZZ9K_PARAM_OCTET(&params[n], OSSL_PKEY_PARAM_PRIV_KEY, key->priv,
+                     ZZ9K_X25519_KEYLEN);
+    n++;
+  }
+  if (n == 0) {
+    return 0;
+  }
+  ZZ9K_PARAM_END(&params[n]);
+  return param_cb(params, cbarg);
+}
+
+static const OSSL_PARAM *zz9k_x25519_keymgmt_export_types(int selection)
+{
+  return zz9k_x25519_keymgmt_import_types(selection);
+}
+
+/* ---- key generation (the TLS key share) ---- */
+
+typedef struct {
+  ZZ9K_PROV_CTX *provctx;
+  int selection;
+} ZZ9K_X25519_GEN;
+
+static void *zz9k_x25519_gen_init(void *provctx, int selection,
+                                  const OSSL_PARAM params[])
+{
+  ZZ9K_X25519_GEN *gen;
+
+  (void)params;
+  if ((selection & OSSL_KEYMGMT_SELECT_KEYPAIR) == 0) {
+    return NULL;
+  }
+  gen = OPENSSL_zalloc(sizeof(*gen));
+  if (gen != NULL) {
+    gen->provctx = provctx;
+    gen->selection = selection;
+  }
+  return gen;
+}
+
+/* libssl calls EVP_PKEY_CTX_set_group_name(ctx, "X25519") on the keygen
+ * context (ssl_generate_pkey_group). Like the default provider we accept the
+ * group name as long as it is our one algorithm, and ignore the optional KDF
+ * property / DHKEM IKM params. Without this the TLS key-share generation
+ * fails outright. */
+static int zz9k_x25519_gen_set_params(void *genctx, const OSSL_PARAM params[])
+{
+  const OSSL_PARAM *p;
+
+  (void)genctx;
+  if (params == NULL) {
+    return 1;
+  }
+  p = OSSL_PARAM_locate_const(params, OSSL_PKEY_PARAM_GROUP_NAME);
+  if (p != NULL) {
+    if (p->data_type != OSSL_PARAM_UTF8_STRING || p->data == NULL ||
+        OPENSSL_strcasecmp(p->data, "x25519") != 0) {
+      return 0;
+    }
+  }
+  return 1;
+}
+
+static const OSSL_PARAM *zz9k_x25519_gen_settable_params(void *genctx,
+                                                         void *provctx)
+{
+  static const OSSL_PARAM types[] = {
+    OSSL_PARAM_utf8_string(OSSL_PKEY_PARAM_GROUP_NAME, NULL, 0),
+    OSSL_PARAM_END
+  };
+  (void)genctx;
+  (void)provctx;
+  return types;
+}
+
+static void *zz9k_x25519_gen(void *genctx, OSSL_CALLBACK *cb, void *cbarg)
+{
+  ZZ9K_X25519_GEN *gen = genctx;
+  ZZ9K_X25519_KEY *key;
+
+  (void)cb;
+  (void)cbarg;
+  if (gen == NULL) {
+    return NULL;
+  }
+  key = OPENSSL_zalloc(sizeof(*key));
+  if (key == NULL) {
+    return NULL;
+  }
+  key->provctx = gen->provctx;
+  /* Raw 32 random bytes; RFC 7748 clamping happens inside the scalar
+   * multiplication, matching how OpenSSL stores X25519 private keys. */
+  if (RAND_priv_bytes(key->priv, ZZ9K_X25519_KEYLEN) <= 0 ||
+      !zz9k_prov_x25519(key->pub, key->priv, zz9k_x25519_basepoint,
+                        key->provctx)) {
+    OPENSSL_clear_free(key, sizeof(*key));
+    return NULL;
+  }
+  key->has_priv = 1;
+  key->has_pub = 1;
+  return key;
+}
+
+static void zz9k_x25519_gen_cleanup(void *genctx)
+{
+  OPENSSL_free(genctx);
 }
 
 static const char *zz9k_x25519_keymgmt_query_operation_name(int operation_id)
@@ -197,10 +427,27 @@ const OSSL_DISPATCH zz9k_x25519_keymgmt_functions[] = {
   { OSSL_FUNC_KEYMGMT_IMPORT, (void (*)(void))zz9k_x25519_keymgmt_import },
   { OSSL_FUNC_KEYMGMT_IMPORT_TYPES,
     (void (*)(void))zz9k_x25519_keymgmt_import_types },
+  { OSSL_FUNC_KEYMGMT_EXPORT, (void (*)(void))zz9k_x25519_keymgmt_export },
+  { OSSL_FUNC_KEYMGMT_EXPORT_TYPES,
+    (void (*)(void))zz9k_x25519_keymgmt_export_types },
   { OSSL_FUNC_KEYMGMT_GET_PARAMS,
     (void (*)(void))zz9k_x25519_keymgmt_get_params },
   { OSSL_FUNC_KEYMGMT_GETTABLE_PARAMS,
     (void (*)(void))zz9k_x25519_keymgmt_gettable_params },
+  { OSSL_FUNC_KEYMGMT_SET_PARAMS,
+    (void (*)(void))zz9k_x25519_keymgmt_set_params },
+  { OSSL_FUNC_KEYMGMT_SETTABLE_PARAMS,
+    (void (*)(void))zz9k_x25519_keymgmt_settable_params },
+  { OSSL_FUNC_KEYMGMT_MATCH, (void (*)(void))zz9k_x25519_keymgmt_match },
+  { OSSL_FUNC_KEYMGMT_DUP, (void (*)(void))zz9k_x25519_keymgmt_dup },
+  { OSSL_FUNC_KEYMGMT_GEN_INIT, (void (*)(void))zz9k_x25519_gen_init },
+  { OSSL_FUNC_KEYMGMT_GEN_SET_PARAMS,
+    (void (*)(void))zz9k_x25519_gen_set_params },
+  { OSSL_FUNC_KEYMGMT_GEN_SETTABLE_PARAMS,
+    (void (*)(void))zz9k_x25519_gen_settable_params },
+  { OSSL_FUNC_KEYMGMT_GEN, (void (*)(void))zz9k_x25519_gen },
+  { OSSL_FUNC_KEYMGMT_GEN_CLEANUP,
+    (void (*)(void))zz9k_x25519_gen_cleanup },
   { OSSL_FUNC_KEYMGMT_QUERY_OPERATION_NAME,
     (void (*)(void))zz9k_x25519_keymgmt_query_operation_name },
   { 0, NULL }

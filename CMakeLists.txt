@@ -238,8 +238,32 @@ if(OpenSSL_FOUND)
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
     target_link_libraries(${provtest} PRIVATE OpenSSL::Crypto)
+    # The ECDSA/RSA verify tests fetch those algorithms from the provider,
+    # which production no longer advertises (deferred delegating keymgmt).
+    # Expose them to just these tests via the test-only build flag.
+    if(provtest STREQUAL "provider_ecdsa_test" OR
+       provtest STREQUAL "provider_rsa_test")
+      target_compile_definitions(${provtest} PRIVATE ZZ9K_PROVIDER_TEST_ALL)
+    endif()
     add_test(NAME ${provtest} COMMAND ${provtest})
   endforeach()
+  # The full TLS handshake test additionally needs libssl.
+  if(TARGET OpenSSL::SSL)
+    add_executable(provider_tls_handshake_test
+      tests/provider_tls_handshake_test.c
+      ${ZZ9K_PROVIDER_SOURCES}
+    )
+    target_include_directories(provider_tls_handshake_test
+      PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/amiga/provider
+        ${CMAKE_CURRENT_SOURCE_DIR}/tools
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(provider_tls_handshake_test
+      PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    add_test(NAME provider_tls_handshake_test
+             COMMAND provider_tls_handshake_test)
+  endif()
   message(STATUS "OpenSSL ${OPENSSL_VERSION} found: provider tests enabled")
 else()
   message(STATUS "OpenSSL 3 not found: provider tests skipped")

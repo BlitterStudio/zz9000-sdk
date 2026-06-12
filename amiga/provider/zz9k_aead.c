@@ -179,10 +179,15 @@ static int zz9k_aead_tls_record(ZZ9K_AEAD_CTX *ctx, unsigned char *out,
   int i;
 
   ctx->tls_aad_set = 0;            /* one record per AAD control */
-  if (!ctx->have_key || !ctx->tls_iv_set || out == NULL) {
+  if (!ctx->have_key || out == NULL) {
     return 0;
   }
   if (ctx->alg != ZZ9K_AEAD_CHACHA20_POLY1305) {
+    /* GCM: the working nonce (salt + invocation field) is delivered through
+     * EVP_CTRL_AEAD_SET_IV_FIXED (-> tls_iv) by the record layer. */
+    if (!ctx->tls_iv_set) {
+      return 0;
+    }
     if (inl < ZZ9K_TLS_EXPLICIT_IV + ZZ9K_TLS_TAG_LEN || outsize < inl) {
       return 0;
     }
@@ -214,12 +219,18 @@ static int zz9k_aead_tls_record(ZZ9K_AEAD_CTX *ctx, unsigned char *out,
     *outl = payload;
     return 1;
   }
-  /* ChaCha20-Poly1305 */
+  /* ChaCha20-Poly1305 (RFC 7905). Unlike GCM, the record layer delivers the
+   * 12-byte fixed IV through the ordinary cipher init (-> ctx->iv), not
+   * SET_IV_FIXED, so the per-record nonce is that fixed IV XOR the record
+   * sequence number (the first 8 bytes of the TLS AAD). */
+  if (!ctx->have_iv) {
+    return 0;
+  }
   if (inl < ZZ9K_TLS_TAG_LEN || outsize < inl) {
     return 0;
   }
   payload = inl - ZZ9K_TLS_TAG_LEN;
-  memcpy(nonce, ctx->tls_iv, ZZ9K_AEAD_IVLEN);
+  memcpy(nonce, ctx->iv, ZZ9K_AEAD_IVLEN);
   for (i = 0; i < 8; i++) {
     nonce[4 + i] ^= ctx->tls_aad[i];   /* sequence number */
   }

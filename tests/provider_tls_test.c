@@ -63,12 +63,20 @@ static int tls_record(OSSL_LIB_CTX *libctx, const char *prop,
   if (c == NULL || ctx == NULL) {
     goto end;
   }
-  if (EVP_CipherInit_ex2(ctx, c, key32, NULL, enc, NULL) <= 0) {
-    goto end;
-  }
-  if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_IV_FIXED, gcm ? 4 : 12,
-                          (void *)fixed_iv12) <= 0) {
-    goto end;
+  /* Mirror exactly how libssl's record layer sets up each cipher (see
+   * ssl/record/methods/tls1_meth.c): GCM is keyed then handed its 4-byte salt
+   * via EVP_CTRL_GCM_SET_IV_FIXED; ChaCha20-Poly1305 receives its full 12-byte
+   * fixed IV through the ordinary cipher init (no SET_IV_FIXED ctrl). */
+  if (gcm) {
+    if (EVP_CipherInit_ex2(ctx, c, key32, NULL, enc, NULL) <= 0 ||
+        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_IV_FIXED, 4,
+                            (void *)fixed_iv12) <= 0) {
+      goto end;
+    }
+  } else {
+    if (EVP_CipherInit_ex2(ctx, c, key32, fixed_iv12, enc, NULL) <= 0) {
+      goto end;
+    }
   }
   make_aad(aad, seq, aad_len_field);
   pad = EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_TLS1_AAD, TLS_AAD_LEN, aad);
