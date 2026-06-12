@@ -1,5 +1,5 @@
 diff --git a/Makefile b/Makefile
-index 39f0cbe97..cdd02c51c 100644
+index 39f0cbe97..2366eb43c 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -409,7 +409,8 @@ LIBOBJS = $(BUILD_D)/amissl_libinit.o \
@@ -12,7 +12,7 @@ index 39f0cbe97..cdd02c51c 100644
  
  MASTEROBJS = $(BUILD_D)/amisslmaster_libinit.o \
               $(BUILD_D)/amisslmaster_library.o \
-@@ -476,6 +477,35 @@ $(BUILD_D)/%.o: $(SRC_D)/%.c
+@@ -476,6 +477,39 @@ $(BUILD_D)/%.o: $(SRC_D)/%.c
  	@echo "  CC $<"
  	@$(CC) $(CFLAGS) -c $< -o $@
  
@@ -45,24 +45,34 @@ index 39f0cbe97..cdd02c51c 100644
 +	@echo "  CC (zz9000) $<"
 +	@$(CC) $(CFLAGS) $(ZZ9000_CFLAGS) -c $< -o $@
 +
++# amissl_library.c includes zz9k_amissl_builtin.h; give its compile the
++# provider include paths so the call is checked against the real prototype.
++$(BUILD_D)/amissl_library.o: CFLAGS += $(ZZ9000_CFLAGS)
++
  ## OPENSSL BUILD RULES ##
  
  ifeq ($(DEBUG),)
 diff --git a/src/amissl_library.c b/src/amissl_library.c
-index dd86092e6..70053bb58 100644
+index dd86092e6..10619dae6 100644
 --- a/src/amissl_library.c
 +++ b/src/amissl_library.c
-@@ -361,6 +361,14 @@ LIBPROTO(InitAmiSSLA, LONG, REG(a6, __BASE_OR_IFACE), REG(a0, struct TagItem *ta
+@@ -36,6 +36,8 @@
+ #include <openssl/crypto.h>
+ #include <openssl/lhash.h>
+ 
++#include "zz9k_amissl_builtin.h" /* ZZ9000 crypto-offload provider */
++
+ //#include <clib/amissl_protos.h>
+ #define NO_MTCP_PROTOS
+ #ifdef __GNUC__
+@@ -361,6 +363,11 @@ LIBPROTO(InitAmiSSLA, LONG, REG(a6, __BASE_OR_IFACE), REG(a0, struct TagItem *ta
  
      initialize_socket_errno(state);
  
 +    /* ZZ9000: register the hardware crypto-offload provider for this
-+     * applications default OpenSSL context (best-effort; on failure
++     * application's default OpenSSL context (best-effort; on failure
 +     * the application simply uses AmiSSL software crypto). */
-+    {
-+      extern int zz9k_provider_register_builtin(void *libctx);
-+      zz9k_provider_register_builtin((void *)0);
-+    }
++    zz9k_provider_register_builtin(NULL);
 +
      err = 0;
    }
