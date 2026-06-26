@@ -107,13 +107,22 @@ static int aead_roundtrip(const char *alg, const char *enc_props,
     goto done;
   }
 
-  /* Decrypt with the cross-check provider. */
+  /* Decrypt with the cross-check provider, driving the AEAD in the SAME order
+   * libssl's record layer uses for a received record: set the expected tag
+   * immediately after init, BEFORE the AAD/data updates. That is exactly what
+   * TLS 1.3 RX does (ssl/record/methods/tls13_meth.c sets EVP_CTRL_AEAD_SET_TAG
+   * right after EVP_CipherInit_ex, then updates AAD then data), and it is the
+   * order a one-shot offload decrypt needs the tag for. (The documented generic
+   * EVP idiom sets the tag AFTER the data update; no TLS version drives decrypt
+   * that way, and the board's offload-or-fail path deliberately rejects it.)
+   * With the tag up front this exercises the board's offload decrypt+verify —
+   * the operation a browser performs on every server response. */
   dctx = EVP_CIPHER_CTX_new();
   if (dctx == NULL ||
       !EVP_DecryptInit_ex2(dctx, dec, key32, iv12, NULL) ||
+      !EVP_CIPHER_CTX_ctrl(dctx, EVP_CTRL_AEAD_SET_TAG, 16, tag) ||
       !EVP_DecryptUpdate(dctx, NULL, &outl, aad, (int)sizeof(aad)) ||
-      !EVP_DecryptUpdate(dctx, rt, &outl, ct, (int)sizeof(pt)) ||
-      !EVP_CIPHER_CTX_ctrl(dctx, EVP_CTRL_AEAD_SET_TAG, 16, tag)) {
+      !EVP_DecryptUpdate(dctx, rt, &outl, ct, (int)sizeof(pt))) {
     printf("  %-22s FAIL (decrypt setup)\n", alg);
     goto done;
   }
