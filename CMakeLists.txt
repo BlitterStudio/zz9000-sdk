@@ -293,6 +293,18 @@ target_include_directories(handshake_model_test
 
 add_test(NAME handshake_model_test COMMAND handshake_model_test)
 
+add_executable(m68k_runner_test
+  tests/m68k_runner_test.c
+  tools/zz9k-m68k-runner.c
+)
+
+target_include_directories(m68k_runner_test
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools
+)
+
+add_test(NAME m68k_runner_test COMMAND m68k_runner_test)
+
 add_executable(shared_helper_test
   tests/shared_helper_test.c
 )
