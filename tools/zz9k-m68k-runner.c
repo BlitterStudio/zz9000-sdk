@@ -34,6 +34,18 @@ static int zz9k_m68k_read_u8(const uint8_t *memory,
   return 1;
 }
 
+static int zz9k_m68k_write_u8(uint8_t *memory,
+                              uint32_t memory_size,
+                              uint32_t offset,
+                              uint8_t value)
+{
+  if (!memory || offset >= memory_size) {
+    return 0;
+  }
+  memory[offset] = value;
+  return 1;
+}
+
 static int zz9k_m68k_read_be32(const uint8_t *memory,
                                uint32_t memory_size,
                                uint32_t offset,
@@ -97,6 +109,19 @@ static void zz9k_m68k_set_logic_flags(ZZ9KM68KState *state, uint32_t value)
     state->sr |= ZZ9K_M68K_CCR_Z;
   }
   if ((value & 0x80000000UL) != 0U) {
+    state->sr |= ZZ9K_M68K_CCR_N;
+  }
+}
+
+static void zz9k_m68k_set_logic_byte_flags(ZZ9KM68KState *state,
+                                           uint8_t value)
+{
+  state->sr &= (uint16_t)~(ZZ9K_M68K_CCR_N | ZZ9K_M68K_CCR_Z |
+                          ZZ9K_M68K_CCR_V | ZZ9K_M68K_CCR_C);
+  if (value == 0U) {
+    state->sr |= ZZ9K_M68K_CCR_Z;
+  }
+  if ((value & 0x80U) != 0U) {
     state->sr |= ZZ9K_M68K_CCR_N;
   }
 }
@@ -267,6 +292,21 @@ int zz9k_m68k_run(ZZ9KM68KState *state,
       state->d[data_reg] = (state->d[data_reg] & 0xffffff00UL) |
                            (uint32_t)value;
       zz9k_m68k_set_add_byte_flags(state, src, dst, value);
+    } else if ((opcode & 0xf1f8U) == 0x10d8U) {
+      uint32_t src_reg = opcode & 7U;
+      uint32_t dst_reg = (opcode >> 9) & 7U;
+      uint8_t value;
+
+      if (!zz9k_m68k_read_u8(memory, memory_size, state->a[src_reg],
+                             &value) ||
+          !zz9k_m68k_write_u8(memory, memory_size, state->a[dst_reg],
+                              value)) {
+        return zz9k_m68k_set_fault(
+            result, ZZ9K_M68K_STATUS_OOB, pc, opcode);
+      }
+      state->a[src_reg]++;
+      state->a[dst_reg]++;
+      zz9k_m68k_set_logic_byte_flags(state, value);
     } else if ((opcode & 0xfff8U) == 0x23c0U) {
       uint32_t reg = opcode & 7U;
       uint32_t address;

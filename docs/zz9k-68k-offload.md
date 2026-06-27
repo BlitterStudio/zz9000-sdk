@@ -21,6 +21,7 @@ contract:
 - `ADDQ.L #n,Dn`
 - `SUBQ.L #n,Dn`
 - `ADD.B (An)+,Dn`
+- `MOVE.B (An)+,(Am)+`
 - `DBRA Dn,disp16`
 - `MOVE.L Dn,(xxx).L`
 - `MOVE.L (xxx).L,Dn`
@@ -39,6 +40,12 @@ The first real loop fixture is a byte checksum: `A0` points at an input buffer,
 terminates the loop. The result is the low byte of `D0`; the test also checks
 that `A0` advanced by the input length and that instruction-limit timeouts stop
 inside the loop without losing state.
+
+The second fixture is a byte copy loop: `A0` points at the source buffer, `A1`
+points at the destination buffer, `MOVE.B (A0)+,(A1)+` copies one byte per
+iteration, and `DBRA` terminates the loop. This pins both source and
+destination postincrement behavior before using the runner for any benchmark
+comparison.
 
 Out of scope for this slice:
 

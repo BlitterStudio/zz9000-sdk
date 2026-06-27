@@ -261,6 +261,83 @@ static int test_checksum_loop_respects_instruction_limit(void)
   return 0;
 }
 
+static int test_memcpy_loop_uses_source_and_destination_postincrement(void)
+{
+  uint8_t memory[128];
+  ZZ9KM68KState state;
+  ZZ9KM68KResult result;
+  int status;
+
+  memset(memory, 0, sizeof(memory));
+  zz9k_m68k_state_init(&state);
+  state.a[0] = 80U;
+  state.a[1] = 88U;
+  state.a[7] = 112U;
+  state.sr = ZZ9K_M68K_CCR_X | ZZ9K_M68K_CCR_C | ZZ9K_M68K_CCR_V;
+  memory[80] = 0x11U;
+  memory[81] = 0x22U;
+  memory[82] = 0x80U;
+  memory[83] = 0x00U;
+  put_be16(memory, 0U, 0x7203U); /* moveq #3,d1 */
+  put_be16(memory, 2U, 0x12d8U); /* move.b (a0)+,(a1)+ */
+  put_be16(memory, 4U, 0x51c9U); /* dbra d1,loop */
+  put_be16(memory, 6U, 0xfffaU); /* loop at pc 2 */
+  put_be16(memory, 8U, 0x4e75U); /* rts */
+  put_be32(memory, 112U, 0x00000078UL);
+
+  status = run_program(&state, memory, sizeof(memory), 16U, &result);
+  if (status != ZZ9K_M68K_STATUS_RTS) return 1;
+  if (memory[88] != 0x11U || memory[89] != 0x22U ||
+      memory[90] != 0x80U || memory[91] != 0x00U) {
+    return 2;
+  }
+  if (state.a[0] != 84U || state.a[1] != 92U) return 3;
+  if (state.d[1] != 0x0000ffffUL) return 4;
+  if (state.pc != 0x78U || state.a[7] != 116U) return 5;
+  if ((state.sr & ZZ9K_M68K_CCR_X) == 0U) return 6;
+  if ((state.sr & ZZ9K_M68K_CCR_Z) == 0U) return 7;
+  if ((state.sr & (ZZ9K_M68K_CCR_N | ZZ9K_M68K_CCR_V |
+                   ZZ9K_M68K_CCR_C)) != 0U) {
+    return 8;
+  }
+  if (result.instructions != 10U) return 9;
+  return 0;
+}
+
+static int test_memcpy_loop_respects_instruction_limit(void)
+{
+  uint8_t memory[128];
+  ZZ9KM68KState state;
+  ZZ9KM68KResult result;
+  int status;
+
+  memset(memory, 0, sizeof(memory));
+  zz9k_m68k_state_init(&state);
+  state.a[0] = 80U;
+  state.a[1] = 88U;
+  state.a[7] = 112U;
+  memory[80] = 0x11U;
+  memory[81] = 0x22U;
+  memory[82] = 0x80U;
+  memory[83] = 0x00U;
+  put_be16(memory, 0U, 0x7203U); /* moveq #3,d1 */
+  put_be16(memory, 2U, 0x12d8U); /* move.b (a0)+,(a1)+ */
+  put_be16(memory, 4U, 0x51c9U); /* dbra d1,loop */
+  put_be16(memory, 6U, 0xfffaU); /* loop at pc 2 */
+  put_be16(memory, 8U, 0x4e75U); /* rts */
+  put_be32(memory, 112U, 0x00000078UL);
+
+  status = run_program(&state, memory, sizeof(memory), 4U, &result);
+  if (status != ZZ9K_M68K_STATUS_LIMIT) return 1;
+  if (memory[88] != 0x11U || memory[89] != 0x22U) return 2;
+  if (memory[90] != 0U || memory[91] != 0U) return 3;
+  if (state.a[0] != 82U || state.a[1] != 90U) return 4;
+  if ((state.d[1] & 0xffffU) != 2U) return 5;
+  if (state.pc != 4U) return 6;
+  if (result.instructions != 4U) return 7;
+  return 0;
+}
+
 int main(void)
 {
   int rc;
@@ -311,6 +388,17 @@ int main(void)
   if (rc) {
     printf("test_checksum_loop_respects_instruction_limit failed: %d\n", rc);
     return 90 + rc;
+  }
+  rc = test_memcpy_loop_uses_source_and_destination_postincrement();
+  if (rc) {
+    printf("test_memcpy_loop_uses_source_and_destination_postincrement failed: %d\n",
+           rc);
+    return 100 + rc;
+  }
+  rc = test_memcpy_loop_respects_instruction_limit();
+  if (rc) {
+    printf("test_memcpy_loop_respects_instruction_limit failed: %d\n", rc);
+    return 110 + rc;
   }
 
   printf("m68k_runner_test: all checks passed\n");
