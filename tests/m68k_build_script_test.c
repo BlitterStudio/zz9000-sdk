@@ -114,6 +114,7 @@ static int check_script(const char *path, const char *name)
   ok &= expect_contains(script, name, "tools/zz9k-aead.c");
   ok &= expect_contains(script, name, "tools/zz9k-crypto-soft.c");
   ok &= expect_contains(script, name, "tools/zz9k-cryptobench.c");
+  ok &= expect_contains(script, name, "tools/zz9k-m68kbench.c");
   ok &= expect_contains(script, name, "tools/zz9k-mp3.c");
   ok &= expect_contains(script, name, "tools/zz9k-mpega-smoke.c");
   ok &= expect_contains(script, name, "amiga/mpega/mpega_resident.c");
@@ -172,6 +173,7 @@ static int check_script(const char *path, const char *name)
   ok &= expect_contains(script, name, "build/zz9k-chacha");
   ok &= expect_contains(script, name, "build/zz9k-aead");
   ok &= expect_contains(script, name, "build/zz9k-cryptobench");
+  ok &= expect_contains(script, name, "build/zz9k-m68kbench");
   ok &= expect_contains(script, name, "build/zz9k-mp3");
   ok &= expect_contains(script, name, "build/zz9k-mpega-smoke");
   ok &= expect_contains(script, name, "build/mpega.library");

@@ -304,6 +304,17 @@ target_include_directories(m68k_offload_model_test
 
 add_test(NAME m68k_offload_model_test COMMAND m68k_offload_model_test)
 
+add_executable(m68kbench_logic_test
+  tests/m68kbench_logic_test.c
+)
+
+target_include_directories(m68kbench_logic_test
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools
+)
+
+add_test(NAME m68kbench_logic_test COMMAND m68kbench_logic_test)
+
 add_executable(m68k_runner_test
   tests/m68k_runner_test.c
   tools/zz9k-m68k-runner.c
@@ -1119,6 +1130,15 @@ target_include_directories(zz9k_cryptobench
 )
 
 target_link_libraries(zz9k_cryptobench PRIVATE zz9k_host)
+
+add_executable(zz9k_m68kbench
+  tools/zz9k-m68kbench.c
+)
+
+target_include_directories(zz9k_m68kbench
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools
+)
 
 add_executable(zz9k_hash
   tools/zz9k-hash.c

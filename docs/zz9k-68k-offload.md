@@ -60,6 +60,26 @@ when mailbox overhead dominates. A purpose-built ARM service wins ties against
 the generic 68k runner, because the runner is only worth expanding when it
 beats both native 68k and the simpler service-specific implementation.
 
+The first data collector is `zz9k-m68kbench`, packaged in `C/`. It measures
+native checksum and byte-copy loops on the current CPU and prints per-workload
+microseconds plus KiB/s. Optional positional arguments let a hardware session
+paste in matching offload measurements:
+
+```text
+zz9k-m68kbench [iterations] [bytes] [mailbox_us] [transfer_us] [runner_us] [service_us]
+```
+
+For example, after measuring a 4096-byte service candidate, run:
+
+```text
+zz9k-m68kbench 128 4096 6000 120 900 300
+```
+
+The tool reports a model choice for the checksum and copy rows. Until real
+runner/service timings exist, leave the optional offload timings at zero; the
+output then acts as the native 68k baseline to compare later measurements
+against.
+
 Out of scope for this slice:
 
 - AmigaOS traps, library calls, interrupts, and supervisor/user emulation
