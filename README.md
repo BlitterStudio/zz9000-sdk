@@ -27,6 +27,13 @@ Start new AmigaOS-side work with [`docs/zz9k-library.md`](docs/zz9k-library.md).
 Firmware-side service metadata is described in
 [`docs/zz9k-modules.md`](docs/zz9k-modules.md).
 
+Hardware-accelerated TLS — the ZZ9000 crypto-offload OpenSSL provider, shipped
+as a drop-in `amissl.library` so every AmiSSL application gets faster
+handshakes and bulk record crypto with no changes — is covered in
+[`docs/zz9k-amissl-provider.md`](docs/zz9k-amissl-provider.md) and the
+roadmap/measurements in
+[`docs/zz9k-crypto-acceleration.md`](docs/zz9k-crypto-acceleration.md).
+
 ## Quick Start
 
 Build the AmigaOS 3 SDK tools and package with Docker:

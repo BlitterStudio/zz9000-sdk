@@ -7,12 +7,15 @@ ZZ9000 ARM coprocessor. It records the economic reasoning behind the
 **handshake-first** roadmap and the Phase 0 benchmark plan that will replace the
 estimates below with hardware measurements.
 
-> Status: Phases 0-2 complete and measured on hardware (SDK ABI 2.0). The
-> symmetric record sweep, mailbox round trip, and the asymmetric handshake
-> primitives (X25519, P-256 ECDH, ECDSA-P256 verify, RSA-2048 verify) are all
-> measured; see Measured results. The firmware crypto service (BearSSL on the
-> ARM) advertises these via capability flags. Phase 3 (AES-GCM) and Phase 4
-> (OpenSSL provider) remain.
+> Status: Phases 0-4 complete and measured on hardware (SDK ABI 2.0). The
+> symmetric record sweep, mailbox round trip, the asymmetric handshake
+> primitives (X25519, P-256 ECDH, ECDSA-P256 verify, RSA-2048 verify), and
+> AES-GCM are all measured; see Measured results. The firmware crypto service
+> (BearSSL on the ARM) advertises these via capability flags. The Phase 4
+> OpenSSL-3 provider ships baked into a drop-in `amissl.library`
+> ([zz9k-amissl-provider.md](zz9k-amissl-provider.md)); on a 68060 it browses
+> real HTTPS sites faster than stock AmiSSL. Only the optional Phase 5 FPGA AES
+> core remains.
 
 ## Why offload, and where it pays
 
