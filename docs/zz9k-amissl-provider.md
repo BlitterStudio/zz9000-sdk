@@ -56,11 +56,14 @@ bulk record crypto, which the provider does accelerate.
 The provider operation files are portable OpenSSL 3 code and are shared with the
 host unit tests. Two things make them use the hardware:
 
-* **`-DZZ9K_PROVIDER_OFFLOAD`** at compile time enables the offload hooks. Each
-  accelerated operation (`zz9k_prov_x25519`, `zz9k_prov_aead`) first tries
-  `zz9k_offload_*`; if the offload cannot run (no board, allocation/mailbox
-  error, or a decrypt tag failure) it falls back to the bundled software
-  reference — the same code the firmware was validated against. With the macro
+* **`-DZZ9K_PROVIDER_OFFLOAD`** at compile time enables the offload hooks. With
+  it set, each accelerated operation (`zz9k_prov_x25519`, `zz9k_prov_aead`) is
+  **offload-or-fail**: it runs through `zz9k_offload_*` and does *not* fall back
+  to the bundled software reference (an in-library software ChaCha tag
+  miscomputes under the base-relative library link, and silent wrong crypto is
+  worse than a failed record). The provider only *advertises* operations the
+  board can serve, so one that would fail is never offered — it resolves to
+  AmiSSL's software default instead (see *Fallback semantics*). With the macro
   undefined (the host build) every operation uses the software reference, which
   is why the host unit tests stay meaningful. (`zz9k_prov_ecdsa_verify` /
   `zz9k_prov_rsa_verify` share the same shape and are exercised by the host
@@ -90,7 +93,7 @@ host unit tests. Two things make them use the hardware:
 | `amiga/provider/zz9k_offload.c` | SDK bridge: marshals an operation into shared buffers and runs it through the SDK. **Amiga-only.** |
 | `amiga/provider/zz9k_amissl.c` | `zz9k_amissl_register()` / `zz9k_amissl_unregister()` — registers the provider with AmiSSL's default library context. **Amiga-only.** |
 | `amiga/provider/zz9k_amissl_selftest.c` | Standalone hardware self-test program. **Amiga-only.** |
-| `tools/zz9k-crypto-soft.c` | Portable software reference (fallback + host tests). |
+| `tools/zz9k-crypto-soft.c` | Portable software reference (firmware-validation oracle + host parity tests; the host build runs it, the offload build does not). |
 
 ## Building an application
 
@@ -245,20 +248,26 @@ AmiSSL software (see *How it fits together*).
 
 ## Fallback semantics
 
-The provider is conservative: it never breaks an operation it cannot fully
-handle.
+The provider is conservative about what it *advertises*: it only claims
+operations it can fully offload, so everything else — and everything on a
+machine without the board — transparently uses AmiSSL's software.
 
-* Operations not advertised by the provider resolve to the default provider via
-  the `?` (optional) property query — this includes all certificate signature
+* The provider advertises only what the board actually serves: with the crypto
+  service present, X25519 (key exchange + keymgmt) and the AEAD ciphers the
+  firmware supports (AES-GCM gated on its capability flag, otherwise
+  ChaCha20-Poly1305 only); with no board or no crypto service, it advertises
+  **nothing**, and the library behaves exactly like stock AmiSSL.
+* Operations the provider does not advertise resolve to the default provider via
+  the `?` (optional) property query. This always includes certificate signature
   verification (ECDSA, RSA, RSA-PSS) and every EC/RSA key operation.
-* Algorithms the firmware does not advertise (per-algorithm
-  `ZZ9K_SERVICE_FLAG_CRYPTO_*` bits) stay in software with no mailbox traffic.
-* ChaCha20-Poly1305 records below the measured ~2 KB break-even stay on the
-  CPU (software is faster there); AES-GCM offloads at every size.
-* A decrypt whose tag fails to authenticate returns the correct authentication
-  failure (the offload reports an error and the software reference then rejects
-  the tag).
-* If the board is missing or a mailbox call fails, the operation completes in
-  software. The only observable difference is timing.
+* Advertised operations are **offload-or-fail**: the in-library software crypto
+  paths are deliberately not used (they are compiled only into the host build,
+  for the parity tests), so a record either offloads to the board or fails —
+  silent wrong crypto is worse than a failed record. A decrypt whose tag does
+  not authenticate is correctly rejected.
+* `ENV:ZZ9K_DISABLE_OFFLOAD` forces the no-board path at registration: the
+  provider loads and is preferred but never opens the board, so every operation
+  runs in AmiSSL software. A zero-rebuild A/B switch for isolating a regression
+  to — or away from — the offload.
 * `zz9k_amissl_unregister()` is a no-op when registration never ran, so an
   application's cleanup path is safe even after a failed `InitAmiSSL()`.

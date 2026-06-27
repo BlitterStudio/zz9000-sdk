@@ -80,11 +80,26 @@ environment: its NDK conflicts with AmiSSL's `libcmt` and it lacks `bumprev`.)
 
 ## Installing and testing
 
-Copy the built `amissl.library` over the one in `LIBS:` (keep a backup), then run
-any TLS application. To confirm offload is active, use the self-test from the
-application-side docs, or watch a TLS handshake — anything negotiating X25519,
-AES-GCM/ChaCha20-Poly1305, or an ECDSA-P256/RSA certificate is accelerated;
-everything else falls back to software.
+The library is **CPU-specific — install the build that matches the host CPU.**
+AmiSSL ships two AmigaOS 3 variants and so do we: `os3-68020` (`-m68020-40`, for
+68020/030/040 and the Apollo 68080) and `os3-68060` (`-m68060`). The `os3-68020`
+library *runs* on a 68060, but the 68060 lacks the 64-bit multiply/divide
+instructions that build emits, so they are trap-and-emulated in software —
+markedly slower crypto (measured ~2.5× on a 68060). The drivers-repo installer
+detects the CPU and picks the right build automatically, mirroring AmiSSL's own
+installer; installing by hand, match the variant to your CPU.
+
+Copy the matching `amissl.library` over the one in `LIBS:AmiSSL/` (keep a backup
+of the original), then run any TLS application. To confirm offload is active, use
+the self-test from the application-side docs, or watch a TLS handshake: anything
+negotiating X25519 or AES-GCM/ChaCha20-Poly1305 is accelerated; everything else —
+including certificate (ECDSA/RSA) verification — runs in AmiSSL's software.
+
+`ENV:ZZ9K_DISABLE_OFFLOAD` is a diagnostic kill switch: set it (e.g.
+`setenv ZZ9K_DISABLE_OFFLOAD 1`) and the provider still loads but never touches
+the board, so every operation runs in AmiSSL software. It lets you A/B the
+accelerated path against pure software on the same installed library without
+rebuilding — useful for confirming whether a regression is in the offload.
 
 ## Licensing
 
