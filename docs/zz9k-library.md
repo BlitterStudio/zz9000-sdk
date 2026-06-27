@@ -927,7 +927,9 @@ LZMA2 decode for entries whose decoded output fits in the SDK shared heap; that
 one-shot firmware path uses the decoded output buffer as the dictionary. Larger
 entries with large LZMA2 dictionary properties still require enough ARM heap for
 the streaming dictionary. Multi-coder/filter chains, encrypted streams, and more
-complex 7z solid layouts remain future parser layers.
+complex 7z solid layouts remain future parser layers. Unsupported 7z folder
+layouts now report `7z unsupported layout: ...` with the parser reason, such as
+multi-coder/filter-chain folders or multiple input/output streams.
 
 7z LZMA no-memory diagnostics are printed on failed test or extract jobs. The
 tool reports the packed size, requested output size, parsed dictionary size, and

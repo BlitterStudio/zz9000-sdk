@@ -89,6 +89,7 @@ static int zz9k_archive_last_output_skipped = 0;
 static int zz9k_archive_last_output_dry_run = 0;
 static const char *zz9k_archive_match_filter = 0;
 static uint32_t zz9k_archive_strip_components = 0U;
+static const char *zz9k_archive_7z_last_parse_diagnostic = 0;
 
 typedef enum ZZ9KArchiveFormat {
   ZZ9K_ARCHIVE_FORMAT_UNKNOWN = 0,
@@ -1664,6 +1665,34 @@ static int zz9k_archive_7z_skip_digests(ZZ9KArchive7zCursor *cursor,
   return zz9k_archive_7z_read_digests(cursor, item_count, 0, 0);
 }
 
+static void zz9k_archive_7z_clear_parse_diagnostic(void)
+{
+  zz9k_archive_7z_last_parse_diagnostic = 0;
+}
+
+static void zz9k_archive_7z_set_parse_diagnostic(const char *diagnostic)
+{
+  if (!zz9k_archive_7z_last_parse_diagnostic) {
+    zz9k_archive_7z_last_parse_diagnostic = diagnostic;
+  }
+}
+
+static const char *zz9k_archive_7z_parse_diagnostic(void)
+{
+  return zz9k_archive_7z_last_parse_diagnostic;
+}
+
+static void zz9k_archive_print_7z_parse_failure(void)
+{
+  const char *diagnostic = zz9k_archive_7z_parse_diagnostic();
+
+  if (diagnostic) {
+    printf("7z unsupported layout: %s\n", diagnostic);
+  } else {
+    printf("7z parse failed or unsupported layout\n");
+  }
+}
+
 static int zz9k_archive_7z_copy_utf16_name(const uint8_t *names,
                                            uint32_t names_size,
                                            uint32_t *names_pos,
@@ -1923,10 +1952,20 @@ static int zz9k_archive_7z_read_simple_folder(ZZ9KArchive7zCursor *cursor,
   *props_size = 0U;
   memset(props, 0, ZZ9K_ARCHIVE_7Z_MAX_METHOD_PROPS);
 
-  if (!zz9k_archive_7z_read_number(cursor, &num_coders) ||
-      num_coders != 1U ||
-      !zz9k_archive_7z_read_byte(cursor, &main_byte) ||
-      (main_byte & 0xc0U) != 0U) {
+  if (!zz9k_archive_7z_read_number(cursor, &num_coders)) {
+    return 0;
+  }
+  if (num_coders != 1U) {
+    zz9k_archive_7z_set_parse_diagnostic(
+        "7z multi-coder/filter-chain folders unsupported");
+    return 0;
+  }
+  if (!zz9k_archive_7z_read_byte(cursor, &main_byte)) {
+    return 0;
+  }
+  if ((main_byte & 0xc0U) != 0U) {
+    zz9k_archive_7z_set_parse_diagnostic(
+        "7z coder attributes unsupported");
     return 0;
   }
 
@@ -1944,8 +1983,12 @@ static int zz9k_archive_7z_read_simple_folder(ZZ9KArchive7zCursor *cursor,
     uint64_t out_streams;
 
     if (!zz9k_archive_7z_read_number(cursor, &in_streams) ||
-        !zz9k_archive_7z_read_number(cursor, &out_streams) ||
-        in_streams != 1U || out_streams != 1U) {
+        !zz9k_archive_7z_read_number(cursor, &out_streams)) {
+      return 0;
+    }
+    if (in_streams != 1U || out_streams != 1U) {
+      zz9k_archive_7z_set_parse_diagnostic(
+          "7z multiple input/output streams unsupported");
       return 0;
     }
   }
@@ -1964,21 +2007,30 @@ static int zz9k_archive_7z_read_simple_folder(ZZ9KArchive7zCursor *cursor,
   }
   if (parsed_method == ZZ9K_ARCHIVE_7Z_METHOD_COPY) {
     if (*props_size != 0U) {
+      zz9k_archive_7z_set_parse_diagnostic(
+          "7z Copy method properties unsupported");
       return 0;
     }
   } else if (parsed_method == ZZ9K_ARCHIVE_7Z_METHOD_DEFLATE) {
     if (*props_size != 0U) {
+      zz9k_archive_7z_set_parse_diagnostic(
+          "7z Deflate method properties unsupported");
       return 0;
     }
   } else if (parsed_method == ZZ9K_ARCHIVE_7Z_METHOD_LZMA) {
     if (*props_size != 5U) {
+      zz9k_archive_7z_set_parse_diagnostic(
+          "7z LZMA property size unsupported");
       return 0;
     }
   } else if (parsed_method == ZZ9K_ARCHIVE_7Z_METHOD_LZMA2) {
     if (*props_size != 1U) {
+      zz9k_archive_7z_set_parse_diagnostic(
+          "7z LZMA2 property size unsupported");
       return 0;
     }
   } else {
+    zz9k_archive_7z_set_parse_diagnostic("7z folder method unsupported");
     return 0;
   }
   *method = parsed_method;
@@ -2723,6 +2775,7 @@ static int zz9k_archive_7z_list_from_header(const uint8_t *header_data,
   if (!header_data || header_length == 0U || !entry_count) {
     return 0;
   }
+  zz9k_archive_7z_clear_parse_diagnostic();
   zz9k_archive_7z_streams_init(&streams);
 
   cursor.data = header_data;
@@ -2802,6 +2855,7 @@ static int zz9k_archive_7z_list(const uint8_t *data,
   uint8_t *decoded_header = 0;
   int ok;
 
+  zz9k_archive_7z_clear_parse_diagnostic();
   if (!zz9k_archive_7z_start_header(data, length, &header)) {
     return 0;
   }
@@ -8215,10 +8269,16 @@ static int zz9k_archive_handle_7z_file(ZZ9KContext **ctx,
   if (!zz9k_archive_7z_list_from_header(
           header, header_length, archive_length, 0, 0U, &count) ||
       !zz9k_archive_alloc_entries(count, &entries)) {
+    zz9k_archive_print_7z_parse_failure();
+    *attempted = 1;
+    ok = 0;
     goto out;
   }
   if (!zz9k_archive_7z_list_from_header(
           header, header_length, archive_length, entries, count, &count)) {
+    zz9k_archive_print_7z_parse_failure();
+    *attempted = 1;
+    ok = 0;
     goto out;
   }
 
@@ -8501,12 +8561,12 @@ static int zz9k_archive_handle_7z(ZZ9KContext **ctx,
     if (zz9k_archive_7z_header_is_encoded(data, length)) {
       printf("unsupported encoded 7z header\n");
     } else {
-      printf("7z parse failed or unsupported layout\n");
+      zz9k_archive_print_7z_parse_failure();
     }
     return 0;
   }
   if (!zz9k_archive_7z_list(data, length, entries, count, &count)) {
-    printf("7z parse failed or unsupported layout\n");
+    zz9k_archive_print_7z_parse_failure();
     free(entries);
     return 0;
   }

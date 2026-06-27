@@ -243,6 +243,7 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "1-byte LZMA2 property prefix");
   ok &= expect_contains(source, "falls back to a one-shot");
   ok &= expect_contains(source, "LZMA2 dictionary properties");
+  ok &= expect_contains(source, "7z unsupported layout: ...");
   ok &= expect_contains(source, "complete wrapped payload");
   ok &= expect_contains(source, "7z LZMA no-memory diagnostics");
   ok &= expect_contains(source, "Largest free block");

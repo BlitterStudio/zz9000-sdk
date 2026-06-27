@@ -2437,6 +2437,67 @@ static int make_7z_lzma2_file(uint8_t *archive, uint32_t *length)
   return 1;
 }
 
+static int make_7z_with_folder_bytes(uint8_t *archive,
+                                     uint32_t *length,
+                                     const uint8_t *folder,
+                                     uint32_t folder_len)
+{
+  const uint8_t payload[1] = { 0U };
+  uint8_t header[192];
+  uint8_t names[32];
+  uint32_t pos = 0U;
+  uint32_t names_len = 0U;
+  uint32_t header_len;
+
+  append_utf16_ascii(names, &names_len, "packed.bin");
+
+  header[pos++] = 0x01U; /* kHeader */
+  header[pos++] = 0x04U; /* kMainStreamsInfo */
+  header[pos++] = 0x06U; /* kPackInfo */
+  pos += put_7z_number(header + pos, 0U); /* PackPos */
+  pos += put_7z_number(header + pos, 1U); /* NumPackStreams */
+  header[pos++] = 0x09U; /* kSize */
+  pos += put_7z_number(header + pos, sizeof(payload));
+  header[pos++] = 0U; /* end PackInfo */
+  header[pos++] = 0x07U; /* kUnPackInfo */
+  header[pos++] = 0x0bU; /* kFolder */
+  pos += put_7z_number(header + pos, 1U); /* NumFolders */
+  header[pos++] = 0U; /* inline folders */
+  memcpy(header + pos, folder, folder_len);
+  pos += folder_len;
+  header[pos++] = 0x0cU; /* kCodersUnPackSize */
+  pos += put_7z_number(header + pos, sizeof(payload));
+  header[pos++] = 0U; /* end UnPackInfo */
+  header[pos++] = 0U; /* end MainStreamsInfo */
+  header[pos++] = 0x05U; /* kFilesInfo */
+  pos += put_7z_number(header + pos, 1U);
+  header[pos++] = 0x11U; /* kName */
+  pos += put_7z_number(header + pos, 1U + names_len);
+  header[pos++] = 0U; /* inline names, not external */
+  memcpy(header + pos, names, names_len);
+  pos += names_len;
+  header[pos++] = 0U; /* end FilesInfo properties */
+  header[pos++] = 0U; /* end Header */
+  header_len = pos;
+
+  memset(archive, 0, 256U);
+  archive[0] = 0x37U;
+  archive[1] = 0x7aU;
+  archive[2] = 0xbcU;
+  archive[3] = 0xafU;
+  archive[4] = 0x27U;
+  archive[5] = 0x1cU;
+  archive[6] = 0U;
+  archive[7] = 4U;
+  put_le64(archive + 12U, sizeof(payload));
+  put_le64(archive + 20U, header_len);
+  memcpy(archive + 32U, payload, sizeof(payload));
+  memcpy(archive + 32U + sizeof(payload), header, header_len);
+  finish_7z_start_header(archive);
+  *length = 32U + sizeof(payload) + header_len;
+  return 1;
+}
+
 static int test_detect_formats(void)
 {
   uint8_t gzip_data[18] = {
@@ -2880,6 +2941,84 @@ static int test_7z_encoded_header_entry_exposes_codec_method(void)
   if (entry.method_props[0] != 0x5dU) return 7;
   if (!zz9k_archive_entry_has_crc32(&entry)) return 8;
   if (entry.crc32 != 0x12345678UL) return 9;
+  return 0;
+}
+
+static int test_7z_multi_coder_reports_parse_diagnostic(void)
+{
+  uint8_t archive[256];
+  uint8_t folder[8];
+  uint32_t folder_len = 0U;
+  uint32_t archive_len;
+  uint32_t count = 0U;
+  const char *diagnostic;
+
+  folder_len += put_7z_number(folder + folder_len, 2U); /* NumCoders */
+  make_7z_with_folder_bytes(archive, &archive_len, folder, folder_len);
+  if (zz9k_archive_7z_list(archive, archive_len, 0, 0U, &count)) {
+    return 1;
+  }
+  diagnostic = zz9k_archive_7z_parse_diagnostic();
+  if (!diagnostic) return 2;
+  if (strcmp(diagnostic,
+             "7z multi-coder/filter-chain folders unsupported") != 0) {
+    return 3;
+  }
+  return 0;
+}
+
+static int test_7z_multiple_stream_coder_reports_parse_diagnostic(void)
+{
+  uint8_t archive[256];
+  uint8_t folder[16];
+  uint32_t folder_len = 0U;
+  uint32_t archive_len;
+  uint32_t count = 0U;
+  const char *diagnostic;
+
+  folder_len += put_7z_number(folder + folder_len, 1U); /* NumCoders */
+  folder[folder_len++] = 0x13U; /* three-byte method id + stream counts */
+  folder[folder_len++] = 0x04U;
+  folder[folder_len++] = 0x01U;
+  folder[folder_len++] = 0x08U;
+  folder_len += put_7z_number(folder + folder_len, 2U); /* in streams */
+  folder_len += put_7z_number(folder + folder_len, 1U); /* out streams */
+  make_7z_with_folder_bytes(archive, &archive_len, folder, folder_len);
+  if (zz9k_archive_7z_list(archive, archive_len, 0, 0U, &count)) {
+    return 1;
+  }
+  diagnostic = zz9k_archive_7z_parse_diagnostic();
+  if (!diagnostic) return 2;
+  if (strcmp(diagnostic,
+             "7z multiple input/output streams unsupported") != 0) {
+    return 3;
+  }
+  return 0;
+}
+
+static int test_7z_unsupported_method_reports_parse_diagnostic(void)
+{
+  uint8_t archive[256];
+  uint8_t folder[16];
+  uint32_t folder_len = 0U;
+  uint32_t archive_len;
+  uint32_t count = 0U;
+  const char *diagnostic;
+
+  folder_len += put_7z_number(folder + folder_len, 1U); /* NumCoders */
+  folder[folder_len++] = 0x03U; /* three-byte unsupported method id */
+  folder[folder_len++] = 0x04U;
+  folder[folder_len++] = 0x02U;
+  folder[folder_len++] = 0x02U;
+  make_7z_with_folder_bytes(archive, &archive_len, folder, folder_len);
+  if (zz9k_archive_7z_list(archive, archive_len, 0, 0U, &count)) {
+    return 1;
+  }
+  diagnostic = zz9k_archive_7z_parse_diagnostic();
+  if (!diagnostic) return 2;
+  if (strcmp(diagnostic, "7z folder method unsupported") != 0) {
+    return 3;
+  }
   return 0;
 }
 
@@ -6186,6 +6325,23 @@ int main(void)
     printf("test_7z_encoded_header_entry_exposes_codec_method failed: %d\n",
            rc);
     return 275 + rc;
+  }
+  rc = test_7z_multi_coder_reports_parse_diagnostic();
+  if (rc) {
+    printf("test_7z_multi_coder_reports_parse_diagnostic failed: %d\n", rc);
+    return 276 + rc;
+  }
+  rc = test_7z_multiple_stream_coder_reports_parse_diagnostic();
+  if (rc) {
+    printf("test_7z_multiple_stream_coder_reports_parse_diagnostic "
+           "failed: %d\n", rc);
+    return 277 + rc;
+  }
+  rc = test_7z_unsupported_method_reports_parse_diagnostic();
+  if (rc) {
+    printf("test_7z_unsupported_method_reports_parse_diagnostic failed: %d\n",
+           rc);
+    return 278 + rc;
   }
   rc = test_7z_copy_multi_substream_list();
   if (rc) {

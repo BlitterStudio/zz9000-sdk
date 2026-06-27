@@ -240,6 +240,13 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "zz9k_archive_handle_7z_feed_file");
   ok &= expect_contains(source, "zz9k_archive_7z_parse_streams_info");
   ok &= expect_contains(source, "zz9k_archive_7z_parse_substreams_info");
+  ok &= expect_contains(source, "zz9k_archive_7z_parse_diagnostic");
+  ok &= expect_contains(source,
+                        "7z multi-coder/filter-chain folders unsupported");
+  ok &= expect_contains(source,
+                        "7z multiple input/output streams unsupported");
+  ok &= expect_contains(source, "7z folder method unsupported");
+  ok &= expect_contains(source, "7z unsupported layout: %s");
   ok &= expect_contains(source, "zz9k_archive_7z_lzma_alone_header");
   ok &= expect_contains(source, "zz9k_archive_7z_build_lzma_alone_payload");
   ok &= expect_contains(source, "zz9k_archive_7z_build_lzma2_payload");
