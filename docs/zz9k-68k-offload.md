@@ -47,6 +47,19 @@ iteration, and `DBRA` terminates the loop. This pins both source and
 destination postincrement behavior before using the runner for any benchmark
 comparison.
 
+The comparison gate lives in `tools/zz9k-m68k-offload-model.h`. It takes
+measured microsecond costs for the same workload:
+
+- native 68k execution
+- mailbox and input/output transfer overhead
+- ARM-side execution through the 68k runner
+- ARM-side execution through a purpose-built service
+
+Zero offload compute costs mean "not measured", not "free". Native 68k wins
+when mailbox overhead dominates. A purpose-built ARM service wins ties against
+the generic 68k runner, because the runner is only worth expanding when it
+beats both native 68k and the simpler service-specific implementation.
+
 Out of scope for this slice:
 
 - AmigaOS traps, library calls, interrupts, and supervisor/user emulation
