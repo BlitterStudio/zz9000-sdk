@@ -20,6 +20,8 @@ contract:
 - `MOVEQ #imm,Dn`
 - `ADDQ.L #n,Dn`
 - `SUBQ.L #n,Dn`
+- `ADD.B (An)+,Dn`
+- `DBRA Dn,disp16`
 - `MOVE.L Dn,(xxx).L`
 - `MOVE.L (xxx).L,Dn`
 - `RTS`
@@ -31,6 +33,12 @@ register state, CCR updates, stack return behavior, big-endian memory access,
 fault reporting, and bounded execution. A later Emu68-derived, Amiberry-derived,
 or custom JIT should be able to replace the execution engine behind the same
 contract.
+
+The first real loop fixture is a byte checksum: `A0` points at an input buffer,
+`D1` holds `length - 1`, `ADD.B (A0)+,D0` accumulates each byte, and `DBRA`
+terminates the loop. The result is the low byte of `D0`; the test also checks
+that `A0` advanced by the input length and that instruction-limit timeouts stop
+inside the loop without losing state.
 
 Out of scope for this slice:
 

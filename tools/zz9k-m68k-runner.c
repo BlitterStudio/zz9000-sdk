@@ -22,6 +22,18 @@ static int zz9k_m68k_read_be16(const uint8_t *memory,
   return 1;
 }
 
+static int zz9k_m68k_read_u8(const uint8_t *memory,
+                             uint32_t memory_size,
+                             uint32_t offset,
+                             uint8_t *value)
+{
+  if (!memory || !value || offset >= memory_size) {
+    return 0;
+  }
+  *value = memory[offset];
+  return 1;
+}
+
 static int zz9k_m68k_read_be32(const uint8_t *memory,
                                uint32_t memory_size,
                                uint32_t offset,
@@ -106,6 +118,32 @@ static void zz9k_m68k_set_add_flags(ZZ9KM68KState *state,
     flags |= ZZ9K_M68K_CCR_V;
   }
   if (result < dst) {
+    flags |= ZZ9K_M68K_CCR_C | ZZ9K_M68K_CCR_X;
+  }
+  state->sr &= (uint16_t)~(ZZ9K_M68K_CCR_X | ZZ9K_M68K_CCR_N |
+                          ZZ9K_M68K_CCR_Z | ZZ9K_M68K_CCR_V |
+                          ZZ9K_M68K_CCR_C);
+  state->sr |= flags;
+}
+
+static void zz9k_m68k_set_add_byte_flags(ZZ9KM68KState *state,
+                                         uint8_t src,
+                                         uint8_t dst,
+                                         uint8_t result)
+{
+  uint16_t flags = 0U;
+  uint32_t wide = (uint32_t)dst + (uint32_t)src;
+
+  if (result == 0U) {
+    flags |= ZZ9K_M68K_CCR_Z;
+  }
+  if ((result & 0x80U) != 0U) {
+    flags |= ZZ9K_M68K_CCR_N;
+  }
+  if (((~(dst ^ src) & (dst ^ result)) & 0x80U) != 0U) {
+    flags |= ZZ9K_M68K_CCR_V;
+  }
+  if (wide > 0xffU) {
     flags |= ZZ9K_M68K_CCR_C | ZZ9K_M68K_CCR_X;
   }
   state->sr &= (uint16_t)~(ZZ9K_M68K_CCR_X | ZZ9K_M68K_CCR_N |
@@ -211,6 +249,24 @@ int zz9k_m68k_run(ZZ9KM68KState *state,
         state->d[reg] = value;
         zz9k_m68k_set_add_flags(state, quick, dst, value);
       }
+    } else if ((opcode & 0xf1f8U) == 0xd018U) {
+      uint32_t data_reg = (opcode >> 9) & 7U;
+      uint32_t addr_reg = opcode & 7U;
+      uint8_t src;
+      uint8_t dst;
+      uint8_t value;
+
+      if (!zz9k_m68k_read_u8(memory, memory_size, state->a[addr_reg],
+                             &src)) {
+        return zz9k_m68k_set_fault(
+            result, ZZ9K_M68K_STATUS_OOB, pc, opcode);
+      }
+      state->a[addr_reg]++;
+      dst = (uint8_t)state->d[data_reg];
+      value = (uint8_t)(dst + src);
+      state->d[data_reg] = (state->d[data_reg] & 0xffffff00UL) |
+                           (uint32_t)value;
+      zz9k_m68k_set_add_byte_flags(state, src, dst, value);
     } else if ((opcode & 0xfff8U) == 0x23c0U) {
       uint32_t reg = opcode & 7U;
       uint32_t address;
@@ -245,6 +301,24 @@ int zz9k_m68k_run(ZZ9KM68KState *state,
       result->instructions++;
       result->status = ZZ9K_M68K_STATUS_RTS;
       return result->status;
+    } else if ((opcode & 0xfff8U) == 0x51c8U) {
+      uint32_t reg = opcode & 7U;
+      uint16_t displacement_word;
+      int16_t displacement;
+      uint32_t upper = state->d[reg] & 0xffff0000UL;
+      uint16_t counter;
+
+      if (!zz9k_m68k_fetch_word(state, memory, memory_size,
+                                &displacement_word)) {
+        return zz9k_m68k_set_fault(
+            result, ZZ9K_M68K_STATUS_OOB, pc, opcode);
+      }
+      displacement = (int16_t)displacement_word;
+      counter = (uint16_t)((state->d[reg] - 1U) & 0xffffU);
+      state->d[reg] = upper | (uint32_t)counter;
+      if (counter != 0xffffU) {
+        state->pc = (uint32_t)((int32_t)state->pc + (int32_t)displacement);
+      }
     } else {
       state->pc = pc;
       return zz9k_m68k_set_fault(

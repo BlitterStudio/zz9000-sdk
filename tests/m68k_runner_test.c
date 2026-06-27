@@ -191,6 +191,76 @@ static int test_instruction_limit_stops_after_executed_instruction(void)
   return 0;
 }
 
+static int test_checksum_loop_uses_postincrement_and_dbra(void)
+{
+  uint8_t memory[96];
+  ZZ9KM68KState state;
+  ZZ9KM68KResult result;
+  int status;
+
+  memset(memory, 0, sizeof(memory));
+  zz9k_m68k_state_init(&state);
+  state.a[0] = 48U;
+  state.a[7] = 64U;
+  memory[48] = 1U;
+  memory[49] = 2U;
+  memory[50] = 3U;
+  memory[51] = 4U;
+  put_be16(memory, 0U, 0x7000U); /* moveq #0,d0 */
+  put_be16(memory, 2U, 0x7203U); /* moveq #3,d1 */
+  put_be16(memory, 4U, 0xd018U); /* add.b (a0)+,d0 */
+  put_be16(memory, 6U, 0x51c9U); /* dbra d1,loop */
+  put_be16(memory, 8U, 0xfffaU); /* loop at pc 4 */
+  put_be16(memory, 10U, 0x4e75U); /* rts */
+  put_be32(memory, 64U, 0x00000060UL);
+
+  status = run_program(&state, memory, sizeof(memory), 16U, &result);
+  if (status != ZZ9K_M68K_STATUS_RTS) return 1;
+  if ((state.d[0] & 0xffU) != 10U) return 2;
+  if (state.d[1] != 0x0000ffffUL) return 3;
+  if (state.a[0] != 52U) return 4;
+  if (state.pc != 0x60U || state.a[7] != 68U) return 5;
+  if ((state.sr & (ZZ9K_M68K_CCR_N | ZZ9K_M68K_CCR_Z |
+                   ZZ9K_M68K_CCR_V | ZZ9K_M68K_CCR_C)) != 0U) {
+    return 6;
+  }
+  if (result.instructions != 11U) return 7;
+  return 0;
+}
+
+static int test_checksum_loop_respects_instruction_limit(void)
+{
+  uint8_t memory[96];
+  ZZ9KM68KState state;
+  ZZ9KM68KResult result;
+  int status;
+
+  memset(memory, 0, sizeof(memory));
+  zz9k_m68k_state_init(&state);
+  state.a[0] = 48U;
+  state.a[7] = 64U;
+  memory[48] = 1U;
+  memory[49] = 2U;
+  memory[50] = 3U;
+  memory[51] = 4U;
+  put_be16(memory, 0U, 0x7000U); /* moveq #0,d0 */
+  put_be16(memory, 2U, 0x7203U); /* moveq #3,d1 */
+  put_be16(memory, 4U, 0xd018U); /* add.b (a0)+,d0 */
+  put_be16(memory, 6U, 0x51c9U); /* dbra d1,loop */
+  put_be16(memory, 8U, 0xfffaU); /* loop at pc 4 */
+  put_be16(memory, 10U, 0x4e75U); /* rts */
+  put_be32(memory, 64U, 0x00000060UL);
+
+  status = run_program(&state, memory, sizeof(memory), 5U, &result);
+  if (status != ZZ9K_M68K_STATUS_LIMIT) return 1;
+  if ((state.d[0] & 0xffU) != 3U) return 2;
+  if ((state.d[1] & 0xffffU) != 2U) return 3;
+  if (state.a[0] != 50U) return 4;
+  if (state.pc != 6U) return 5;
+  if (result.instructions != 5U) return 6;
+  return 0;
+}
+
 int main(void)
 {
   int rc;
@@ -231,6 +301,16 @@ int main(void)
     printf("test_instruction_limit_stops_after_executed_instruction failed: %d\n",
            rc);
     return 70 + rc;
+  }
+  rc = test_checksum_loop_uses_postincrement_and_dbra();
+  if (rc) {
+    printf("test_checksum_loop_uses_postincrement_and_dbra failed: %d\n", rc);
+    return 80 + rc;
+  }
+  rc = test_checksum_loop_respects_instruction_limit();
+  if (rc) {
+    printf("test_checksum_loop_respects_instruction_limit failed: %d\n", rc);
+    return 90 + rc;
   }
 
   printf("m68k_runner_test: all checks passed\n");
