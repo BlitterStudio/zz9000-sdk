@@ -34,7 +34,27 @@ jobs:
       - name: Checkout zz9000-sdk
         uses: actions/checkout@v4
 
+      # The library is fully determined by the provider / integration / host
+      # crypto sources and the toolchain image, so cache the built libs keyed on
+      # those — unchanged runs skip the slow OpenSSL-for-m68k build entirely.
+      - name: Restore cached amissl.library
+        id: amisslcache
+        uses: actions/cache@v4
+        with:
+          path: integration/amissl/work/out
+          key: >-
+            amissl-${{ matrix.platform }}-${{ hashFiles(
+              'integration/amissl/AMISSL_REF',
+              'integration/amissl/amissl-zz9000.patch',
+              'integration/amissl/build.sh',
+              'integration/amissl/Dockerfile',
+              'amiga/provider/**',
+              'host/src/zz9k_host.c',
+              'tools/zz9k-crypto-soft.c',
+              'tools/zz9k-crypto-soft.h') }}
+
       - name: Build amissl.library (${{ matrix.platform }})
+        if: steps.amisslcache.outputs.cache-hit != 'true'
         run: |
           docker build -t zz9000-amissl-adtools integration/amissl
           mkdir -p integration/amissl/work/out
