@@ -36,8 +36,13 @@ m68k-amigaos-gcc -noixemul -nostartfiles -Os -s -Iinclude -Ihost/include -Iamiga
   build/m68k/zz9k_host.o -o build/zz9k.library
 m68k-amigaos-gcc -noixemul -nostartfiles -Os -s -Iinclude -Ihost/include -Iamiga/include \
   amiga/mpega/mpega_resident.c -o build/mpega.library.zz9k
+# Drop-in runtime variant: override the library name. Use backslash-escaped
+# double-quotes here, never surrounding single-quotes: a single quote would
+# close the outer sh -c wrapper around this whole script body, the inner
+# double-quotes would be stripped, and gcc would get a bare token instead of a
+# string literal.
 m68k-amigaos-gcc -noixemul -nostartfiles -Os -s -Iinclude -Ihost/include -Iamiga/include \
-  -DMPEGA_LIBRARY_NAME='"mpega.library"' \
+  -DMPEGA_LIBRARY_NAME=\"mpega.library\" \
   amiga/mpega/mpega_resident.c -o build/mpega.library
 
 m68k-amigaos-gcc $LIBCFLAGS tools/zz9k-libtest.c -o build/zz9k-libtest

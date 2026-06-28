@@ -73,7 +73,8 @@ static int expect_not_contains(const char *script, const char *script_name,
   return 0;
 }
 
-static int check_script(const char *path, const char *name)
+static int check_script(const char *path, const char *name,
+                        const char *mpega_define)
 {
   char *script;
   int ok;
@@ -118,7 +119,7 @@ static int check_script(const char *path, const char *name)
   ok &= expect_contains(script, name, "tools/zz9k-mp3.c");
   ok &= expect_contains(script, name, "tools/zz9k-mpega-smoke.c");
   ok &= expect_contains(script, name, "amiga/mpega/mpega_resident.c");
-  ok &= expect_contains(script, name, "MPEGA_LIBRARY_NAME='\"mpega.library\"'");
+  ok &= expect_contains(script, name, mpega_define);
   ok &= expect_contains(script, name, "tools/zz9k-image-window.c");
   ok &= expect_contains(script, name, "tools/zz9k-picture-viewer.c");
   ok &= expect_contains(script, name, "build/m68k/zz9k-picture-viewer.o");
@@ -200,8 +201,14 @@ int main(int argc, char **argv)
   }
 
   ok = 1;
-  ok &= check_script(argv[1], "build-m68k-amigaos.ps1");
-  ok &= check_script(argv[2], "build-m68k-amigaos.sh");
+  /* The two scripts wrap the gcc invocation differently, so the MPEGA name
+   * override needs different quoting to survive to gcc: the PowerShell
+   * here-string keeps '"..."' intact, while the POSIX `sh -c '...'` wrapper
+   * needs backslash-escaped \"...\". */
+  ok &= check_script(argv[1], "build-m68k-amigaos.ps1",
+                     "MPEGA_LIBRARY_NAME='\"mpega.library\"'");
+  ok &= check_script(argv[2], "build-m68k-amigaos.sh",
+                     "MPEGA_LIBRARY_NAME=\\\"mpega.library\\\"");
 
   return ok ? 0 : 1;
 }
