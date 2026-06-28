@@ -6,7 +6,13 @@ set -e
 IMAGE="${IMAGE:-sacredbanana/amiga-compiler:m68k-amigaos}"
 REPO_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 
-docker run --rm -v "$REPO_ROOT:/work" -w /work "$IMAGE" sh -c '
+# Run as root inside the container: the toolchain NDK headers under
+# /opt/m68k-amigaos are not world-readable, so a non-root --user cannot
+# compile. Pass the invoking host user/group ids so the container can hand the
+# build outputs back at the end (below) — otherwise the root-owned build/ tree
+# blocks the host-side packaging step from writing build/package on Linux/CI.
+docker run --rm -v "$REPO_ROOT:/work" -w /work \
+  -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" "$IMAGE" sh -c '
 set -e
 mkdir -p build/m68k
 CFLAGS="-noixemul -Os -s -Iinclude -Ihost/include"
@@ -100,4 +106,8 @@ m68k-amigaos-gcc $CFLAGS -Itools build/m68k/zz9k_host.o build/m68k/zz9k-fb-commo
   tools/zz9k-surfaceops.c -o build/zz9k-surfaceops
 m68k-amigaos-gcc $CFLAGS tools/zz9k-probe.c -o build/zz9k-probe
 m68k-amigaos-gcc $CFLAGS tools/zz9k-step.c -o build/zz9k-step
+
+# Hand the root-owned build outputs back to the invoking host user so the
+# host-side packaging step (and any later cleanup) can write under build/.
+if [ -n "${HOST_UID:-}" ]; then chown -R "$HOST_UID:$HOST_GID" build || true; fi
 '
