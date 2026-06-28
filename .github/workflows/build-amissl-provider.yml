@@ -1,8 +1,12 @@
 # Build amissl.library with the ZZ9000 crypto-offload provider compiled in
-# (Path A). Mirrors AmiSSL's own CI environment (ubuntu + adtools), which is the
-# proven way to build AmiSSL + OpenSSL 3.x from source with the m68k toolchain —
-# a clean Linux/ext4 checkout avoids the CRLF/inode/PATH pitfalls of a local
-# Docker build. The result is a drop-in library users copy into LIBS:.
+# (Path A). The result is a drop-in library users copy into LIBS:.
+#
+# Built inside the pinned adtools container (integration/amissl/Dockerfile) with
+# the sources cloned onto the container's own ext4 filesystem. That is the
+# supported, reproducible way to build AmiSSL + OpenSSL 3.x for m68k: the 2017
+# adtools gcc 2.95.3 trips over bind-mount inodes / CRLF and over the sfdc stub
+# generation when run bare on a hosted runner. The drivers repo builds the same
+# library the same way.
 #
 # Trigger manually (Actions tab -> Run workflow) or on changes to the provider
 # or integration files. Artifacts: amissl-zz9000-<platform>.
@@ -29,47 +33,32 @@ jobs:
     steps:
       - name: Checkout zz9000-sdk
         uses: actions/checkout@v4
-        with:
-          path: zz9000-sdk
-
-      - name: Read pinned AmiSSL ref
-        id: amissl
-        run: echo "ref=$(cat zz9000-sdk/integration/amissl/AMISSL_REF)" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout AmiSSL
-        uses: actions/checkout@v4
-        with:
-          repository: jens-maus/amissl
-          ref: ${{ steps.amissl.outputs.ref }}
-          path: amissl
-
-      - name: Setup dependencies
-        run: |
-          sudo dpkg --add-architecture i386
-          sudo apt-get update -y -qq || true
-          sudo apt-get -qq install libc6:i386
-          sudo ln -sf /usr/lib/x86_64-linux-gnu/libmpfr.so.6 \
-                      /usr/lib/x86_64-linux-gnu/libmpfr.so.4
-
-      - name: Install adtools build environment
-        run: |
-          DL=https://github.com/adtools/adtools/releases/download/20170213
-          DLU=https://github.com/adtools/adtools/releases/download/20220416
-          curl -L ${DLU}/adtools-utils.tar.bz2 | sudo tar xj -C /
-          curl -L ${DL}/adtools-m68k-amigaos.tar.bz2 | sudo tar xj -C /
-          echo "/usr/local/amiga/bin" >> "$GITHUB_PATH"
-          echo "/opt/m68k-amigaos/bin" >> "$GITHUB_PATH"
 
       - name: Build amissl.library (${{ matrix.platform }})
         run: |
-          AMISSL_DIR="$GITHUB_WORKSPACE/amissl" \
-          ZZ9000_SDK="$GITHUB_WORKSPACE/zz9000-sdk" \
-          OS=${{ matrix.platform }} \
-          bash zz9000-sdk/integration/amissl/build.sh
+          docker build -t zz9000-amissl-adtools integration/amissl
+          mkdir -p integration/amissl/work/out
+          docker run --rm \
+            -v "$PWD":/sdk-src:ro \
+            -v "$PWD/integration/amissl/work/out":/out \
+            -e OS=${{ matrix.platform }} \
+            zz9000-amissl-adtools sh -ec '
+              git config --global --add safe.directory "*"
+              git clone -q /sdk-src /build/zz9000-sdk
+              case "$OS" in
+                os3-68020) libdir=68020-40 ;;
+                os3-68060) libdir=68060 ;;
+                *) echo "unknown OS target: $OS" >&2; exit 1 ;;
+              esac
+              AMISSL_DIR= ZZ9000_SDK=/build/zz9000-sdk OS="$OS" WORK=/build/work \
+                sh /build/zz9000-sdk/integration/amissl/build.sh
+              mkdir -p "/out/$libdir"
+              cp -v /build/work/out/"$OS"/amissl_v*.library "/out/$libdir/"
+            '
 
       - name: Upload library artifact
         uses: actions/upload-artifact@v4
         with:
           name: amissl-zz9000-${{ matrix.platform }}
-          path: zz9000-sdk/integration/amissl/work/out/${{ matrix.platform }}/amissl_v*.library
+          path: integration/amissl/work/out/*/amissl_v*.library
           if-no-files-found: error
