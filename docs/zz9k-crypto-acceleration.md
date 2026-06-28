@@ -188,6 +188,49 @@ Two findings, both stronger than the ChaCha20-Poly1305 case:
    ~1.4x. This is exactly the curve the provider's batching design (Phase 4)
    needs: accumulate TLS records and submit them via `zz9k_crypto_aead_batch`.
 
+### End-to-end browser/application results (Phase 4, measured on a 68060)
+
+The provider ships baked into a drop-in `amissl.library`
+([zz9k-amissl-provider.md](zz9k-amissl-provider.md)), so the final proof is a
+real application doing real TLS, not a micro-benchmark. Measured on a 68060
+(wall-clock seconds, lower is better): IBrowse fetching
+`https://www.google.com/`, and DOpus performing an SFTP transfer. Three
+configurations: the ZZ9000 drop-in with offload on, the same drop-in with
+offload disabled (`ENV:ZZ9K_DISABLE_OFFLOAD`, i.e. our pure-software path), and
+the stock Aminet AmiSSL `os3-68060` build.
+
+| Workload | drop-in, offload ON | drop-in, offload OFF (sw) | stock AmiSSL (os3-68060) |
+|---|---|---|---|
+| IBrowse, google.com | 12.95 | 15.36 | 15.18 |
+| DOpus, SFTP transfer | 7.00 | 7.06 | 7.84 |
+
+Reading:
+
+- **The drop-in beats stock on both** (12.95 vs 15.18 s; 7.00 vs 7.84 s) — the
+  acceleration goal is met for real browsing, not just micro-benchmarks.
+- **The offload genuinely helps on a fair baseline.** Disabling the offload
+  (forcing our own software crypto) costs ~16% / 2.4 s on the browser fetch
+  (12.95 → 15.36 s). The SFTP path is neutral within noise (7.00 vs 7.06 — it
+  negotiates AES-CTR, which the provider does not offload) but never regresses.
+- **Our software path is on par with stock** (offload-OFF 15.36 ≈ stock 15.18),
+  confirming the build itself is sound and the measured win comes from the
+  offload, not from a faster software baseline.
+
+#### Shipping requirement: match the AmiSSL build to the CPU
+
+An earlier run had the drop-in *slower* than stock (~2.5x on the crypto hot
+loops). The cause was **not** the offload but a CPU-target mismatch: an
+`os3-68020` library (`-m68020-40`) was installed on a 68060. The 020-40 codegen
+emits 64-bit multiplies/divides the 68060 lacks in hardware, so they are
+trap-and-emulated by `68060.library` inside the bignum/AES/GHASH loops. Building
+for the actual CPU (`os3-68060`) turned that 2.5x loss into the win above.
+
+AmiSSL itself ships exactly two m68k builds — `os3-68020` (68020/030/040) and
+`os3-68060` — and its installer picks by detected CPU. The ZZ9000 distribution
+mirrors this: CI produces both, and the installer detects the CPU and installs
+the matching library. **An `os3-68020` library on a 68060 is a severe (~2.5x)
+crypto slowdown — always install the CPU-matched build.**
+
 ## Data-collection plan
 
 1. **Symmetric record sweep — `zz9k-cryptobench`** — DONE (see Measured
