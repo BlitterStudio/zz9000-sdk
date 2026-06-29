@@ -59,7 +59,7 @@ The package is written to `build/package/amigaos3`. It contains:
 - examples under `Examples`
 - `MANIFEST.sha256` with SHA-256 checksums for every packaged file
 
-SDK v2 requires the matching unreleased SDK-service firmware. After installing
+SDK v2 requires the matching ZZ9000 SDK-service firmware (v2.2.0 or newer). After installing
 the SDK package and booting that firmware, run this hardware smoke check:
 
 ```text
