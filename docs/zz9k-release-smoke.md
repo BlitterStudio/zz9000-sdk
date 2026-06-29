@@ -60,15 +60,26 @@ zz9k-chacha
 zz9k-aead
 ```
 
+With the accelerated drop-in `amissl.library` installed (the headline v2.2.0
+TLS-offload feature, shipped by the drivers package), also confirm end-to-end
+TLS offload: run the provider self-test, or perform an HTTPS GET through any
+AmiSSL TLS application, as described in the *Verifying on hardware* section of
+[`zz9k-amissl-provider.md`](zz9k-amissl-provider.md).
+
 Expected pass signal:
 
 - Hash tools match their built-in vectors.
 - ChaCha20 and AEAD tools complete their encrypt/decrypt vector checks.
+- The AmiSSL provider self-test prints `encrypt via 'zz9000'` and reports
+  `ALL PASS`, or an HTTPS GET through the drop-in `amissl.library` completes;
+  `ENV:ZZ9K_DISABLE_OFFLOAD` can A/B the same library against pure software.
 
 Failure routing:
 
 - Digest or vector mismatches route to the crypto service before any archive,
   TLS, or browser integration work.
+- Drop-in `amissl.library` self-test failures or TLS handshake errors route to
+  the crypto service and the AmiSSL provider before browser integration work.
 
 ## Compression And Archives
 

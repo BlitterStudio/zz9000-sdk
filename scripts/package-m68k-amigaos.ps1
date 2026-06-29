@@ -155,6 +155,16 @@ Copy-One "docs/zz9k-modules.md" "Docs/zz9k-modules.md"
 Copy-One "docs/zz9k-picture-datatype.md" "Docs/zz9k-picture-datatype.md"
 Copy-One "docs/zz9k-68k-offload.md" "Docs/zz9k-68k-offload.md"
 Copy-One "docs/zz9k-release-smoke.md" "Docs/zz9k-release-smoke.md"
+Copy-One "docs/zz9k-amissl-provider.md" "Docs/zz9k-amissl-provider.md"
+Copy-One "docs/zz9k-crypto-acceleration.md" "Docs/zz9k-crypto-acceleration.md"
+
+# Docs/ is flat in the package, but README.md links to the companion docs with
+# a "docs/" prefix. Rewrite those link targets so they resolve to the sibling
+# files inside the package instead of a nonexistent Docs/docs/ subfolder.
+$packagedReadme = Join-Path $PackageRoot "Docs\README.md"
+(Get-Content -LiteralPath $packagedReadme -Raw) -replace '\]\(docs/', '](' |
+  Set-Content -LiteralPath $packagedReadme -NoNewline
+
 Decode-Base64File "tests/fixtures/archives/split-deflate.7z.b64" `
   "Archives/split-deflate.7z"
 Decode-Base64File "tests/fixtures/archives/split-lzma.7z.b64" `

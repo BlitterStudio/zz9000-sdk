@@ -209,8 +209,9 @@ if (!zz9k_shared_copy_to(&input, 0, bytes, byte_count)) {
 ```
 
 Crypto helpers live in `zz9k/crypto.h`. They provide digest-size lookup and
-descriptor builders for plain hashes, HMAC, Poly1305, ChaCha20 streams, and
-ChaCha20-Poly1305 AEAD:
+descriptor builders for plain hashes, HMAC, Poly1305, ChaCha20 streams,
+ChaCha20-Poly1305 AEAD, X25519/P-256 key exchange, and ECDSA-P256/RSA signature
+verification:
 
 ```c
 #include "zz9k/crypto.h"
@@ -1101,6 +1102,55 @@ the single-call helper and `ZZ9K_LIBRARY_MIN_REVISION_CRYPTO_AEAD_BATCH` for
 the batch helper. `zz9k-bench` measures the synchronous full-buffer AEAD path
 as `ARM ChaCha20-Poly` and pipelined 16 KiB records as
 `ARM ChaCha20-Poly pipe`.
+
+## Crypto Key Exchange / Verify
+
+SDK v2 also offloads the asymmetric handshake primitives.
+`ZZ9KCryptoKeyExchange()` runs a scalar-multiply key exchange and writes the
+32-byte shared secret to the output buffer. The supported algorithms are X25519
+(`ZZ9K_CRYPTO_KX_X25519`, with a 32-byte scalar and 32-byte peer point) and
+P-256 ECDH (`ZZ9K_CRYPTO_KX_P256`, with a 65-byte uncompressed peer point
+`0x04 || X || Y`):
+
+```c
+ZZ9KCryptoKxDesc desc;
+ZZ9KCryptoResult result;
+
+if (zz9k_crypto_build_x25519_desc(&desc, scalar.handle, 0,
+                                  peer_point.handle, 0,
+                                  shared.handle, 0)) {
+  ZZ9KCryptoKeyExchange(&desc, &result);
+}
+```
+
+`zz9k_crypto_build_p256_desc()` builds a P-256 ECDH descriptor with the same
+argument shape.
+
+`ZZ9KCryptoVerify()` checks a signature over a SHA-256 digest, either ECDSA-P256
+(`ZZ9K_CRYPTO_VERIFY_ECDSA_P256_SHA256`) or RSA-PKCS1-2048
+(`ZZ9K_CRYPTO_VERIFY_RSA_PKCS1_2048_SHA256`). The call's return value is the SDK
+status; the verification result is reported through the `int` out-parameter,
+which is set nonzero only when the signature is valid:
+
+```c
+ZZ9KCryptoVerifyDesc desc;
+int valid = 0;
+
+if (zz9k_crypto_build_verify_desc(&desc, ZZ9K_CRYPTO_VERIFY_ECDSA_P256_SHA256,
+                                  digest.handle, 0, digest_length,
+                                  sig.handle, 0, sig_length,
+                                  key.handle, 0, key_length)) {
+  ZZ9KCryptoVerify(&desc, &valid);
+}
+```
+
+These are primitive crypto ABI like the other crypto jobs. Callers must query
+`ZZ9K_CAP_CRYPTO` and service availability first, and gate hardware use on the
+matching crypto service flags: `ZZ9K_SERVICE_FLAG_CRYPTO_X25519` or
+`ZZ9K_SERVICE_FLAG_CRYPTO_P256` for key exchange, and
+`ZZ9K_SERVICE_FLAG_CRYPTO_ECDSA_P256` or `ZZ9K_SERVICE_FLAG_CRYPTO_RSA_2048` for
+verify. Library callers should require `ZZ9K_LIBRARY_MIN_REVISION_CRYPTO_KX` for
+key exchange and `ZZ9K_LIBRARY_MIN_REVISION_CRYPTO_VERIFY` for verify.
 
 ## Async Calls
 

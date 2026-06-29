@@ -1,7 +1,7 @@
 # ZZ9000 AmiSSL Provider
 
 This document describes how the ZZ9000 crypto offload plugs into AmiSSL 5.x
-(OpenSSL 3.6) as an OpenSSL 3 *provider*, how to build an application that uses
+(OpenSSL 3.x) as an OpenSSL 3 *provider*, how to build an application that uses
 it, and how to verify on real hardware that operations are actually running on
 the board.
 
