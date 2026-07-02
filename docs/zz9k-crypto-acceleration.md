@@ -265,11 +265,20 @@ crypto slowdown — always install the CPU-matched build.**
   offload wins at every record size; batched offload reaches 3584 KiB/s at 16 KB.
   Closes the dominant-ciphersuite record gap.
 - **Phase 4 — OpenSSL 3.x provider. DONE.** A built-in, no-DSO provider
-  (`OSSL_PROVIDER_add_builtin`) routing X25519 key exchange, AES-GCM /
-  ChaCha20-Poly1305 ciphers, and ECDSA-P256 / RSA-PKCS1 verify to the ZZ9000,
-  with software fallback. Host parity tests pass against OpenSSL 3; the same
-  source compiles for m68k against AmiSSL 5.x (OpenSSL 3.6). Build, registration,
-  and hardware-verification procedure: [zz9k-amissl-provider.md](zz9k-amissl-provider.md).
+  (`OSSL_PROVIDER_add_builtin`) with software fallback. The v2.2.0 release routed
+  X25519 key exchange and the AES-GCM / ChaCha20-Poly1305 record ciphers (the
+  end-to-end browser numbers above are that build). A follow-up extends the
+  provider to also route the handshake asymmetric operations the firmware serves:
+  **P-256 ECDHE** (key generation via a new firmware keygen primitive + ECDH
+  derive) and **P-256 ECDSA / RSA-2048 PKCS#1 certificate verification**. To own
+  the EC/RSA key types without regressing the operations the board can't do, the
+  keymgmt is a delegating *accelerating shim* — non-P256 curves, RSA-PSS,
+  client-cert signing and app key generation forward to AmiSSL's default provider
+  (see [zz9k-amissl-provider.md](zz9k-amissl-provider.md)). Host parity tests pass
+  against OpenSSL 3 and the provider cross-compiles + links for m68k against
+  AmiSSL 5.27 (OpenSSL 3.6). *End-to-end hardware re-measurement of the P-256/
+  cert-verify browsing path is pending;* the per-operation firmware timings it
+  builds on (Phase 2) are already measured (122–1018x).
 - **Phase 5 (optional, far) — FPGA AES core**, only if software AES-GCM on the
   ARMv7 A9 proves throughput-limited.
 
@@ -282,6 +291,7 @@ crypto slowdown — always install the CPU-matched build.**
 - `tools/zz9k-handshake-model.h` — handshake offload calculator, checks in
   `tests/handshake_model_test.c`.
 - `amiga/provider/` — OpenSSL 3 provider that exposes the offload to AmiSSL
-  (X25519, AES-GCM, ChaCha20-Poly1305, ECDSA/RSA verify) with software fallback;
+  (X25519, P-256 ECDHE, AES-GCM, ChaCha20-Poly1305, ECDSA-P256/RSA-2048 verify)
+  with delegation of non-accelerated EC/RSA ops and software fallback;
   host parity tests in `tests/provider_*_test.c`. See
   [zz9k-amissl-provider.md](zz9k-amissl-provider.md).

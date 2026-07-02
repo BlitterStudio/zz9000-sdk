@@ -22,12 +22,15 @@ else fall through to AmiSSL's own (default) provider.
     ▼
   AmiSSL / OpenSSL 3 core ── property query "?provider=zz9000"
     │                                   │
-    ├── zz9000 provider                 └── default provider (software fallback)
-    │     KEYMGMT  X25519 (full)                everything not offloaded,
-    │     KEYEXCH  X25519                       including ECDSA / RSA
-    │     CIPHER   AES-128/256-GCM,             certificate verification and
-    │              ChaCha20-Poly1305            all EC/RSA key operations
-    │       │
+    ├── zz9000 provider                 └── default provider (software)
+    │     KEYMGMT  X25519 (full),               everything not offloaded,
+    │              EC, RSA                       reached directly OR via the
+    │     KEYEXCH  X25519, ECDH (P-256)          zz9000 keymgmt's delegation
+    │     SIGNATURE ECDSA, RSA (verify)          (non-P256 curves, RSA-PSS,
+    │     CIPHER   AES-128/256-GCM,              client-cert signing, app
+    │              ChaCha20-Poly1305             EC/RSA keygen)
+    │       │  │
+    │       │  └─ delegate ─► default provider (forced provider=default)
     │       ▼  zz9k_offload.c
     │     ZZ9000 SDK  (zz9k_crypto_kx / _aead, shared buffers, mailbox)
     │       │
@@ -36,22 +39,34 @@ else fall through to AmiSSL's own (default) provider.
 ```
 
 A provider that sets the default property query to `?provider=zz9000` is
-*preferred* for every algorithm it advertises, so libssl will fetch **our**
+*preferred* for every algorithm it advertises, so libssl fetches **our**
 implementation for the whole of any key type we name — not just the leaf
-operation we accelerate. The provider therefore only advertises algorithms it
-can own end-to-end through a TLS handshake: **X25519** (key generation, key
-exchange, and all the parameter round-trips libssl performs) and the **AEAD
-record ciphers** (AES-GCM and ChaCha20-Poly1305, including the TLS 1.2
-record-layer controls). The SDK also accelerates **ECDSA-P256 and RSA verify**,
-but advertising EC/RSA key types here would force libssl to fetch our keymgmt
-for ECDH key generation, signing, and RSA-PSS — operations we do not implement
-— and would break the handshake; certificate verification therefore stays in
-AmiSSL's software default provider. Accelerating it needs a keymgmt that
-delegates the non-accelerated operations to the default provider, which is
-deferred (the `zz9k_ecdsa.c` / `zz9k_rsa.c` verify code and its host
-cross-provider tests remain in the tree for that work). The single
-per-handshake certificate verify is a small cost next to the key exchange and
-bulk record crypto, which the provider does accelerate.
+operation we accelerate. Two kinds of algorithm are advertised, and they are
+owned differently:
+
+* **Owned end-to-end.** **X25519** (key generation, key exchange, and all the
+  parameter round-trips libssl performs) and the **AEAD record ciphers**
+  (AES-GCM and ChaCha20-Poly1305, including the TLS 1.2 record-layer controls)
+  are fully implemented here — nothing about them is delegated.
+* **Accelerate-part, delegate-the-rest.** The provider also owns the **EC** and
+  **RSA** key types so it can accelerate the handshake operations the firmware
+  serves — **P-256 ECDHE** (key generation + ECDH derive) and **P-256 ECDSA /
+  RSA-2048 PKCS#1-v1.5-SHA-256 certificate verification**. Owning a whole key
+  type means *every* EC/RSA operation routes here, including ones the board has
+  no primitive for. Those are **delegated**: the keymgmt builds (or holds) a
+  "shadow" `EVP_PKEY` against the default provider and forwards the operation to
+  it. Delegated operations are non-P256 curves, RSA-PSS (the TLS 1.3 RSA
+  signature scheme) and other digests/sizes, **certificate/CertificateVerify
+  signing** with a client key, and application-level **EC/RSA key generation**.
+  This makes the EC/RSA keymgmt a transparent *accelerating shim*: the hot
+  handshake paths run on the board, everything else behaves exactly as the
+  default provider would — so owning the key type never regresses an operation.
+
+The delegated fetch always forces `provider=default` (not the inherited
+`?provider=zz9000`): otherwise EVP would prefer *our* op for the shadow key too
+and bridge it straight back into this provider — unbounded recursion. Pinning
+both the operation and the key to the default provider is what makes delegation
+safe.
 
 The provider operation files are portable OpenSSL 3 code and are shared with the
 host unit tests. Two things make them use the hardware:
@@ -66,9 +81,10 @@ host unit tests. Two things make them use the hardware:
   AmiSSL's software default instead (see *Fallback semantics*). With the macro
   undefined (the host build) every operation uses the software reference, which
   is why the host unit tests stay meaningful. (`zz9k_prov_ecdsa_verify` /
-  `zz9k_prov_rsa_verify` share the same shape and are exercised by the host
-  tests under `ZZ9K_PROVIDER_TEST_ALL`, but are not advertised in production —
-  see above.)
+  `zz9k_prov_rsa_verify` share the same offload-or-fail shape for the
+  *accelerated* verify; the non-accelerated EC/RSA operations do not touch the
+  board at all — they delegate to AmiSSL's default provider — so they are
+  unaffected by this macro.)
 * **An open offload context.** `zz9k_provider_init` opens the board once for
   the provider's lifetime (`zz9k_offload_open`), keeps it only when the
   firmware's crypto service responds, and records the advertised service
@@ -88,8 +104,8 @@ host unit tests. Two things make them use the hardware:
 | `amiga/provider/zz9k_algorithms.c` | Central `OSSL_ALGORITHM` tables. |
 | `amiga/provider/zz9k_x25519.c` | X25519 KEYMGMT (keygen, import/export, params) + KEYEXCH. The full surface libssl needs for a TLS key share. |
 | `amiga/provider/zz9k_aead.c` | AES-128/256-GCM and ChaCha20-Poly1305 ciphers, including the TLS 1.2 record-layer controls (`EVP_CTRL_AEAD_TLS1_AAD` / `SET_IV_FIXED`, and ChaCha's init-delivered fixed IV) libssl drives per record. |
-| `amiga/provider/zz9k_ecdsa.c` | EC P-256 KEYMGMT + ECDSA verify. Not advertised in production (see above); host-tested under `ZZ9K_PROVIDER_TEST_ALL`. |
-| `amiga/provider/zz9k_rsa.c` | RSA KEYMGMT + RSA-PKCS1-SHA256 verify (2048/3072/4096). Not advertised in production; host-tested under `ZZ9K_PROVIDER_TEST_ALL`. |
+| `amiga/provider/zz9k_ecdsa.c` | EC KEYMGMT + ECDH (P-256) KEYEXCH + ECDSA SIGNATURE. Accelerates P-256 ECDHE keygen/derive and P-256 ECDSA verify; delegates non-P256 curves, ECDSA signing, and non-P256 keygen to a shadow default-provider key. |
+| `amiga/provider/zz9k_rsa.c` | RSA KEYMGMT + RSA SIGNATURE. Accelerates RSA-2048 PKCS#1-v1.5-SHA-256 verify; delegates RSA-PSS, other digests/sizes, RSA signing, and RSA keygen to a shadow default-provider key. |
 | `amiga/provider/zz9k_offload.c` | SDK bridge: marshals an operation into shared buffers and runs it through the SDK. **Amiga-only.** |
 | `amiga/provider/zz9k_amissl.c` | `zz9k_amissl_register()` / `zz9k_amissl_unregister()` — registers the provider with AmiSSL's default library context. **Amiga-only.** |
 | `amiga/provider/zz9k_amissl_selftest.c` | Standalone hardware self-test program. **Amiga-only.** |
@@ -241,10 +257,13 @@ install with libssl is found.
 On hardware, adapt the AmiSSL `test/https.c` example: add the provider objects
 to its build, define `ZZ9K_PROVIDER_OFFLOAD`, and call `zz9k_amissl_register()`
 right after the existing `InitAmiSSL()` (the in-library Path A build needs no
-such call). A successful HTTPS GET against a server negotiating `X25519` + an
-ECDSA-P256 or RSA certificate confirms the offloaded key exchange and record
-crypto produced a valid handshake; the certificate verification itself runs in
-AmiSSL software (see *How it fits together*).
+such call). A successful HTTPS GET against a server negotiating `X25519` or
+`P-256` key exchange and an ECDSA-P256 or RSA-2048 certificate confirms the
+offloaded key exchange, certificate verification, and record crypto together
+produced a valid handshake. To confirm the certificate verify specifically ran
+on the board, fetch the signature after a handshake and read its provider
+(`EVP_SIGNATURE_get0_provider` → `"zz9000"` for a P-256 ECDSA or RSA-2048 chain;
+a P-384/P-521 or RSA-PSS-only chain reads `"default"`, i.e. delegated).
 
 ## Fallback semantics
 
@@ -252,14 +271,20 @@ The provider is conservative about what it *advertises*: it only claims
 operations it can fully offload, so everything else — and everything on a
 machine without the board — transparently uses AmiSSL's software.
 
-* The provider advertises only what the board actually serves: with the crypto
-  service present, X25519 (key exchange + keymgmt) and the AEAD ciphers the
-  firmware supports (AES-GCM gated on its capability flag, otherwise
-  ChaCha20-Poly1305 only); with no board or no crypto service, it advertises
-  **nothing**, and the library behaves exactly like stock AmiSSL.
-* Operations the provider does not advertise resolve to the default provider via
-  the `?` (optional) property query. This always includes certificate signature
-  verification (ECDSA, RSA, RSA-PSS) and every EC/RSA key operation.
+* The provider advertises only what the board actually serves, each gated on its
+  own firmware capability flag: X25519 (key exchange + keymgmt); the AEAD ciphers
+  the firmware supports (AES-GCM gated on its flag, otherwise ChaCha20-Poly1305
+  only); the **EC** key type + ECDH KEYEXCH + ECDSA SIGNATURE (gated on the
+  P-256 keygen / ECDSA-P256 flags); and the **RSA** key type + SIGNATURE (gated
+  on the RSA-2048 flag). With no board or no crypto service it advertises
+  **nothing**, and the library behaves exactly like stock AmiSSL. Because each
+  key type is gated independently, firmware that predates the P-256-keygen or
+  cert-verify flags simply leaves EC/RSA to the default provider, unchanged.
+* A key type is advertised only when the board can accelerate *some* operation on
+  it; the operations the board cannot do (non-P256 curves, RSA-PSS, signing, app
+  keygen) are still served — the keymgmt **delegates** them to the default
+  provider (forcing `provider=default`). So owning EC/RSA accelerates the
+  handshake without removing any operation the default provider offered.
 * Advertised operations are **offload-or-fail**: the in-library software crypto
   paths are deliberately not used (they are compiled only into the host build,
   for the parity tests), so a record either offloads to the board or fails —
