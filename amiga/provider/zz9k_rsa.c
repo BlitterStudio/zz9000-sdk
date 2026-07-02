@@ -326,6 +326,137 @@ static const char *zz9k_rsa_keymgmt_query_operation_name(int operation_id)
   return NULL;
 }
 
+/* ---- RSA key generation (always delegated) ----
+ *
+ * The ZZ9000 has no RSA keygen primitive, but owning the "RSA" keytype means
+ * app-level RSA keygen routes here and must not regress versus v2.2.0 (which
+ * left RSA to the default provider). So generation delegates wholesale to the
+ * default provider, replaying the caller's gen params (bits, public exponent,
+ * prime count), and the result is wrapped as our key object: the shadow is the
+ * generated EVP_PKEY (which carries the private key, so signing can delegate
+ * to it), and n/e are additionally captured for the accelerated PKCS#1 verify
+ * fast path when the size fits — exactly as import does. */
+typedef struct {
+  ZZ9K_PROV_CTX *provctx;
+  int selection;
+  OSSL_PARAM *params;   /* dup of the gen params, replayed onto the default ctx */
+} ZZ9K_RSA_GEN;
+
+static void *zz9k_rsa_gen_init(void *provctx, int selection,
+                               const OSSL_PARAM params[])
+{
+  ZZ9K_RSA_GEN *gen;
+
+  /* RSA has no domain parameters — only keypair generation is meaningful. */
+  if ((selection & OSSL_KEYMGMT_SELECT_KEYPAIR) == 0) {
+    return NULL;
+  }
+  gen = OPENSSL_zalloc(sizeof(*gen));
+  if (gen != NULL) {
+    gen->provctx = provctx;
+    gen->selection = selection;
+    if (params != NULL) {
+      gen->params = OSSL_PARAM_dup(params);
+    }
+  }
+  return gen;
+}
+
+static int zz9k_rsa_gen_set_params(void *genctx, const OSSL_PARAM params[])
+{
+  ZZ9K_RSA_GEN *gen = genctx;
+
+  if (gen == NULL) {
+    return 0;
+  }
+  if (params == NULL) {
+    return 1;
+  }
+  /* The keygen bits/exponent arrive here (EVP_PKEY_CTX_set_rsa_keygen_*),
+   * replaced wholesale so the delegated default keygen ctx sees them verbatim. */
+  OSSL_PARAM_free(gen->params);
+  gen->params = OSSL_PARAM_dup(params);
+  return 1;
+}
+
+static const OSSL_PARAM *zz9k_rsa_gen_settable_params(void *genctx,
+                                                      void *provctx)
+{
+  static const OSSL_PARAM types[] = {
+    OSSL_PARAM_size_t(OSSL_PKEY_PARAM_RSA_BITS, NULL),
+    OSSL_PARAM_size_t(OSSL_PKEY_PARAM_RSA_PRIMES, NULL),
+    OSSL_PARAM_BN(OSSL_PKEY_PARAM_RSA_E, NULL, 0),
+    OSSL_PARAM_END
+  };
+  (void)genctx;
+  (void)provctx;
+  return types;
+}
+
+static void *zz9k_rsa_gen(void *genctx, OSSL_CALLBACK *cb, void *cbarg)
+{
+  ZZ9K_RSA_GEN *gen = genctx;
+  OSSL_LIB_CTX *libctx;
+  EVP_PKEY_CTX *dctx;
+  EVP_PKEY *pk = NULL;
+  ZZ9K_RSA_KEY *key;
+  BIGNUM *n = NULL;
+  BIGNUM *e = NULL;
+  int nbytes;
+
+  (void)cb;
+  (void)cbarg;
+  if (gen == NULL) {
+    return NULL;
+  }
+  libctx = (OSSL_LIB_CTX *)(gen->provctx != NULL ? gen->provctx->libctx : NULL);
+  dctx = EVP_PKEY_CTX_new_from_name(libctx, "RSA", "provider=default");
+  if (dctx == NULL) {
+    return NULL;
+  }
+  if (EVP_PKEY_keygen_init(dctx) <= 0 ||
+      (gen->params != NULL && EVP_PKEY_CTX_set_params(dctx, gen->params) <= 0) ||
+      EVP_PKEY_generate(dctx, &pk) <= 0) {
+    EVP_PKEY_CTX_free(dctx);
+    EVP_PKEY_free(pk);
+    return NULL;
+  }
+  EVP_PKEY_CTX_free(dctx);
+
+  key = OPENSSL_zalloc(sizeof(*key));
+  if (key == NULL) {
+    EVP_PKEY_free(pk);
+    return NULL;
+  }
+  key->provctx = gen->provctx;
+  key->shadow = pk;
+  key->has_pub = 1;
+  /* Populate n/e for the accelerated PKCS#1 fast path when the size fits,
+   * mirroring zz9k_rsa_keymgmt_import. */
+  if (EVP_PKEY_get_bn_param(pk, OSSL_PKEY_PARAM_RSA_N, &n) &&
+      EVP_PKEY_get_bn_param(pk, OSSL_PKEY_PARAM_RSA_E, &e)) {
+    nbytes = BN_num_bytes(n);
+    if (nbytes > 0 && nbytes <= ZZ9K_RSA_MAX_BYTES && (nbytes % 4) == 0 &&
+        BN_num_bits(e) <= 32 && BN_bn2binpad(n, key->n, nbytes) == nbytes) {
+      key->nbytes = (uint32_t)nbytes;
+      key->e = (uint32_t)BN_get_word(e);
+      key->accel = 1;
+    }
+  }
+  BN_free(n);
+  BN_free(e);
+  return key;
+}
+
+static void zz9k_rsa_gen_cleanup(void *genctx)
+{
+  ZZ9K_RSA_GEN *gen = genctx;
+  if (gen != NULL) {
+    OSSL_PARAM_free(gen->params);
+  }
+  OPENSSL_free(genctx);
+}
+
 const OSSL_DISPATCH zz9k_rsa_keymgmt_functions[] = {
   { OSSL_FUNC_KEYMGMT_NEW, (void (*)(void))zz9k_rsa_keymgmt_new },
   { OSSL_FUNC_KEYMGMT_FREE, (void (*)(void))zz9k_rsa_keymgmt_free },
@@ -342,6 +473,13 @@ const OSSL_DISPATCH zz9k_rsa_keymgmt_functions[] = {
     (void (*)(void))zz9k_rsa_keymgmt_gettable_params },
   { OSSL_FUNC_KEYMGMT_MATCH, (void (*)(void))zz9k_rsa_keymgmt_match },
   { OSSL_FUNC_KEYMGMT_DUP, (void (*)(void))zz9k_rsa_keymgmt_dup },
+  { OSSL_FUNC_KEYMGMT_GEN_INIT, (void (*)(void))zz9k_rsa_gen_init },
+  { OSSL_FUNC_KEYMGMT_GEN_SET_PARAMS,
+    (void (*)(void))zz9k_rsa_gen_set_params },
+  { OSSL_FUNC_KEYMGMT_GEN_SETTABLE_PARAMS,
+    (void (*)(void))zz9k_rsa_gen_settable_params },
+  { OSSL_FUNC_KEYMGMT_GEN, (void (*)(void))zz9k_rsa_gen },
+  { OSSL_FUNC_KEYMGMT_GEN_CLEANUP, (void (*)(void))zz9k_rsa_gen_cleanup },
   { OSSL_FUNC_KEYMGMT_QUERY_OPERATION_NAME,
     (void (*)(void))zz9k_rsa_keymgmt_query_operation_name },
   { 0, NULL }
@@ -712,12 +850,205 @@ static int zz9k_rsa_sig_digest_verify_oneshot(void *vctx,
   return zz9k_rsa_sig_verify(vctx, sig, siglen, digest, digestlen);
 }
 
+/* ---- RSA sign (always delegated) ----
+ *
+ * The ZZ9000 never accelerates RSA *signing* (no firmware primitive), but
+ * owning the "RSA" keytype means a client-certificate RSA private key routes
+ * its CertificateVerify signature here. Sign delegates to the shadow EVP_PKEY
+ * (which carries the private key for imported private keys and for keys we
+ * generated), replaying the captured padding/digest/MGF1/salt-length exactly
+ * as the verify-delegation path does, and forcing "provider=default" to avoid
+ * bridging back into this provider. */
+static int zz9k_rsa_sig_sign_delegated(ZZ9K_RSA_SIG_CTX *ctx,
+                                       unsigned char *sig, size_t *siglen,
+                                       size_t sigsize,
+                                       const unsigned char *tbs, size_t tbslen)
+{
+  EVP_PKEY_CTX *pctx;
+  OSSL_PARAM params[5];
+  int n = 0;
+  int rc = 0;
+
+  (void)sigsize;
+  if (ctx->key == NULL || ctx->key->shadow == NULL) {
+    return 0;
+  }
+  pctx = EVP_PKEY_CTX_new_from_pkey(
+      (OSSL_LIB_CTX *)(ctx->provctx != NULL ? ctx->provctx->libctx : NULL),
+      ctx->key->shadow, "provider=default");
+  if (pctx == NULL) {
+    return 0;
+  }
+  if (EVP_PKEY_sign_init(pctx) <= 0) {
+    EVP_PKEY_CTX_free(pctx);
+    return 0;
+  }
+  ZZ9K_PARAM_INT(&params[n], OSSL_SIGNATURE_PARAM_PAD_MODE, &ctx->pad_mode);
+  n++;
+  if (ctx->mdname[0] != '\0') {
+    ZZ9K_PARAM_UTF8(&params[n], OSSL_SIGNATURE_PARAM_DIGEST, ctx->mdname);
+    n++;
+  }
+  if (ctx->pad_mode == ZZ9K_RSA_PSS_PADDING) {
+    if (ctx->mgf1mdname[0] != '\0') {
+      ZZ9K_PARAM_UTF8(&params[n], OSSL_SIGNATURE_PARAM_MGF1_DIGEST,
+                      ctx->mgf1mdname);
+      n++;
+    }
+    if (ctx->has_saltlen) {
+      ZZ9K_PARAM_INT(&params[n], OSSL_SIGNATURE_PARAM_PSS_SALTLEN,
+                     &ctx->saltlen);
+      n++;
+    }
+  }
+  ZZ9K_PARAM_END(&params[n]);
+  if (EVP_PKEY_CTX_set_params(pctx, params) <= 0) {
+    EVP_PKEY_CTX_free(pctx);
+    return 0;
+  }
+  rc = EVP_PKEY_sign(pctx, sig, siglen, tbs, tbslen) > 0 ? 1 : 0;
+  EVP_PKEY_CTX_free(pctx);
+  return rc;
+}
+
+static int zz9k_rsa_sig_maxsize(ZZ9K_RSA_SIG_CTX *ctx, size_t *siglen)
+{
+  if (ctx->key == NULL || ctx->key->shadow == NULL) {
+    return 0;
+  }
+  *siglen = (size_t)EVP_PKEY_get_size(ctx->key->shadow);
+  return 1;
+}
+
+static int zz9k_rsa_sig_sign_init(void *vctx, void *provkey,
+                                  const OSSL_PARAM params[])
+{
+  ZZ9K_RSA_SIG_CTX *ctx = vctx;
+
+  if (ctx == NULL || provkey == NULL) {
+    return 0;
+  }
+  ctx->key = provkey;
+  return zz9k_rsa_sig_set_ctx_params(ctx, params);
+}
+
+static int zz9k_rsa_sig_sign(void *vctx, unsigned char *sig, size_t *siglen,
+                             size_t sigsize, const unsigned char *tbs,
+                             size_t tbslen)
+{
+  ZZ9K_RSA_SIG_CTX *ctx = vctx;
+
+  if (ctx == NULL || ctx->key == NULL || siglen == NULL) {
+    return 0;
+  }
+  if (sig == NULL) {
+    return zz9k_rsa_sig_maxsize(ctx, siglen);
+  }
+  return zz9k_rsa_sig_sign_delegated(ctx, sig, siglen, sigsize, tbs, tbslen);
+}
+
+static int zz9k_rsa_sig_digest_sign_init(void *vctx, const char *mdname,
+                                         void *provkey,
+                                         const OSSL_PARAM params[])
+{
+  ZZ9K_RSA_SIG_CTX *ctx = vctx;
+  const EVP_MD *md;
+
+  if (ctx == NULL || provkey == NULL) {
+    return 0;
+  }
+  ctx->key = provkey;
+  if (ctx->mdctx == NULL) {
+    ctx->mdctx = EVP_MD_CTX_new();
+    if (ctx->mdctx == NULL) {
+      return 0;
+    }
+  }
+  md = (mdname != NULL && mdname[0] != '\0') ? EVP_get_digestbyname(mdname)
+                                             : EVP_sha256();
+  if (md == NULL || !EVP_DigestInit_ex(ctx->mdctx, md, NULL)) {
+    return 0;
+  }
+  {
+    const char *canon = EVP_MD_get0_name(md);
+    if (canon != NULL) {
+      OPENSSL_strlcpy(ctx->mdname, canon, sizeof(ctx->mdname));
+    }
+  }
+  return zz9k_rsa_sig_set_ctx_params(vctx, params);
+}
+
+static int zz9k_rsa_sig_digest_sign_update(void *vctx,
+                                           const unsigned char *data,
+                                           size_t datalen)
+{
+  ZZ9K_RSA_SIG_CTX *ctx = vctx;
+
+  if (ctx == NULL || ctx->mdctx == NULL) {
+    return 0;
+  }
+  return EVP_DigestUpdate(ctx->mdctx, data, datalen);
+}
+
+static int zz9k_rsa_sig_digest_sign_final(void *vctx, unsigned char *sig,
+                                          size_t *siglen, size_t sigsize)
+{
+  ZZ9K_RSA_SIG_CTX *ctx = vctx;
+  unsigned char digest[EVP_MAX_MD_SIZE];
+  unsigned int digestlen = 0;
+
+  if (ctx == NULL || ctx->mdctx == NULL || siglen == NULL) {
+    return 0;
+  }
+  if (sig == NULL) {
+    return zz9k_rsa_sig_maxsize(ctx, siglen);
+  }
+  if (!EVP_DigestFinal_ex(ctx->mdctx, digest, &digestlen)) {
+    return 0;
+  }
+  return zz9k_rsa_sig_sign_delegated(ctx, sig, siglen, sigsize, digest,
+                                     digestlen);
+}
+
+static int zz9k_rsa_sig_digest_sign_oneshot(void *vctx, unsigned char *sig,
+                                            size_t *siglen, size_t sigsize,
+                                            const unsigned char *tbs,
+                                            size_t tbslen)
+{
+  ZZ9K_RSA_SIG_CTX *ctx = vctx;
+  unsigned char digest[EVP_MAX_MD_SIZE];
+  unsigned int digestlen = 0;
+
+  if (ctx == NULL || ctx->mdctx == NULL || siglen == NULL) {
+    return 0;
+  }
+  if (sig == NULL) {
+    return zz9k_rsa_sig_maxsize(ctx, siglen);
+  }
+  if (!EVP_DigestUpdate(ctx->mdctx, tbs, tbslen) ||
+      !EVP_DigestFinal_ex(ctx->mdctx, digest, &digestlen)) {
+    return 0;
+  }
+  return zz9k_rsa_sig_sign_delegated(ctx, sig, siglen, sigsize, digest,
+                                     digestlen);
+}
+
 const OSSL_DISPATCH zz9k_rsa_signature_functions[] = {
   { OSSL_FUNC_SIGNATURE_NEWCTX, (void (*)(void))zz9k_rsa_sig_newctx },
   { OSSL_FUNC_SIGNATURE_FREECTX, (void (*)(void))zz9k_rsa_sig_freectx },
   { OSSL_FUNC_SIGNATURE_VERIFY_INIT,
     (void (*)(void))zz9k_rsa_sig_verify_init },
   { OSSL_FUNC_SIGNATURE_VERIFY, (void (*)(void))zz9k_rsa_sig_verify },
+  { OSSL_FUNC_SIGNATURE_SIGN_INIT, (void (*)(void))zz9k_rsa_sig_sign_init },
+  { OSSL_FUNC_SIGNATURE_SIGN, (void (*)(void))zz9k_rsa_sig_sign },
+  { OSSL_FUNC_SIGNATURE_DIGEST_SIGN_INIT,
+    (void (*)(void))zz9k_rsa_sig_digest_sign_init },
+  { OSSL_FUNC_SIGNATURE_DIGEST_SIGN_UPDATE,
+    (void (*)(void))zz9k_rsa_sig_digest_sign_update },
+  { OSSL_FUNC_SIGNATURE_DIGEST_SIGN_FINAL,
+    (void (*)(void))zz9k_rsa_sig_digest_sign_final },
+  { OSSL_FUNC_SIGNATURE_DIGEST_SIGN,
+    (void (*)(void))zz9k_rsa_sig_digest_sign_oneshot },
   { OSSL_FUNC_SIGNATURE_DIGEST_VERIFY_INIT,
     (void (*)(void))zz9k_rsa_sig_digest_verify_init },
   { OSSL_FUNC_SIGNATURE_DIGEST_VERIFY_UPDATE,

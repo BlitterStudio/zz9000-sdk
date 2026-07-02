@@ -33,8 +33,10 @@
 
 #include <openssl/core_names.h>
 #include <openssl/params.h>
+#include <openssl/param_build.h>
 #include <openssl/crypto.h>
 #include <openssl/rand.h>
+#include <openssl/bn.h>
 #include <openssl/evp.h>
 
 #include "zz9k-crypto-soft.h"
@@ -265,11 +267,32 @@ static int zz9k_ec_keymgmt_import(void *keydata, int selection,
     if ((selection & OSSL_KEYMGMT_SELECT_PRIVATE_KEY) != 0) {
       p = OSSL_PARAM_locate_const(params, OSSL_PKEY_PARAM_PRIV_KEY);
       if (p != NULL) {
-        void *out = key->priv;
-        size_t len = 0;
-        if (!OSSL_PARAM_get_octet_string(p, &out, ZZ9K_P256_SCALAR_LEN, &len) ||
-            len != ZZ9K_P256_SCALAR_LEN) {
-          return 0;
+        /* An EC private key is canonically an OSSL_PARAM BIGNUM (unsigned
+         * integer) — unlike X25519's octet string — so a loaded P-256 client
+         * key arrives that way; read it as a BN and left-pad into the fixed
+         * 32-byte scalar. Keep an octet-string branch for any caller that
+         * supplies one that way (e.g. our own re-imports). */
+        if (p->data_type == OSSL_PARAM_UNSIGNED_INTEGER) {
+          BIGNUM *bn = NULL;
+          int ok;
+          if (!OSSL_PARAM_get_BN(p, &bn)) {
+            return 0;
+          }
+          ok = BN_num_bytes(bn) <= ZZ9K_P256_SCALAR_LEN &&
+               BN_bn2binpad(bn, key->priv, ZZ9K_P256_SCALAR_LEN) ==
+                   ZZ9K_P256_SCALAR_LEN;
+          BN_clear_free(bn);
+          if (!ok) {
+            return 0;
+          }
+        } else {
+          void *out = key->priv;
+          size_t len = 0;
+          if (!OSSL_PARAM_get_octet_string(p, &out, ZZ9K_P256_SCALAR_LEN,
+                                           &len) ||
+              len != ZZ9K_P256_SCALAR_LEN) {
+            return 0;
+          }
         }
         key->has_priv = 1;
         /* Derive the public point if it was not supplied alongside, so the
@@ -558,6 +581,8 @@ static const OSSL_PARAM *zz9k_ec_keymgmt_export_types(int selection)
 typedef struct {
   ZZ9K_PROV_CTX *provctx;
   int selection;
+  char group[64];      /* recorded curve name; "" => none set (=> P-256) */
+  OSSL_PARAM *params;  /* dup of the gen params, replayed for delegated gen */
 } ZZ9K_EC_GEN;
 
 static void *zz9k_ec_gen_init(void *provctx, int selection,
@@ -587,24 +612,33 @@ static void *zz9k_ec_gen_init(void *provctx, int selection,
 }
 
 /* libssl calls EVP_PKEY_CTX_set_group_name(ctx, "P-256") (or "prime256v1")
- * on the keygen context, mirroring the X25519 group-name check. Only P-256
- * is ever requested since it is the only group this provider declares. */
+ * on the keygen context, mirroring the X25519 group-name check. P-256 keygen
+ * is accelerated; any other named curve is recorded and delegated to the
+ * default provider at gen() time (owning the "EC" keytype means app keygen of
+ * other curves routes here and must not regress versus v2.2.0). The full param
+ * set is kept verbatim so the delegated keygen ctx gets whatever the caller
+ * set, not just the group name. */
 static int zz9k_ec_gen_set_params(void *genctx, const OSSL_PARAM params[])
 {
+  ZZ9K_EC_GEN *gen = genctx;
   const OSSL_PARAM *p;
 
-  (void)genctx;
+  if (gen == NULL) {
+    return 0;
+  }
   if (params == NULL) {
     return 1;
   }
   p = OSSL_PARAM_locate_const(params, OSSL_PKEY_PARAM_GROUP_NAME);
   if (p != NULL) {
+    char *gp = gen->group;
     if (p->data_type != OSSL_PARAM_UTF8_STRING || p->data == NULL ||
-        (OPENSSL_strcasecmp(p->data, "P-256") != 0 &&
-         OPENSSL_strcasecmp(p->data, "prime256v1") != 0)) {
+        !OSSL_PARAM_get_utf8_string(p, &gp, sizeof(gen->group))) {
       return 0;
     }
   }
+  OSSL_PARAM_free(gen->params);
+  gen->params = OSSL_PARAM_dup(params);
   return 1;
 }
 
@@ -626,6 +660,59 @@ static const OSSL_PARAM *zz9k_ec_gen_settable_params(void *genctx,
  * preserving the offload-or-fail contract. */
 #define ZZ9K_P256_GEN_MAX_ATTEMPTS 4
 
+/* Non-P256 EC keygen: no ZZ9000 acceleration exists for it, so generate
+ * through the default provider (replaying the caller's gen params, which
+ * carry the curve) and wrap the result as a delegated key whose shadow is the
+ * fresh EVP_PKEY. Every later op on a delegated key (sign, export, get_params,
+ * match, dup) already forwards to the shadow. */
+static void *zz9k_ec_gen_delegated(ZZ9K_EC_GEN *gen)
+{
+  OSSL_LIB_CTX *libctx =
+      (OSSL_LIB_CTX *)(gen->provctx != NULL ? gen->provctx->libctx : NULL);
+  EVP_PKEY_CTX *dctx;
+  EVP_PKEY *pk = NULL;
+  ZZ9K_EC_KEY *key;
+
+  if (gen->params == NULL) {
+    return NULL;   /* a non-P256 curve was named, so params must carry it */
+  }
+  dctx = EVP_PKEY_CTX_new_from_name(libctx, "EC", "provider=default");
+  if (dctx == NULL) {
+    return NULL;
+  }
+  {
+    /* Replay any caller params (e.g. point format), then set the curve
+     * authoritatively from the recorded name (gen->group) LAST, so it is the
+     * final word — rather than trusting gen->params to still carry GROUP_NAME.
+     * This keeps a caller that sets params across multiple calls, dropping
+     * GROUP_NAME from a later one, from silently losing the curve. */
+    OSSL_PARAM gp[2];
+    ZZ9K_PARAM_UTF8(&gp[0], OSSL_PKEY_PARAM_GROUP_NAME, gen->group);
+    ZZ9K_PARAM_END(&gp[1]);
+    if (EVP_PKEY_keygen_init(dctx) <= 0 ||
+        EVP_PKEY_CTX_set_params(dctx, gen->params) <= 0 ||
+        EVP_PKEY_CTX_set_params(dctx, gp) <= 0 ||
+        EVP_PKEY_generate(dctx, &pk) <= 0) {
+      EVP_PKEY_CTX_free(dctx);
+      EVP_PKEY_free(pk);
+      return NULL;
+    }
+  }
+  EVP_PKEY_CTX_free(dctx);
+
+  key = OPENSSL_zalloc(sizeof(*key));
+  if (key == NULL) {
+    EVP_PKEY_free(pk);
+    return NULL;
+  }
+  key->provctx = gen->provctx;
+  key->is_p256 = 0;
+  key->shadow = pk;
+  key->has_pub = (gen->selection & OSSL_KEYMGMT_SELECT_PUBLIC_KEY) != 0;
+  key->has_priv = (gen->selection & OSSL_KEYMGMT_SELECT_PRIVATE_KEY) != 0;
+  return key;
+}
+
 static void *zz9k_ec_gen(void *genctx, OSSL_CALLBACK *cb, void *cbarg)
 {
   ZZ9K_EC_GEN *gen = genctx;
@@ -636,6 +723,13 @@ static void *zz9k_ec_gen(void *genctx, OSSL_CALLBACK *cb, void *cbarg)
   (void)cbarg;
   if (gen == NULL) {
     return NULL;
+  }
+  /* An empty group means none was set — default to the accelerated P-256 path
+   * (preserves the pre-delegation behaviour for the TLS key-share keygen). */
+  if (gen->group[0] != '\0' &&
+      OPENSSL_strcasecmp(gen->group, "P-256") != 0 &&
+      OPENSSL_strcasecmp(gen->group, "prime256v1") != 0) {
+    return zz9k_ec_gen_delegated(gen);
   }
   key = OPENSSL_zalloc(sizeof(*key));
   if (key == NULL) {
@@ -665,6 +759,10 @@ static void *zz9k_ec_gen(void *genctx, OSSL_CALLBACK *cb, void *cbarg)
 
 static void zz9k_ec_gen_cleanup(void *genctx)
 {
+  ZZ9K_EC_GEN *gen = genctx;
+  if (gen != NULL) {
+    OSSL_PARAM_free(gen->params);
+  }
   OPENSSL_free(genctx);
 }
 
@@ -1058,11 +1156,235 @@ static int zz9k_ecdsa_digest_verify_oneshot(void *vctx, const unsigned char *sig
   return zz9k_ecdsa_verify(vctx, sig, siglen, digest, digestlen);
 }
 
+/* ---- ECDSA sign (always delegated) ----
+ *
+ * The ZZ9000 never accelerates ECDSA *signing* (no firmware primitive), but
+ * owning the "EC" keytype means a client-certificate private key routes its
+ * CertificateVerify signature here. So sign delegates to the default provider,
+ * fed the private key: a delegated (non-P256) key already carries a shadow
+ * EVP_PKEY with its private material; an accelerated P-256 key carries only
+ * the raw 32-byte scalar (+ point), so a one-shot default keypair is built
+ * from it on demand. As with the verify path, "provider=default" is forced on
+ * the delegated ctx to keep the fetch from bridging back into this provider. */
+static EVP_PKEY *zz9k_ec_p256_signing_pkey(ZZ9K_ECDSA_CTX *ctx)
+{
+  OSSL_LIB_CTX *libctx =
+      (OSSL_LIB_CTX *)(ctx->provctx != NULL ? ctx->provctx->libctx : NULL);
+  EVP_PKEY_CTX *kctx = NULL;
+  EVP_PKEY *pkey = NULL;
+  OSSL_PARAM_BLD *bld = NULL;
+  OSSL_PARAM *params = NULL;
+  BIGNUM *priv = NULL;
+
+  if (!ctx->key->has_priv) {
+    return NULL;
+  }
+  priv = BN_bin2bn(ctx->key->priv, ZZ9K_P256_SCALAR_LEN, NULL);
+  bld = OSSL_PARAM_BLD_new();
+  if (priv == NULL || bld == NULL) {
+    goto done;
+  }
+  if (!OSSL_PARAM_BLD_push_utf8_string(bld, OSSL_PKEY_PARAM_GROUP_NAME,
+                                       "prime256v1", 0) ||
+      !OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_PRIV_KEY, priv)) {
+    goto done;
+  }
+  if (ctx->key->has_pub &&
+      !OSSL_PARAM_BLD_push_octet_string(bld, OSSL_PKEY_PARAM_PUB_KEY,
+                                        ctx->key->point,
+                                        ZZ9K_P256_POINT_LEN)) {
+    goto done;
+  }
+  params = OSSL_PARAM_BLD_to_param(bld);
+  if (params == NULL) {
+    goto done;
+  }
+  kctx = EVP_PKEY_CTX_new_from_name(libctx, "EC", "provider=default");
+  if (kctx == NULL || EVP_PKEY_fromdata_init(kctx) <= 0 ||
+      EVP_PKEY_fromdata(kctx, &pkey, EVP_PKEY_KEYPAIR, params) <= 0) {
+    EVP_PKEY_free(pkey);
+    pkey = NULL;
+  }
+done:
+  OSSL_PARAM_free(params);
+  OSSL_PARAM_BLD_free(bld);
+  BN_clear_free(priv);
+  EVP_PKEY_CTX_free(kctx);
+  return pkey;
+}
+
+static int zz9k_ecdsa_sign_delegated(ZZ9K_ECDSA_CTX *ctx, unsigned char *sig,
+                                     size_t *siglen, size_t sigsize,
+                                     const unsigned char *tbs, size_t tbslen)
+{
+  OSSL_LIB_CTX *libctx =
+      (OSSL_LIB_CTX *)(ctx->provctx != NULL ? ctx->provctx->libctx : NULL);
+  EVP_PKEY *owned = NULL;
+  EVP_PKEY *pkey;
+  EVP_PKEY_CTX *pctx = NULL;
+  int rc = 0;
+
+  (void)sigsize;
+  if (ctx->key == NULL) {
+    return 0;
+  }
+  if (ctx->key->is_p256) {
+    owned = zz9k_ec_p256_signing_pkey(ctx);
+    pkey = owned;
+  } else {
+    pkey = ctx->key->shadow;   /* built at import; holds the private key */
+  }
+  if (pkey == NULL) {
+    return 0;
+  }
+  pctx = EVP_PKEY_CTX_new_from_pkey(libctx, pkey, "provider=default");
+  if (pctx != NULL && EVP_PKEY_sign_init(pctx) > 0) {
+    rc = EVP_PKEY_sign(pctx, sig, siglen, tbs, tbslen) > 0 ? 1 : 0;
+  }
+  EVP_PKEY_CTX_free(pctx);
+  EVP_PKEY_free(owned);
+  return rc;
+}
+
+/* Upper bound on the DER signature size, reported for the sig==NULL size
+ * query so EVP can size its output buffer without consuming digest state. */
+static int zz9k_ecdsa_sign_maxsize(ZZ9K_ECDSA_CTX *ctx, size_t *siglen)
+{
+  if (ctx->key == NULL) {
+    return 0;
+  }
+  if (ctx->key->is_p256) {
+    *siglen = 72;   /* max DER ECDSA-Sig-Value for P-256 */
+    return 1;
+  }
+  if (ctx->key->shadow != NULL) {
+    *siglen = (size_t)EVP_PKEY_get_size(ctx->key->shadow);
+    return 1;
+  }
+  return 0;
+}
+
+static int zz9k_ecdsa_sign_init(void *vctx, void *provkey,
+                                const OSSL_PARAM params[])
+{
+  ZZ9K_ECDSA_CTX *ctx = vctx;
+
+  if (ctx == NULL || provkey == NULL) {
+    return 0;
+  }
+  ctx->key = provkey;
+  return zz9k_ecdsa_set_ctx_params(vctx, params);
+}
+
+static int zz9k_ecdsa_sign(void *vctx, unsigned char *sig, size_t *siglen,
+                           size_t sigsize, const unsigned char *tbs,
+                           size_t tbslen)
+{
+  ZZ9K_ECDSA_CTX *ctx = vctx;
+
+  if (ctx == NULL || ctx->key == NULL || siglen == NULL) {
+    return 0;
+  }
+  if (sig == NULL) {
+    return zz9k_ecdsa_sign_maxsize(ctx, siglen);
+  }
+  return zz9k_ecdsa_sign_delegated(ctx, sig, siglen, sigsize, tbs, tbslen);
+}
+
+static int zz9k_ecdsa_digest_sign_init(void *vctx, const char *mdname,
+                                       void *provkey,
+                                       const OSSL_PARAM params[])
+{
+  ZZ9K_ECDSA_CTX *ctx = vctx;
+  const EVP_MD *md;
+
+  if (ctx == NULL || provkey == NULL) {
+    return 0;
+  }
+  ctx->key = provkey;
+  if (ctx->mdctx == NULL) {
+    ctx->mdctx = EVP_MD_CTX_new();
+    if (ctx->mdctx == NULL) {
+      return 0;
+    }
+  }
+  md = (mdname != NULL && mdname[0] != '\0') ? EVP_get_digestbyname(mdname)
+                                             : EVP_sha256();
+  if (md == NULL || !EVP_DigestInit_ex(ctx->mdctx, md, NULL)) {
+    return 0;
+  }
+  return zz9k_ecdsa_set_ctx_params(vctx, params);
+}
+
+static int zz9k_ecdsa_digest_sign_update(void *vctx, const unsigned char *data,
+                                         size_t datalen)
+{
+  ZZ9K_ECDSA_CTX *ctx = vctx;
+
+  if (ctx == NULL || ctx->mdctx == NULL) {
+    return 0;
+  }
+  return EVP_DigestUpdate(ctx->mdctx, data, datalen);
+}
+
+static int zz9k_ecdsa_digest_sign_final(void *vctx, unsigned char *sig,
+                                        size_t *siglen, size_t sigsize)
+{
+  ZZ9K_ECDSA_CTX *ctx = vctx;
+  unsigned char digest[EVP_MAX_MD_SIZE];
+  unsigned int digestlen = 0;
+
+  if (ctx == NULL || ctx->mdctx == NULL || siglen == NULL) {
+    return 0;
+  }
+  if (sig == NULL) {
+    return zz9k_ecdsa_sign_maxsize(ctx, siglen);
+  }
+  if (!EVP_DigestFinal_ex(ctx->mdctx, digest, &digestlen)) {
+    return 0;
+  }
+  return zz9k_ecdsa_sign_delegated(ctx, sig, siglen, sigsize, digest,
+                                   digestlen);
+}
+
+static int zz9k_ecdsa_digest_sign_oneshot(void *vctx, unsigned char *sig,
+                                          size_t *siglen, size_t sigsize,
+                                          const unsigned char *tbs,
+                                          size_t tbslen)
+{
+  ZZ9K_ECDSA_CTX *ctx = vctx;
+  unsigned char digest[EVP_MAX_MD_SIZE];
+  unsigned int digestlen = 0;
+
+  if (ctx == NULL || ctx->mdctx == NULL || siglen == NULL) {
+    return 0;
+  }
+  if (sig == NULL) {
+    return zz9k_ecdsa_sign_maxsize(ctx, siglen);
+  }
+  if (!EVP_DigestUpdate(ctx->mdctx, tbs, tbslen) ||
+      !EVP_DigestFinal_ex(ctx->mdctx, digest, &digestlen)) {
+    return 0;
+  }
+  return zz9k_ecdsa_sign_delegated(ctx, sig, siglen, sigsize, digest,
+                                   digestlen);
+}
+
 const OSSL_DISPATCH zz9k_ecdsa_signature_functions[] = {
   { OSSL_FUNC_SIGNATURE_NEWCTX, (void (*)(void))zz9k_ecdsa_newctx },
   { OSSL_FUNC_SIGNATURE_FREECTX, (void (*)(void))zz9k_ecdsa_freectx },
   { OSSL_FUNC_SIGNATURE_VERIFY_INIT, (void (*)(void))zz9k_ecdsa_verify_init },
   { OSSL_FUNC_SIGNATURE_VERIFY, (void (*)(void))zz9k_ecdsa_verify },
+  { OSSL_FUNC_SIGNATURE_SIGN_INIT, (void (*)(void))zz9k_ecdsa_sign_init },
+  { OSSL_FUNC_SIGNATURE_SIGN, (void (*)(void))zz9k_ecdsa_sign },
+  { OSSL_FUNC_SIGNATURE_DIGEST_SIGN_INIT,
+    (void (*)(void))zz9k_ecdsa_digest_sign_init },
+  { OSSL_FUNC_SIGNATURE_DIGEST_SIGN_UPDATE,
+    (void (*)(void))zz9k_ecdsa_digest_sign_update },
+  { OSSL_FUNC_SIGNATURE_DIGEST_SIGN_FINAL,
+    (void (*)(void))zz9k_ecdsa_digest_sign_final },
+  { OSSL_FUNC_SIGNATURE_DIGEST_SIGN,
+    (void (*)(void))zz9k_ecdsa_digest_sign_oneshot },
   { OSSL_FUNC_SIGNATURE_DIGEST_VERIFY_INIT,
     (void (*)(void))zz9k_ecdsa_digest_verify_init },
   { OSSL_FUNC_SIGNATURE_DIGEST_VERIFY_UPDATE,
