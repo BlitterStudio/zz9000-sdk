@@ -237,8 +237,7 @@ static int zz9k_prov_ecdsa_verify(const unsigned char r[32],
 #ifdef ZZ9K_PROVIDER_OFFLOAD
   /* Verify on the ZZ9000 (zz9k_crypto_verify) when the firmware advertises
    * ECDSA-P256. The signature is passed as r||s (64 bytes) and the key as the
-   * 65-byte uncompressed point. A negative return falls through to the
-   * software reference. */
+   * 65-byte uncompressed point. */
   if (ZZ9K_PROV_CAN_OFFLOAD(provctx, ZZ9K_SERVICE_FLAG_CRYPTO_ECDSA_P256)) {
     unsigned char sig[64];
     int valid = 0;
@@ -250,10 +249,22 @@ static int zz9k_prov_ecdsa_verify(const unsigned char r[32],
       return valid;
     }
   }
+  /* Capability absent, or the offload timed out because the ZZ9000 is busy
+   * driving the display: return -1 so the caller falls back to the default
+   * provider (fast) instead of the ~19x-slower in-tree software reference
+   * (used only on the host build below). */
+  return -1;
+#elif defined(ZZ9K_TEST_DEFAULT_FALLBACK)
+  (void)r;
+  (void)s;
+  (void)hash;
+  (void)point;
+  (void)provctx;
+  return -1;   /* force the caller to exercise the via_default verify fallback */
 #else
   (void)provctx;
-#endif
   return zz9k_soft_ecdsa_verify_p256(r, s, hash, point);
+#endif
 }
 
 /* Copy a DER INTEGER body (big-endian, possibly with a leading sign 0x00 or
@@ -1184,7 +1195,17 @@ static int zz9k_ecdsa_verify(void *vctx, const unsigned char *sig,
   if (!zz9k_decode_ecdsa_sig(sig, siglen, r, s)) {
     return 0;
   }
-  return zz9k_prov_ecdsa_verify(r, s, tbs, ctx->key->point, ctx->provctx);
+  {
+    int v = zz9k_prov_ecdsa_verify(r, s, tbs, ctx->key->point, ctx->provctx);
+    if (v >= 0) {
+      return v;
+    }
+  }
+  /* Board could not verify (capability absent, or offload timed out under
+   * display contention): fall back to the default provider rather than the
+   * ~19x-slower reference — the same offload-or-fallback posture the P-256 key
+   * exchange uses. */
+  return zz9k_ecdsa_verify_p256_via_default(ctx, sig, siglen, tbs, tbslen);
 }
 
 static int zz9k_ecdsa_set_ctx_params(void *vctx, const OSSL_PARAM params[])
