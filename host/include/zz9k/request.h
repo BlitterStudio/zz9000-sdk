@@ -727,11 +727,21 @@ static inline int zz9k_request_crypto_kx(ZZ9KRequest *request,
                                           const ZZ9KCryptoKxDesc *desc)
 {
   struct ZZ9KCryptoKxPayload *payload;
+  int is_keygen;
 
-  if (!request || !desc ||
-      desc->scalar_handle == ZZ9K_INVALID_HANDLE ||
-      desc->point_handle  == ZZ9K_INVALID_HANDLE ||
-      desc->dst_handle    == ZZ9K_INVALID_HANDLE) {
+  if (!request || !desc) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+  /* P-256 keygen (scalar*G) has no peer point: its descriptor carries an
+   * invalid point_handle by design (zz9k_crypto_build_p256_keygen_desc), and
+   * the firmware's handle_crypto_kx KEYGEN branch likewise validates only the
+   * scalar and destination. Every other KX op (X25519, P-256 derive) still
+   * needs a peer point, so the point_handle stays required for them. */
+  is_keygen = (desc->algorithm == ZZ9K_CRYPTO_KX_P256) &&
+              ((desc->flags & ZZ9K_CRYPTO_KX_FLAG_KEYGEN) != 0U);
+  if (desc->scalar_handle == ZZ9K_INVALID_HANDLE ||
+      desc->dst_handle    == ZZ9K_INVALID_HANDLE ||
+      (!is_keygen && desc->point_handle == ZZ9K_INVALID_HANDLE)) {
     return ZZ9K_STATUS_BAD_REQUEST;
   }
 
