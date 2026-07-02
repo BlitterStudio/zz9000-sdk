@@ -556,19 +556,24 @@ static uint32_t zz9k_cryptobench_p256_keygen_offload_ms_x100(
     memset(&result, 0, sizeof(result));
     status = zz9k_crypto_kx(ctx, &desc, &result);
     if (status != ZZ9K_STATUS_OK) {
-      printf("p256 keygen offload: %s (%d)\n", zz9k_status_name(status),
-             status);
+      printf("p256 keygen offload: %s (%d) on iteration %lu of %lu\n",
+             zz9k_status_name(status), status, (unsigned long)(i + 1U),
+             (unsigned long)count);
+      goto out;
+    }
+    /* Verify every iteration, not just the last: an intermittent wrong point
+     * (e.g. a coherency glitch on the 65-byte result buffer) is exactly the
+     * fault we are hunting, and an end-of-loop check would miss it whenever a
+     * later iteration happens to come back correct. */
+    if (memcmp((const void *)out_buf.data, expected,
+               ZZ9K_CRYPTO_P256_POINT_BYTES) != 0) {
+      printf("p256 keygen offload: public-point MISMATCH on iteration %lu of "
+             "%lu (firmware computed a wrong point)\n",
+             (unsigned long)(i + 1U), (unsigned long)count);
       goto out;
     }
   }
   elapsed = zz9k_cryptobench_timer_now(timer) - start;
-
-  if (memcmp((const void *)out_buf.data, expected,
-             ZZ9K_CRYPTO_P256_POINT_BYTES) != 0) {
-    printf("p256 keygen offload: public-point verification FAILED "
-           "(firmware computed a wrong point)\n");
-    goto out;
-  }
 
   ms_x100 = zz9k_cryptobench_ms_x100_per_op(elapsed, count,
                                             timer->ticks_per_second);
