@@ -472,6 +472,117 @@ out:
   return ms_x100;
 }
 
+/* Times software P-256 keygen (public = scalar*G) over `count` ops and checks
+ * the public point is well-formed. Returns ms*100 per op, or 0 on failure.
+ * Keygen is the offload op a TLS client needs for its ephemeral P-256 key
+ * share; it is the one asymmetric primitive the other benches here do not
+ * exercise (ECDH derives, it does not generate). */
+static uint32_t zz9k_cryptobench_p256_keygen_soft_ms_x100(
+    const ZZ9KCryptoBenchTimer *timer, uint32_t count)
+{
+  uint8_t pub[ZZ9K_CRYPTO_P256_POINT_BYTES];
+  ZZ9KCryptoBenchTick start;
+  ZZ9KCryptoBenchTick elapsed;
+  uint32_t i;
+  int ok = 1;
+
+  start = zz9k_cryptobench_timer_now(timer);
+  for (i = 0; i < count; i++) {
+    if (!zz9k_soft_p256_keygen(pub, zz9k_cryptobench_p256_scalar)) {
+      ok = 0;
+      break;
+    }
+  }
+  elapsed = zz9k_cryptobench_timer_now(timer) - start;
+  if (!ok || pub[0] != 0x04) {
+    printf("p256 keygen software: keygen FAILED\n");
+    return 0U;
+  }
+  return zz9k_cryptobench_ms_x100_per_op(elapsed, count,
+                                         timer->ticks_per_second);
+}
+
+/* Times ZZ9000 offload P-256 keygen and verifies the firmware-computed public
+ * point against the software reference for the same scalar. Returns ms*100 per
+ * op, or 0 on failure or point mismatch. */
+static uint32_t zz9k_cryptobench_p256_keygen_offload_ms_x100(
+    ZZ9KContext *ctx, const ZZ9KCryptoBenchTimer *timer, uint32_t count)
+{
+  ZZ9KSharedBuffer scalar_buf;
+  ZZ9KSharedBuffer out_buf;
+  ZZ9KCryptoKxDesc desc;
+  ZZ9KCryptoResult result;
+  uint8_t expected[ZZ9K_CRYPTO_P256_POINT_BYTES];
+  ZZ9KCryptoBenchTick start;
+  ZZ9KCryptoBenchTick elapsed;
+  uint32_t ms_x100 = 0U;
+  uint32_t i;
+  int status;
+
+  memset(&scalar_buf, 0, sizeof(scalar_buf));
+  memset(&out_buf, 0, sizeof(out_buf));
+
+  if (!zz9k_soft_p256_keygen(expected, zz9k_cryptobench_p256_scalar)) {
+    printf("p256 keygen offload: software reference failed\n");
+    return 0U;
+  }
+
+  status = zz9k_alloc_shared(ctx, ZZ9K_CRYPTO_P256_PRIVATE_BYTES, 16U, 0,
+                             &scalar_buf);
+  if (status != ZZ9K_STATUS_OK) {
+    printf("p256 keygen offload scalar alloc: %s (%d)\n",
+           zz9k_status_name(status), status);
+    goto out;
+  }
+  status = zz9k_alloc_shared(ctx, ZZ9K_CRYPTO_P256_POINT_BYTES, 16U, 0,
+                             &out_buf);
+  if (status != ZZ9K_STATUS_OK) {
+    printf("p256 keygen offload output alloc: %s (%d)\n",
+           zz9k_status_name(status), status);
+    goto out;
+  }
+
+  memcpy((void *)scalar_buf.data, zz9k_cryptobench_p256_scalar,
+         ZZ9K_CRYPTO_P256_PRIVATE_BYTES);
+
+  if (!zz9k_crypto_build_p256_keygen_desc(&desc, scalar_buf.handle, 0U,
+                                          out_buf.handle, 0U)) {
+    printf("p256 keygen offload descriptor build failed\n");
+    goto out;
+  }
+
+  start = zz9k_cryptobench_timer_now(timer);
+  for (i = 0; i < count; i++) {
+    memset(&result, 0, sizeof(result));
+    status = zz9k_crypto_kx(ctx, &desc, &result);
+    if (status != ZZ9K_STATUS_OK) {
+      printf("p256 keygen offload: %s (%d)\n", zz9k_status_name(status),
+             status);
+      goto out;
+    }
+  }
+  elapsed = zz9k_cryptobench_timer_now(timer) - start;
+
+  if (memcmp((const void *)out_buf.data, expected,
+             ZZ9K_CRYPTO_P256_POINT_BYTES) != 0) {
+    printf("p256 keygen offload: public-point verification FAILED "
+           "(firmware computed a wrong point)\n");
+    goto out;
+  }
+
+  ms_x100 = zz9k_cryptobench_ms_x100_per_op(elapsed, count,
+                                            timer->ticks_per_second);
+
+out:
+  if (out_buf.handle != 0 && out_buf.handle != ZZ9K_INVALID_HANDLE) {
+    zz9k_free_shared(ctx, out_buf.handle);
+  }
+  if (scalar_buf.handle != 0 && scalar_buf.handle != ZZ9K_INVALID_HANDLE) {
+    zz9k_free_shared(ctx, scalar_buf.handle);
+  }
+  return ms_x100;
+}
+
 /* ---- Asymmetric handshake timing: P-256 ECDH, ECDSA-P256, RSA-2048 ---- */
 
 /* Times software P-256 ECDH over `count` ops and verifies the shared X
@@ -1220,6 +1331,24 @@ int main(int argc, char **argv)
         }
       } else {
         note = "P-256 not advertised by crypto service";
+      }
+    }
+    zz9k_cryptobench_report_asym(soft, off, note);
+
+    /* P-256 keygen (ephemeral key share: public = scalar*G) */
+    printf("\nP-256 keygen (%lu iterations):\n", (unsigned long)iterations);
+    soft = zz9k_cryptobench_p256_keygen_soft_ms_x100(&timer, iterations);
+    off = 0U;
+    note = 0;
+    if (crypto_ok) {
+      if ((svc_flags & ZZ9K_SERVICE_FLAG_CRYPTO_P256_KEYGEN) != 0U) {
+        off = zz9k_cryptobench_p256_keygen_offload_ms_x100(ctx, &timer,
+                                                           iterations);
+        if (off == 0U) {
+          note = "measurement failed";
+        }
+      } else {
+        note = "P-256 keygen not advertised by crypto service";
       }
     }
     zz9k_cryptobench_report_asym(soft, off, note);
