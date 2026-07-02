@@ -47,25 +47,159 @@
 #define ZZ9K_P256_POINT_LEN 65
 #define ZZ9K_P256_SCALAR_LEN 32
 
+/* ---- Default-provider software fallback for the P-256 key exchange ----
+ *
+ * The board runs P-256 keygen and derive in ~10 ms, but only when it is free.
+ * During live browsing the ZZ9000 is also driving the display, and a mailbox
+ * reply can land after zz9k_call's poll timeout, so the offload reports
+ * failure. Failing the TLS key share then would stall the handshake far worse
+ * than stock amissl. Instead we recompute the operation through the *default*
+ * provider — AmiSSL's optimised software, roughly 10x faster than the in-tree
+ * zz9k_soft reference (which is why that reference is NOT used here) — so the
+ * P-256 path is never slower than stock. This also covers older firmware that
+ * does not advertise the keygen capability. "provider=default" is forced so
+ * the fetch cannot bridge back into this provider and recurse. Compiled for
+ * the Amiga offload build and for the host ZZ9K_TEST_DEFAULT_FALLBACK build
+ * that parity-tests this path against the default provider. */
+#if defined(ZZ9K_PROVIDER_OFFLOAD) || defined(ZZ9K_TEST_DEFAULT_FALLBACK)
+/* Generate a fresh P-256 keypair via the default provider and copy the raw
+ * 32-byte scalar and 65-byte uncompressed point out. Both are read from a
+ * fully generated keypair, so no lazy public-point computation is relied on. */
+static int zz9k_p256_default_genkey(unsigned char priv[ZZ9K_P256_SCALAR_LEN],
+                                    unsigned char point[ZZ9K_P256_POINT_LEN],
+                                    ZZ9K_PROV_CTX *provctx)
+{
+  OSSL_LIB_CTX *libctx =
+      (OSSL_LIB_CTX *)(provctx != NULL ? provctx->libctx : NULL);
+  EVP_PKEY_CTX *gctx;
+  EVP_PKEY *pkey = NULL;
+  BIGNUM *d = NULL;
+  OSSL_PARAM gp[2];
+  size_t publen = 0;
+  int rc = 0;
+
+  gctx = EVP_PKEY_CTX_new_from_name(libctx, "EC", "provider=default");
+  if (gctx == NULL) {
+    return 0;
+  }
+  ZZ9K_PARAM_UTF8(&gp[0], OSSL_PKEY_PARAM_GROUP_NAME, "prime256v1");
+  ZZ9K_PARAM_END(&gp[1]);
+  if (EVP_PKEY_keygen_init(gctx) <= 0 ||
+      EVP_PKEY_CTX_set_params(gctx, gp) <= 0 ||
+      EVP_PKEY_generate(gctx, &pkey) <= 0) {
+    goto done;
+  }
+  if (EVP_PKEY_get_octet_string_param(pkey, OSSL_PKEY_PARAM_PUB_KEY, point,
+                                      ZZ9K_P256_POINT_LEN, &publen) <= 0 ||
+      publen != ZZ9K_P256_POINT_LEN || point[0] != 0x04) {
+    goto done;
+  }
+  if (EVP_PKEY_get_bn_param(pkey, OSSL_PKEY_PARAM_PRIV_KEY, &d) <= 0 ||
+      BN_bn2binpad(d, priv, ZZ9K_P256_SCALAR_LEN) != ZZ9K_P256_SCALAR_LEN) {
+    goto done;
+  }
+  rc = 1;
+done:
+  BN_clear_free(d);
+  EVP_PKEY_free(pkey);
+  EVP_PKEY_CTX_free(gctx);
+  return rc;
+}
+
+/* out = X-coordinate of scalar*peer via the default provider. */
+static int zz9k_p256_default_derive(
+    unsigned char out[ZZ9K_P256_SCALAR_LEN],
+    const unsigned char scalar[ZZ9K_P256_SCALAR_LEN],
+    const unsigned char peer[ZZ9K_P256_POINT_LEN], ZZ9K_PROV_CTX *provctx)
+{
+  OSSL_LIB_CTX *libctx =
+      (OSSL_LIB_CTX *)(provctx != NULL ? provctx->libctx : NULL);
+  EVP_PKEY_CTX *kctx = NULL;
+  EVP_PKEY_CTX *dctx = NULL;
+  EVP_PKEY *mine = NULL;
+  EVP_PKEY *theirs = NULL;
+  OSSL_PARAM_BLD *bld = NULL;
+  OSSL_PARAM *params = NULL;
+  OSSL_PARAM peer_params[3];
+  BIGNUM *priv = NULL;
+  size_t outlen = ZZ9K_P256_SCALAR_LEN;
+  int n = 0;
+  int rc = 0;
+
+  priv = BN_bin2bn(scalar, ZZ9K_P256_SCALAR_LEN, NULL);
+  bld = OSSL_PARAM_BLD_new();
+  if (priv == NULL || bld == NULL) {
+    goto done;
+  }
+  if (!OSSL_PARAM_BLD_push_utf8_string(bld, OSSL_PKEY_PARAM_GROUP_NAME,
+                                       "prime256v1", 0) ||
+      !OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_PRIV_KEY, priv)) {
+    goto done;
+  }
+  params = OSSL_PARAM_BLD_to_param(bld);
+  if (params == NULL) {
+    goto done;
+  }
+  kctx = EVP_PKEY_CTX_new_from_name(libctx, "EC", "provider=default");
+  if (kctx == NULL || EVP_PKEY_fromdata_init(kctx) <= 0 ||
+      EVP_PKEY_fromdata(kctx, &mine, EVP_PKEY_KEYPAIR, params) <= 0) {
+    goto done;
+  }
+  EVP_PKEY_CTX_free(kctx);
+  kctx = NULL;
+
+  ZZ9K_PARAM_UTF8(&peer_params[n], OSSL_PKEY_PARAM_GROUP_NAME, "prime256v1");
+  n++;
+  ZZ9K_PARAM_OCTET(&peer_params[n], OSSL_PKEY_PARAM_PUB_KEY, peer,
+                   ZZ9K_P256_POINT_LEN);
+  n++;
+  ZZ9K_PARAM_END(&peer_params[n]);
+  kctx = EVP_PKEY_CTX_new_from_name(libctx, "EC", "provider=default");
+  if (kctx == NULL || EVP_PKEY_fromdata_init(kctx) <= 0 ||
+      EVP_PKEY_fromdata(kctx, &theirs, EVP_PKEY_PUBLIC_KEY, peer_params) <= 0) {
+    goto done;
+  }
+
+  dctx = EVP_PKEY_CTX_new_from_pkey(libctx, mine, "provider=default");
+  if (dctx == NULL || EVP_PKEY_derive_init(dctx) <= 0 ||
+      EVP_PKEY_derive_set_peer(dctx, theirs) <= 0 ||
+      EVP_PKEY_derive(dctx, out, &outlen) <= 0 ||
+      outlen != ZZ9K_P256_SCALAR_LEN) {
+    goto done;
+  }
+  rc = 1;
+done:
+  OSSL_PARAM_free(params);
+  OSSL_PARAM_BLD_free(bld);
+  BN_clear_free(priv);
+  EVP_PKEY_free(mine);
+  EVP_PKEY_free(theirs);
+  EVP_PKEY_CTX_free(kctx);
+  EVP_PKEY_CTX_free(dctx);
+  return rc;
+}
+#endif /* ZZ9K_PROVIDER_OFFLOAD || ZZ9K_TEST_DEFAULT_FALLBACK */
+
 /* ---- P-256 keygen / derive hooks (mirror zz9k_prov_x25519 in zz9k_x25519.c) ---- */
 
-/* pub = scalar*G. `scalar` is the caller-supplied 32-byte private scalar
- * (already generated by the KEYMGMT's gen(), or imported). */
+/* pub = scalar*G on the board. Returns 0 when the board cannot run keygen
+ * (capability absent, or a mailbox timeout under display contention); the
+ * caller (zz9k_ec_gen) then falls back to a default-provider keypair via
+ * zz9k_p256_default_genkey rather than failing the key share. */
 static int zz9k_prov_p256_keygen(unsigned char pub[ZZ9K_P256_POINT_LEN],
                                  const unsigned char scalar[ZZ9K_P256_SCALAR_LEN],
                                  ZZ9K_PROV_CTX *provctx)
 {
 #ifdef ZZ9K_PROVIDER_OFFLOAD
-  /* Same offload-or-fail posture as X25519: v2.2.0 firmware advertises P-256
-   * derive (CRYPTO_P256) without keygen (CRYPTO_P256_KEYGEN is a separate,
-   * newer flag — see zz9k/abi.h). Without it this returns 0 and keygen fails
-   * outright rather than running the untrusted in-library software
-   * reference; on the host (ZZ9K_PROVIDER_OFFLOAD undefined) the software
-   * reference below is what the parity tests cover. */
   if (!ZZ9K_PROV_CAN_OFFLOAD(provctx, ZZ9K_SERVICE_FLAG_CRYPTO_P256_KEYGEN)) {
     return 0;
   }
   return zz9k_offload_p256_keygen(provctx->sdk_ctx, pub, scalar) > 0 ? 1 : 0;
+#elif defined(ZZ9K_TEST_DEFAULT_FALLBACK)
+  (void)pub;
+  (void)scalar;
+  (void)provctx;
+  return 0;   /* force zz9k_ec_gen to exercise the default-provider fallback */
 #else
   (void)provctx;
   return zz9k_soft_p256_keygen(pub, scalar);
@@ -79,11 +213,15 @@ static int zz9k_prov_p256_derive(unsigned char out[ZZ9K_P256_SCALAR_LEN],
                                  ZZ9K_PROV_CTX *provctx)
 {
 #ifdef ZZ9K_PROVIDER_OFFLOAD
-  if (!ZZ9K_PROV_CAN_OFFLOAD(provctx, ZZ9K_SERVICE_FLAG_CRYPTO_P256)) {
-    return 0;
+  /* Try the board; on capability-absent or a contention timeout, fall back to
+   * the default provider (zz9k_p256_default_derive) instead of failing. */
+  if (ZZ9K_PROV_CAN_OFFLOAD(provctx, ZZ9K_SERVICE_FLAG_CRYPTO_P256) &&
+      zz9k_offload_p256_derive(provctx->sdk_ctx, out, scalar, peer) > 0) {
+    return 1;
   }
-  return zz9k_offload_p256_derive(provctx->sdk_ctx, out, scalar, peer) > 0 ? 1
-                                                                           : 0;
+  return zz9k_p256_default_derive(out, scalar, peer, provctx);
+#elif defined(ZZ9K_TEST_DEFAULT_FALLBACK)
+  return zz9k_p256_default_derive(out, scalar, peer, provctx);
 #else
   (void)provctx;
   return zz9k_soft_p256_ecdh(out, scalar, peer);
@@ -654,11 +792,6 @@ static const OSSL_PARAM *zz9k_ec_gen_settable_params(void *genctx,
   return types;
 }
 
-/* A bad random scalar (0, or >= the curve order) is astronomically unlikely;
- * this bound exists so a persistent offload failure (capability absent —
- * see zz9k_prov_p256_keygen) fails the keygen instead of spinning forever,
- * preserving the offload-or-fail contract. */
-#define ZZ9K_P256_GEN_MAX_ATTEMPTS 4
 
 /* Non-P256 EC keygen: no ZZ9000 acceleration exists for it, so generate
  * through the default provider (replaying the caller's gen params, which
@@ -717,7 +850,6 @@ static void *zz9k_ec_gen(void *genctx, OSSL_CALLBACK *cb, void *cbarg)
 {
   ZZ9K_EC_GEN *gen = genctx;
   ZZ9K_EC_KEY *key;
-  int attempts = ZZ9K_P256_GEN_MAX_ATTEMPTS;
 
   (void)cb;
   (void)cbarg;
@@ -743,16 +875,25 @@ static void *zz9k_ec_gen(void *genctx, OSSL_CALLBACK *cb, void *cbarg)
      * set_params(ENCODED_PUBLIC_KEY). */
     return key;
   }
-  do {
-    if (RAND_priv_bytes(key->priv, ZZ9K_P256_SCALAR_LEN) <= 0) {
-      break;
-    }
-    if (zz9k_prov_p256_keygen(key->point, key->priv, key->provctx)) {
-      key->has_priv = 1;
-      key->has_pub = 1;
-      return key;
-    }
-  } while (--attempts > 0);
+  /* Try the board once for scalar*G. On success the key is fully accelerated;
+   * on failure — capability absent, or a mailbox timeout because the ZZ9000 is
+   * busy driving the display — fall back to a default-provider keypair instead
+   * of retry-spinning the mailbox, which would stall the handshake far worse
+   * than stock amissl. A vanishingly rare bad random scalar is handled by the
+   * same fallback, so no offload retry loop is needed. */
+  if (RAND_priv_bytes(key->priv, ZZ9K_P256_SCALAR_LEN) > 0 &&
+      zz9k_prov_p256_keygen(key->point, key->priv, key->provctx)) {
+    key->has_priv = 1;
+    key->has_pub = 1;
+    return key;
+  }
+#if defined(ZZ9K_PROVIDER_OFFLOAD) || defined(ZZ9K_TEST_DEFAULT_FALLBACK)
+  if (zz9k_p256_default_genkey(key->priv, key->point, key->provctx)) {
+    key->has_priv = 1;
+    key->has_pub = 1;
+    return key;
+  }
+#endif
   OPENSSL_clear_free(key, sizeof(*key));
   return NULL;
 }
