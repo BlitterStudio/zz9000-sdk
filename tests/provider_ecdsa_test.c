@@ -23,13 +23,13 @@
 
 static int verify(OSSL_LIB_CTX *libctx, const char *prop, EVP_PKEY *key,
                   const unsigned char *sig, size_t siglen,
-                  const unsigned char *digest)
+                  const unsigned char *digest, size_t digestlen)
 {
   EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new_from_pkey(libctx, key, prop);
   int rc = -1;
 
   if (ctx != NULL && EVP_PKEY_verify_init(ctx) > 0) {
-    rc = EVP_PKEY_verify(ctx, sig, siglen, digest, 32);
+    rc = EVP_PKEY_verify(ctx, sig, siglen, digest, digestlen);
   }
   EVP_PKEY_CTX_free(ctx);
   return rc;   /* 1 = valid, 0 = invalid, <0 = error */
@@ -98,18 +98,53 @@ int main(void)
   }
 
   /* Valid signature must verify through our provider and the default one. */
-  if (verify(libctx, "provider=zz9000", ourkey, sig, siglen, digest) != 1) {
+  if (verify(libctx, "provider=zz9000", ourkey, sig, siglen, digest, 32) != 1) {
     printf("FAIL: valid signature not accepted by provider=zz9000\n");
     goto done;
   }
-  if (verify(libctx, "provider=default", genkey, sig, siglen, digest) != 1) {
+  if (verify(libctx, "provider=default", genkey, sig, siglen, digest, 32) != 1) {
     printf("FAIL: valid signature not accepted by provider=default\n");
     goto done;
   }
 
+  /* A non-SHA-256-sized digest (48 bytes, as an ECDSA-P256-with-SHA-384 chain
+   * signature presents) must NOT be rejected by the accelerated 32-byte-only
+   * path: our EC verify delegates it to the default provider. Sign a 48-byte
+   * "digest" with the same P-256 key and verify through provider=zz9000. */
+  {
+    unsigned char digest48[48];
+    unsigned char sig48[80];
+    size_t sig48len = sizeof(sig48);
+    EVP_PKEY_CTX *s48 = EVP_PKEY_CTX_new_from_pkey(libctx, genkey,
+                                                   "provider=default");
+
+    for (i = 0; i < sizeof(digest48); i++) {
+      digest48[i] = (unsigned char)(0x40 + i);
+    }
+    if (s48 == NULL || EVP_PKEY_sign_init(s48) <= 0 ||
+        EVP_PKEY_sign(s48, sig48, &sig48len, digest48, sizeof(digest48)) <= 0) {
+      EVP_PKEY_CTX_free(s48);
+      printf("FAIL: sign 48-byte digest\n");
+      goto done;
+    }
+    EVP_PKEY_CTX_free(s48);
+    if (verify(libctx, "provider=zz9000", ourkey, sig48, sig48len, digest48,
+               48) != 1) {
+      printf("FAIL: 48-byte-digest signature rejected by provider=zz9000 "
+             "(delegation fallback)\n");
+      goto done;
+    }
+    digest48[0] ^= 0x01;
+    if (verify(libctx, "provider=zz9000", ourkey, sig48, sig48len, digest48,
+               48) == 1) {
+      printf("FAIL: tampered 48-byte digest accepted by provider=zz9000\n");
+      goto done;
+    }
+  }
+
   /* A tampered digest must be rejected. */
   digest[0] ^= 0x01;
-  if (verify(libctx, "provider=zz9000", ourkey, sig, siglen, digest) == 1) {
+  if (verify(libctx, "provider=zz9000", ourkey, sig, siglen, digest, 32) == 1) {
     printf("FAIL: tampered digest accepted by provider=zz9000\n");
     goto done;
   }

@@ -81,16 +81,24 @@ typedef struct zz9k_prov_ctx_st {
 int zz9k_prov_x25519(unsigned char out[32], const unsigned char scalar[32],
                      const unsigned char point[32], ZZ9K_PROV_CTX *provctx);
 
-/* Per-key-type KEYMGMT and per-algorithm SIGNATURE dispatch tables, combined
- * into the keymgmt/signature OSSL_ALGORITHM tables in zz9k_algorithms.c. */
+/* Per-key-type KEYMGMT, per-algorithm KEYEXCH and SIGNATURE dispatch tables,
+ * combined into the OSSL_ALGORITHM tables in zz9k_algorithms.c. */
 extern const OSSL_DISPATCH zz9k_x25519_keymgmt_functions[];
 extern const OSSL_DISPATCH zz9k_ec_keymgmt_functions[];
 extern const OSSL_DISPATCH zz9k_rsa_keymgmt_functions[];
+extern const OSSL_DISPATCH zz9k_x25519_keyexch_functions[];
+extern const OSSL_DISPATCH zz9k_ecdh_keyexch_functions[];
 extern const OSSL_DISPATCH zz9k_ecdsa_signature_functions[];
 extern const OSSL_DISPATCH zz9k_rsa_signature_functions[];
 
-/* Algorithm tables advertised by the provider's query-operation callback. */
+/* Algorithm tables advertised by the provider's query-operation callback.
+ * The single-algorithm KEYMGMT variants let the production Amiga branch
+ * advertise X25519 and EC independently (each gated on its own firmware
+ * capability flags, see zz9k_provider.c); the combined table is used when
+ * both apply (or unconditionally on the host / under TEST_ALL). */
 extern const OSSL_ALGORITHM zz9k_keymgmt_algorithms[];
+extern const OSSL_ALGORITHM zz9k_keymgmt_algorithms_x25519_only[];
+extern const OSSL_ALGORITHM zz9k_keymgmt_algorithms_ec_only[];
 extern const OSSL_ALGORITHM zz9k_keyexch_algorithms[];
 extern const OSSL_ALGORITHM zz9k_cipher_algorithms[];
 extern const OSSL_ALGORITHM zz9k_cipher_algorithms_chacha_only[];

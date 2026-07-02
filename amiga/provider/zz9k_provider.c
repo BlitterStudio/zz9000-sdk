@@ -89,18 +89,36 @@ static const OSSL_ALGORITHM *zz9k_query_operation(void *provctx,
   {
     ZZ9K_PROV_CTX *ctx = (ZZ9K_PROV_CTX *)provctx;
     int have_board = (ctx != NULL && ctx->sdk_ctx != NULL);
+    /* EC is gated on ECDSA-P256 verify OR P-256 keygen, independent of
+     * X25519: either capability alone makes owning the "EC" keytype (P-256
+     * accelerated, everything else delegated — see zz9k_ecdsa.c) worthwhile,
+     * and the delegation model means an EC key never regresses even when
+     * only one of the two is present (e.g. old firmware: derive but no
+     * keygen, so ECDHE keygen delegates while cert verify still offloads). */
+    int want_x25519 = have_board &&
+        (ctx->service_flags & ZZ9K_SERVICE_FLAG_CRYPTO_X25519) != 0U;
+    int want_ec = have_board &&
+        (ctx->service_flags & (ZZ9K_SERVICE_FLAG_CRYPTO_ECDSA_P256 |
+                               ZZ9K_SERVICE_FLAG_CRYPTO_P256_KEYGEN)) != 0U;
 
     switch (operation_id) {
     case OSSL_OP_KEYMGMT:
-      return (have_board &&
-              (ctx->service_flags & ZZ9K_SERVICE_FLAG_CRYPTO_X25519) != 0U)
-                 ? zz9k_keymgmt_algorithms
-                 : NULL;
+      if (want_x25519 && want_ec) {
+        return zz9k_keymgmt_algorithms;
+      }
+      if (want_x25519) {
+        return zz9k_keymgmt_algorithms_x25519_only;
+      }
+      if (want_ec) {
+        return zz9k_keymgmt_algorithms_ec_only;
+      }
+      return NULL;
     case OSSL_OP_KEYEXCH:
-      return (have_board &&
-              (ctx->service_flags & ZZ9K_SERVICE_FLAG_CRYPTO_X25519) != 0U)
-                 ? zz9k_keyexch_algorithms
-                 : NULL;
+      /* The combined table holds both X25519 and ECDH; each is only ever
+       * reachable through a key created by its own (independently gated)
+       * KEYMGMT, so returning the whole table when either capability
+       * applies is safe — see the comment on zz9k_keyexch_algorithms. */
+      return (want_x25519 || want_ec) ? zz9k_keyexch_algorithms : NULL;
     case OSSL_OP_CIPHER:
       if (!have_board) {
         return NULL;
@@ -111,6 +129,14 @@ static const OSSL_ALGORITHM *zz9k_query_operation(void *provctx,
       return ((ctx->service_flags & ZZ9K_SERVICE_FLAG_CRYPTO_AES_GCM) != 0U)
                  ? zz9k_cipher_algorithms
                  : zz9k_cipher_algorithms_chacha_only;
+    case OSSL_OP_SIGNATURE:
+      /* RSA stays unadvertised (no delegating keymgmt yet — Phase C); with
+       * ZZ9K_PROVIDER_TEST_ALL undefined, zz9k_signature_algorithms already
+       * holds ECDSA only (see zz9k_algorithms.c). */
+      return (have_board &&
+              (ctx->service_flags & ZZ9K_SERVICE_FLAG_CRYPTO_ECDSA_P256) != 0U)
+                 ? zz9k_signature_algorithms
+                 : NULL;
     default:
       return NULL;
     }
@@ -124,8 +150,9 @@ static const OSSL_ALGORITHM *zz9k_query_operation(void *provctx,
   case OSSL_OP_CIPHER:
     return zz9k_cipher_algorithms;
   case OSSL_OP_SIGNATURE:
-    /* Empty in production (see zz9k_algorithms.c); populated only under
-     * ZZ9K_PROVIDER_TEST_ALL for the host cross-provider verify tests. */
+    /* ECDSA is always present (see zz9k_algorithms.c); RSA is added only
+     * under ZZ9K_PROVIDER_TEST_ALL for the host cross-provider verify test
+     * (no delegating RSA keymgmt yet — Phase C). */
     return zz9k_signature_algorithms;
   default:
     return NULL;
@@ -168,14 +195,68 @@ static const OSSL_PARAM zz9k_tls_group_x25519[] = {
   OSSL_PARAM_END
 };
 
+/* secp256r1 (P-256). Only ever declared alongside the EC KEYMGMT: owning the
+ * group without owning at least P-256 ECDSA verify or P-256 keygen would be
+ * pointless (see zz9k_query_operation's want_ec). */
+static const unsigned int zz9k_group_id_secp256r1 = 23;        /* 0x0017 */
+static const unsigned int zz9k_group_secbits_secp256r1 = 128;
+
+static const OSSL_PARAM zz9k_tls_group_secp256r1[] = {
+  /* "P-256" (not "secp256r1"): this is the name the default provider itself
+   * advertises for group id 23, and once our capability entry is the one
+   * that wins for that id, it is the only name libssl's group-name lookup
+   * (SSL_CTX_set1_groups_list / gid_cb) will accept. */
+  OSSL_PARAM_utf8_string(OSSL_CAPABILITY_TLS_GROUP_NAME, "P-256", 6),
+  OSSL_PARAM_utf8_string(OSSL_CAPABILITY_TLS_GROUP_NAME_INTERNAL,
+                         "prime256v1", 11),
+  OSSL_PARAM_utf8_string(OSSL_CAPABILITY_TLS_GROUP_ALG, "EC", 3),
+  OSSL_PARAM_uint(OSSL_CAPABILITY_TLS_GROUP_ID,
+                  (unsigned int *)&zz9k_group_id_secp256r1),
+  OSSL_PARAM_uint(OSSL_CAPABILITY_TLS_GROUP_SECURITY_BITS,
+                  (unsigned int *)&zz9k_group_secbits_secp256r1),
+  OSSL_PARAM_int(OSSL_CAPABILITY_TLS_GROUP_MIN_TLS,
+                 (int *)&zz9k_group_min_tls),
+  OSSL_PARAM_int(OSSL_CAPABILITY_TLS_GROUP_MAX_TLS,
+                 (int *)&zz9k_group_max_tls),
+  OSSL_PARAM_int(OSSL_CAPABILITY_TLS_GROUP_MIN_DTLS,
+                 (int *)&zz9k_group_no_dtls),
+  OSSL_PARAM_int(OSSL_CAPABILITY_TLS_GROUP_MAX_DTLS,
+                 (int *)&zz9k_group_no_dtls),
+  OSSL_PARAM_int(OSSL_CAPABILITY_TLS_GROUP_IS_KEM,
+                 (int *)&zz9k_group_is_not_kem),
+  OSSL_PARAM_END
+};
+
 static int zz9k_get_capabilities(void *provctx, const char *capability,
                                  OSSL_CALLBACK *cb, void *arg)
 {
-  (void)provctx;
-  if (strcmp(capability, "TLS-GROUP") == 0) {
-    return cb(zz9k_tls_group_x25519, arg);
+  if (strcmp(capability, "TLS-GROUP") != 0) {
+    return 1;   /* unknown capability: nothing to add, not an error */
   }
-  return 1;   /* unknown capability: nothing to add, not an error */
+  if (!cb(zz9k_tls_group_x25519, arg)) {
+    return 0;
+  }
+#if defined(ZZ9K_PROVIDER_OFFLOAD) && !defined(ZZ9K_PROVIDER_TEST_ALL)
+  {
+    ZZ9K_PROV_CTX *ctx = (ZZ9K_PROV_CTX *)provctx;
+    int have_board = (ctx != NULL && ctx->sdk_ctx != NULL);
+    int want_ec = have_board &&
+        (ctx->service_flags & (ZZ9K_SERVICE_FLAG_CRYPTO_ECDSA_P256 |
+                               ZZ9K_SERVICE_FLAG_CRYPTO_P256_KEYGEN)) != 0U;
+
+    if (want_ec && !cb(zz9k_tls_group_secp256r1, arg)) {
+      return 0;
+    }
+  }
+#else
+  /* Host / ZZ9K_PROVIDER_TEST_ALL: EC keymgmt is unconditionally present
+   * (see zz9k_query_operation's #else branch), so the group always applies. */
+  (void)provctx;
+  if (!cb(zz9k_tls_group_secp256r1, arg)) {
+    return 0;
+  }
+#endif
+  return 1;
 }
 
 static void zz9k_teardown(void *provctx)
