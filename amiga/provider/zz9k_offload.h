@@ -43,6 +43,17 @@ int zz9k_offload_x25519(void *ctx, unsigned char out[32],
                         const unsigned char scalar[32],
                         const unsigned char point[32]);
 
+/* P-256 ECDH derive: out = X-coordinate of scalar*peer (peer is the 65-byte
+ * uncompressed peer point). Gated by the caller on CRYPTO_P256. */
+int zz9k_offload_p256_derive(void *ctx, unsigned char out[32],
+                             const unsigned char scalar[32],
+                             const unsigned char peer[65]);
+
+/* P-256 keygen: pub = scalar*G (65-byte uncompressed point). Gated by the
+ * caller on CRYPTO_P256_KEYGEN (the firmware KX KEYGEN flag). */
+int zz9k_offload_p256_keygen(void *ctx, unsigned char pub[65],
+                             const unsigned char scalar[32]);
+
 /* aes != 0 selects AES-GCM (keylen 16 or 32); aes == 0 selects
  * ChaCha20-Poly1305 (keylen 32). The 16-byte tag is produced (encrypt) or
  * consumed (decrypt) via `tag`. */

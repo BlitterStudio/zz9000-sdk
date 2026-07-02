@@ -45,11 +45,6 @@ enum {
 #define ZZ9K_AEAD_IVLEN  12
 #define ZZ9K_AEAD_TAGLEN 16
 
-/* Measured synchronous-offload break-even for ChaCha20-Poly1305 on m68k
- * (docs/zz9k-crypto-acceleration.md): below ~2 KB the software reference is
- * faster than the mailbox round trip. */
-#define ZZ9K_CHACHA_OFFLOAD_MIN 2048U
-
 /* TLS 1.2 record framing (RFC 5288 / RFC 7905). */
 #define ZZ9K_TLS_AAD_LEN     13
 #define ZZ9K_TLS_EXPLICIT_IV 8

@@ -1110,6 +1110,39 @@ int zz9k_soft_p256_ecdh(uint8_t shared_secret[32],
   return 1;
 }
 
+int zz9k_soft_p256_keygen(uint8_t public_point[65],
+                          const uint8_t private_key[32])
+{
+  p256_pt G, R;
+  uint32_t d[P256_LIMBS], x[P256_LIMBS], y[P256_LIMBS];
+  uint32_t zinv[P256_LIMBS], zinv2[P256_LIMBS], zinv3[P256_LIMBS];
+  int i;
+
+  bn_from_be(d, private_key, 32);
+  if (fp_is_zero(d) || bn_cmp(d, p256_n, P256_LIMBS) >= 0) return 0; /* d in [1,n) */
+
+  for (i = 0; i < P256_LIMBS; i++) {
+    G.X[i] = p256_gx[i];
+    G.Y[i] = p256_gy[i];
+    G.Z[i] = 0;
+  }
+  G.Z[0] = 1U;
+  p256_scalar(&R, d, &G);                     /* R = d*G */
+  if (fp_is_zero(R.Z)) return 0;              /* infinity -> reject */
+
+  /* Jacobian -> affine: x = X/Z^2, y = Y/Z^3. */
+  fp_inv(zinv, R.Z);
+  fp_sqr(zinv2, zinv);
+  fp_mul(zinv3, zinv2, zinv);
+  fp_mul(x, R.X, zinv2);
+  fp_mul(y, R.Y, zinv3);
+
+  public_point[0] = 0x04U;                    /* uncompressed SEC1 form */
+  bn_to_be(public_point + 1, x, P256_LIMBS);
+  bn_to_be(public_point + 33, y, P256_LIMBS);
+  return 1;
+}
+
 int zz9k_soft_ecdsa_verify_p256(const uint8_t signature_r[32],
                                 const uint8_t signature_s[32],
                                 const uint8_t message_hash[32],
