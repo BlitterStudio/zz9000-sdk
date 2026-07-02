@@ -100,11 +100,28 @@ static const OSSL_ALGORITHM *zz9k_query_operation(void *provctx,
     int want_ec = have_board &&
         (ctx->service_flags & (ZZ9K_SERVICE_FLAG_CRYPTO_ECDSA_P256 |
                                ZZ9K_SERVICE_FLAG_CRYPTO_P256_KEYGEN)) != 0U;
+    int want_rsa = have_board &&
+        (ctx->service_flags & ZZ9K_SERVICE_FLAG_CRYPTO_RSA_2048) != 0U;
 
     switch (operation_id) {
     case OSSL_OP_KEYMGMT:
-      if (want_x25519 && want_ec) {
+      /* Any of the three keytypes may be independently present or absent
+       * depending on the firmware's advertised capability flags, so every
+       * non-empty subset needs its own table (zz9k_algorithms.c) — the RSA
+       * KEYMGMT is what makes an RSA key ever belong to this provider at
+       * all, which is what the RSA entry in zz9k_signature_algorithms below
+       * relies on to stay inert when RSA_2048 is absent. */
+      if (want_x25519 && want_ec && want_rsa) {
         return zz9k_keymgmt_algorithms;
+      }
+      if (want_x25519 && want_ec) {
+        return zz9k_keymgmt_algorithms_x25519_ec;
+      }
+      if (want_x25519 && want_rsa) {
+        return zz9k_keymgmt_algorithms_x25519_rsa;
+      }
+      if (want_ec && want_rsa) {
+        return zz9k_keymgmt_algorithms_ec_rsa;
       }
       if (want_x25519) {
         return zz9k_keymgmt_algorithms_x25519_only;
@@ -112,12 +129,16 @@ static const OSSL_ALGORITHM *zz9k_query_operation(void *provctx,
       if (want_ec) {
         return zz9k_keymgmt_algorithms_ec_only;
       }
+      if (want_rsa) {
+        return zz9k_keymgmt_algorithms_rsa_only;
+      }
       return NULL;
     case OSSL_OP_KEYEXCH:
       /* The combined table holds both X25519 and ECDH; each is only ever
        * reachable through a key created by its own (independently gated)
        * KEYMGMT, so returning the whole table when either capability
-       * applies is safe — see the comment on zz9k_keyexch_algorithms. */
+       * applies is safe — see the comment on zz9k_keyexch_algorithms.
+       * (RSA has no KEYEXCH — verify-only.) */
       return (want_x25519 || want_ec) ? zz9k_keyexch_algorithms : NULL;
     case OSSL_OP_CIPHER:
       if (!have_board) {
@@ -130,11 +151,15 @@ static const OSSL_ALGORITHM *zz9k_query_operation(void *provctx,
                  ? zz9k_cipher_algorithms
                  : zz9k_cipher_algorithms_chacha_only;
     case OSSL_OP_SIGNATURE:
-      /* RSA stays unadvertised (no delegating keymgmt yet — Phase C); with
-       * ZZ9K_PROVIDER_TEST_ALL undefined, zz9k_signature_algorithms already
-       * holds ECDSA only (see zz9k_algorithms.c). */
+      /* ECDSA verify gates specifically on ECDSA_P256 (not P256_KEYGEN —
+       * that flag only buys accelerated ECDHE keygen, not verify), RSA verify
+       * on RSA_2048; since they share one table (zz9k_algorithms.c), return
+       * it whenever EITHER applies — the entry for the absent one is
+       * unreachable (no key of that type was ever created under this
+       * provider, see the KEYMGMT gating above), not unsafe. */
       return (have_board &&
-              (ctx->service_flags & ZZ9K_SERVICE_FLAG_CRYPTO_ECDSA_P256) != 0U)
+              (ctx->service_flags & (ZZ9K_SERVICE_FLAG_CRYPTO_ECDSA_P256 |
+                                     ZZ9K_SERVICE_FLAG_CRYPTO_RSA_2048)) != 0U)
                  ? zz9k_signature_algorithms
                  : NULL;
     default:

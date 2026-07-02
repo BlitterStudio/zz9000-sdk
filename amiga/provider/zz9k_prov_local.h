@@ -65,6 +65,17 @@ typedef struct zz9k_prov_ctx_st {
     (pp)->data_size = strlen(s);                       \
     (pp)->return_size = OSSL_PARAM_UNMODIFIED;         \
   } while (0)
+/* `ip` must be a pointer to an int whose storage outlives the OSSL_PARAM's
+ * use (e.g. a local variable or a field in a longer-lived ctx), same caveat
+ * as ZZ9K_PARAM_OCTET/UTF8 above. */
+#define ZZ9K_PARAM_INT(pp, k, ip)                      \
+  do {                                                 \
+    (pp)->key = (k);                                   \
+    (pp)->data_type = OSSL_PARAM_INTEGER;              \
+    (pp)->data = (void *)(ip);                         \
+    (pp)->data_size = sizeof(*(ip));                   \
+    (pp)->return_size = OSSL_PARAM_UNMODIFIED;         \
+  } while (0)
 #define ZZ9K_PARAM_END(pp)                             \
   do {                                                 \
     (pp)->key = NULL;                                  \
@@ -92,13 +103,17 @@ extern const OSSL_DISPATCH zz9k_ecdsa_signature_functions[];
 extern const OSSL_DISPATCH zz9k_rsa_signature_functions[];
 
 /* Algorithm tables advertised by the provider's query-operation callback.
- * The single-algorithm KEYMGMT variants let the production Amiga branch
- * advertise X25519 and EC independently (each gated on its own firmware
- * capability flags, see zz9k_provider.c); the combined table is used when
- * both apply (or unconditionally on the host / under TEST_ALL). */
+ * The KEYMGMT variants let the production Amiga branch advertise any subset
+ * of X25519 / EC / RSA (each gated on its own firmware capability flags, see
+ * zz9k_provider.c); the full combined table is used when all three apply (or
+ * unconditionally on the host / under TEST_ALL). */
 extern const OSSL_ALGORITHM zz9k_keymgmt_algorithms[];
 extern const OSSL_ALGORITHM zz9k_keymgmt_algorithms_x25519_only[];
 extern const OSSL_ALGORITHM zz9k_keymgmt_algorithms_ec_only[];
+extern const OSSL_ALGORITHM zz9k_keymgmt_algorithms_rsa_only[];
+extern const OSSL_ALGORITHM zz9k_keymgmt_algorithms_x25519_ec[];
+extern const OSSL_ALGORITHM zz9k_keymgmt_algorithms_x25519_rsa[];
+extern const OSSL_ALGORITHM zz9k_keymgmt_algorithms_ec_rsa[];
 extern const OSSL_ALGORITHM zz9k_keyexch_algorithms[];
 extern const OSSL_ALGORITHM zz9k_cipher_algorithms[];
 extern const OSSL_ALGORITHM zz9k_cipher_algorithms_chacha_only[];

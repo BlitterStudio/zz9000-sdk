@@ -14,29 +14,27 @@
 #include "zz9k_prov_local.h"
 
 /* X25519 is owned end-to-end (keygen, key exchange, param round-trips), so it
- * is unconditionally advertised. EC is now ALSO owned end-to-end in the sense
- * that matters for TLS: the provider's EC KEYMGMT accelerates P-256 ECDHE
- * keygen/derive and P-256 ECDSA cert-verify directly, and DELEGATES every
- * other curve (and every other EC operation, e.g. client-cert signing) to a
- * shadow EVP_PKEY built against the default provider at import time (see
- * zz9k_ecdsa.c). That delegation is what makes it safe to shadow the whole
- * "EC" keytype via the "?provider=zz9000" default property query, even
- * though a single keytype spans every curve: non-P256 keys still verify
- * correctly, just not on the hardware. RSA keymgmt remains unadvertised in
- * production (no delegating keymgmt yet — tracked as Phase C); it is exposed
- * only under ZZ9K_PROVIDER_TEST_ALL for the host cross-provider verify test.
- * Production additionally gates X25519 and EC independently on their own
- * firmware capability flags (zz9k_provider.c), hence the single-algorithm
- * variants below alongside the combined table. */
+ * is unconditionally advertised. EC and RSA are now ALSO owned end-to-end in
+ * the sense that matters for TLS: the provider's EC KEYMGMT accelerates
+ * P-256 ECDHE keygen/derive and P-256 ECDSA cert-verify directly, and the RSA
+ * KEYMGMT accelerates RSA-2048 PKCS#1 v1.5/SHA-256 cert-verify directly; both
+ * DELEGATE every other curve/size/padding to a shadow EVP_PKEY built against
+ * the default provider at import time (see zz9k_ecdsa.c / zz9k_rsa.c). That
+ * delegation is what makes it safe to shadow the whole "EC"/"RSA" keytypes via
+ * the "?provider=zz9000" default property query, even though a single keytype
+ * spans every curve/size/padding: non-accelerated certificate keys (e.g.
+ * P-384/P-521 certs, RSA-PSS — the TLS1.3 RSA signature scheme) still verify
+ * correctly, just not on the hardware. Production additionally gates X25519,
+ * EC and RSA independently on their own firmware capability flags
+ * (zz9k_provider.c), hence the single/paired-algorithm variants below
+ * alongside the fully combined table. */
 const OSSL_ALGORITHM zz9k_keymgmt_algorithms[] = {
   { "X25519", "provider=zz9000", zz9k_x25519_keymgmt_functions,
     "ZZ9000 X25519 key management" },
   { "EC", "provider=zz9000", zz9k_ec_keymgmt_functions,
     "ZZ9000 EC (P-256 accelerated, other curves delegated) key management" },
-#ifdef ZZ9K_PROVIDER_TEST_ALL
   { "RSA", "provider=zz9000", zz9k_rsa_keymgmt_functions,
-    "ZZ9000 RSA key management" },
-#endif
+    "ZZ9000 RSA (2048 PKCS#1 accelerated, else delegated) key management" },
   { NULL, NULL, NULL, NULL }
 };
 
@@ -49,6 +47,36 @@ const OSSL_ALGORITHM zz9k_keymgmt_algorithms_x25519_only[] = {
 const OSSL_ALGORITHM zz9k_keymgmt_algorithms_ec_only[] = {
   { "EC", "provider=zz9000", zz9k_ec_keymgmt_functions,
     "ZZ9000 EC (P-256 accelerated, other curves delegated) key management" },
+  { NULL, NULL, NULL, NULL }
+};
+
+const OSSL_ALGORITHM zz9k_keymgmt_algorithms_rsa_only[] = {
+  { "RSA", "provider=zz9000", zz9k_rsa_keymgmt_functions,
+    "ZZ9000 RSA (2048 PKCS#1 accelerated, else delegated) key management" },
+  { NULL, NULL, NULL, NULL }
+};
+
+const OSSL_ALGORITHM zz9k_keymgmt_algorithms_x25519_ec[] = {
+  { "X25519", "provider=zz9000", zz9k_x25519_keymgmt_functions,
+    "ZZ9000 X25519 key management" },
+  { "EC", "provider=zz9000", zz9k_ec_keymgmt_functions,
+    "ZZ9000 EC (P-256 accelerated, other curves delegated) key management" },
+  { NULL, NULL, NULL, NULL }
+};
+
+const OSSL_ALGORITHM zz9k_keymgmt_algorithms_x25519_rsa[] = {
+  { "X25519", "provider=zz9000", zz9k_x25519_keymgmt_functions,
+    "ZZ9000 X25519 key management" },
+  { "RSA", "provider=zz9000", zz9k_rsa_keymgmt_functions,
+    "ZZ9000 RSA (2048 PKCS#1 accelerated, else delegated) key management" },
+  { NULL, NULL, NULL, NULL }
+};
+
+const OSSL_ALGORITHM zz9k_keymgmt_algorithms_ec_rsa[] = {
+  { "EC", "provider=zz9000", zz9k_ec_keymgmt_functions,
+    "ZZ9000 EC (P-256 accelerated, other curves delegated) key management" },
+  { "RSA", "provider=zz9000", zz9k_rsa_keymgmt_functions,
+    "ZZ9000 RSA (2048 PKCS#1 accelerated, else delegated) key management" },
   { NULL, NULL, NULL, NULL }
 };
 
@@ -66,12 +94,16 @@ const OSSL_ALGORITHM zz9k_keyexch_algorithms[] = {
   { NULL, NULL, NULL, NULL }
 };
 
+/* ECDSA gates on CRYPTO_ECDSA_P256, RSA on CRYPTO_RSA_2048 (zz9k_provider.c);
+ * since they share this one table, production returns it whenever EITHER
+ * capability applies. Each algorithm is fetched by name via a key created by
+ * its own (independently gated) KEYMGMT, so an entry left unreachable
+ * because its own capability is absent is inert, not unsafe — same reasoning
+ * as zz9k_keyexch_algorithms above. */
 const OSSL_ALGORITHM zz9k_signature_algorithms[] = {
   { "ECDSA", "provider=zz9000", zz9k_ecdsa_signature_functions,
     "ZZ9000 ECDSA verify (P-256 accelerated, other curves delegated)" },
-#ifdef ZZ9K_PROVIDER_TEST_ALL
   { "RSA", "provider=zz9000", zz9k_rsa_signature_functions,
-    "ZZ9000 RSA PKCS#1 v1.5 verify" },
-#endif
+    "ZZ9000 RSA verify (2048 PKCS#1 accelerated, else delegated)" },
   { NULL, NULL, NULL, NULL }
 };
