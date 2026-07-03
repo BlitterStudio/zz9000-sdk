@@ -80,10 +80,13 @@ host unit tests. Two things make them use the hardware:
   board can serve, so one that would fail is never offered — it resolves to
   AmiSSL's software default instead (see *Fallback semantics*). With the macro
   undefined (the host build) every operation uses the software reference, which
-  is why the host unit tests stay meaningful. (`zz9k_prov_ecdsa_verify` /
-  `zz9k_prov_rsa_verify` share the same offload-or-fail shape for the
-  *accelerated* verify; the non-accelerated EC/RSA operations do not touch the
-  board at all — they delegate to AmiSSL's default provider — so they are
+  is why the host unit tests stay meaningful. (The **P-256 key exchange** and the
+  **ECDSA-P256 / RSA-2048 verify** paths are the exception — they are
+  *offload-or-fallback*, not offload-or-fail: on an offload miss the P-256
+  keygen/derive and ECDSA verify fall back to the *default provider* and RSA
+  verify to the in-library software reference rather than failing the handshake.
+  See *Fallback semantics*. The non-accelerated EC/RSA operations do not touch
+  the board at all — they delegate to AmiSSL's default provider — so they are
   unaffected by this macro.)
 * **An open offload context.** `zz9k_provider_init` opens the board once for
   the provider's lifetime (`zz9k_offload_open`), keeps it only when the
@@ -285,11 +288,22 @@ machine without the board — transparently uses AmiSSL's software.
   keygen) are still served — the keymgmt **delegates** them to the default
   provider (forcing `provider=default`). So owning EC/RSA accelerates the
   handshake without removing any operation the default provider offered.
-* Advertised operations are **offload-or-fail**: the in-library software crypto
-  paths are deliberately not used (they are compiled only into the host build,
-  for the parity tests), so a record either offloads to the board or fails —
-  silent wrong crypto is worse than a failed record. A decrypt whose tag does
-  not authenticate is correctly rejected.
+* The **record crypto and X25519 key exchange** are **offload-or-fail**: the
+  in-library software crypto paths are deliberately not used (they are compiled
+  only into the host build, for the parity tests), so a record either offloads to
+  the board or fails — silent wrong crypto is worse than a failed record. A
+  decrypt whose tag does not authenticate is correctly rejected.
+* The **handshake asymmetric crypto is offload-or-fallback** instead. The P-256
+  key exchange and the ECDSA-P256 / RSA-2048 certificate verify still offload
+  first, but on a miss — the firmware lacks the capability, or a mailbox reply
+  arrives after the poll timeout because the board is busy driving the display —
+  they fall back rather than fail: P-256 keygen/derive and ECDSA verify to the
+  *default provider* (fast), RSA verify to the in-library software reference
+  (~1.4 s). This keeps a contended board from stalling a page load on the slow
+  in-tree reference (an ECDSA-P256 software verify is ~19× slower than the
+  default provider), at no loss of correctness — a fallback still verifies the
+  same certificate or computes the same shared secret. Fallback is never silently
+  wrong: it recomputes the operation in software, it does not skip it.
 * `ENV:ZZ9K_DISABLE_OFFLOAD` forces the no-board path at registration: the
   provider loads and is preferred but never opens the board, so every operation
   runs in AmiSSL software. A zero-rebuild A/B switch for isolating a regression

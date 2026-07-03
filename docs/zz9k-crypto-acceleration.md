@@ -291,7 +291,10 @@ crypto slowdown — always install the CPU-matched build.**
 - `tools/zz9k-handshake-model.h` — handshake offload calculator, checks in
   `tests/handshake_model_test.c`.
 - `amiga/provider/` — OpenSSL 3 provider that exposes the offload to AmiSSL
-  (X25519, P-256 ECDHE, AES-GCM, ChaCha20-Poly1305, ECDSA-P256/RSA-2048 verify)
-  with delegation of non-accelerated EC/RSA ops and software fallback;
-  host parity tests in `tests/provider_*_test.c`. See
+  (X25519, P-256 ECDHE, AES-GCM, ChaCha20-Poly1305, ECDSA-P256/RSA-2048 verify),
+  delegating non-accelerated EC/RSA ops to the default provider. Record crypto
+  and X25519 are offload-or-fail; the handshake asymmetric ops (P-256 ECDHE +
+  ECDSA/RSA verify) are offload-or-fallback so a contended board never stalls a
+  page load; a boardless machine advertises nothing and runs stock AmiSSL. Host
+  parity tests in `tests/provider_*_test.c`. See
   [zz9k-amissl-provider.md](zz9k-amissl-provider.md).
