@@ -1240,12 +1240,29 @@ static const OSSL_PARAM *zz9k_ecdsa_settable_ctx_params(void *vctx,
  * required for both the accelerated and delegated verify paths — it hashes
  * with a plain EVP_MD_CTX (independent of any provider) and hands the
  * resulting digest to the same zz9k_ecdsa_verify() used by the raw path. */
+/* libssl hands the DigestVerify/Sign init entry points the OpenSSL-3 canonical
+ * digest name (e.g. "SHA2-256"). EVP_get_digestbyname's legacy name table is
+ * incomplete for those aliases on some OpenSSL builds — notably 3.0.13, where
+ * "SHA2-256" resolves to NULL, so every SHA-256 TLS signature verify fails to
+ * initialise and the handshake aborts. Fetch through the library context
+ * instead: it resolves both canonical and legacy names on every OpenSSL 3.x.
+ * Returns a fetched EVP_MD the caller must EVP_MD_free() (EVP_DigestInit_ex
+ * takes its own reference, so freeing immediately after init is safe); a
+ * NULL/empty name defaults to SHA-256. */
+static EVP_MD *zz9k_ecdsa_fetch_md(ZZ9K_ECDSA_CTX *ctx, const char *mdname)
+{
+  OSSL_LIB_CTX *libctx =
+      (OSSL_LIB_CTX *)(ctx->provctx != NULL ? ctx->provctx->libctx : NULL);
+  return EVP_MD_fetch(
+      libctx, (mdname != NULL && mdname[0] != '\0') ? mdname : "SHA2-256", NULL);
+}
+
 static int zz9k_ecdsa_digest_verify_init(void *vctx, const char *mdname,
                                          void *provkey,
                                          const OSSL_PARAM params[])
 {
   ZZ9K_ECDSA_CTX *ctx = vctx;
-  const EVP_MD *md;
+  EVP_MD *md;
 
   if (ctx == NULL || provkey == NULL) {
     return 0;
@@ -1257,11 +1274,12 @@ static int zz9k_ecdsa_digest_verify_init(void *vctx, const char *mdname,
       return 0;
     }
   }
-  md = (mdname != NULL && mdname[0] != '\0') ? EVP_get_digestbyname(mdname)
-                                             : EVP_sha256();
+  md = zz9k_ecdsa_fetch_md(ctx, mdname);
   if (md == NULL || !EVP_DigestInit_ex(ctx->mdctx, md, NULL)) {
+    EVP_MD_free(md);
     return 0;
   }
+  EVP_MD_free(md);
   return zz9k_ecdsa_set_ctx_params(vctx, params);
 }
 
@@ -1458,7 +1476,7 @@ static int zz9k_ecdsa_digest_sign_init(void *vctx, const char *mdname,
                                        const OSSL_PARAM params[])
 {
   ZZ9K_ECDSA_CTX *ctx = vctx;
-  const EVP_MD *md;
+  EVP_MD *md;
 
   if (ctx == NULL || provkey == NULL) {
     return 0;
@@ -1470,11 +1488,12 @@ static int zz9k_ecdsa_digest_sign_init(void *vctx, const char *mdname,
       return 0;
     }
   }
-  md = (mdname != NULL && mdname[0] != '\0') ? EVP_get_digestbyname(mdname)
-                                             : EVP_sha256();
+  md = zz9k_ecdsa_fetch_md(ctx, mdname);
   if (md == NULL || !EVP_DigestInit_ex(ctx->mdctx, md, NULL)) {
+    EVP_MD_free(md);
     return 0;
   }
+  EVP_MD_free(md);
   return zz9k_ecdsa_set_ctx_params(vctx, params);
 }
 
