@@ -86,6 +86,8 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "Surface requests:");
   ok &= expect_contains(source, "Audio requests:");
   ok &= expect_contains(source, "Max request:");
+  ok &= expect_contains(source, "zz9k_read_diag_sched");
+  ok &= expect_contains(source, "Scheduler:");
 
   free(source);
   return ok ? 0 : 1;
