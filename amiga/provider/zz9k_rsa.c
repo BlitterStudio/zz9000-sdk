@@ -685,6 +685,27 @@ static int zz9k_rsa_verify_pkcs1_sha256_via_default(ZZ9K_RSA_SIG_CTX *ctx,
   return rc == 1 ? 1 : 0;
 }
 
+/* RSA-2048 verify runs in SOFTWARE by default. The board offload saves only
+ * ~90 ms (29 ms vs 119 ms in the default-provider shadow, measured by
+ * tools/zz9k-cryptoprofile.c "rsa" KAT) but a mailbox round trip can stall for
+ * MINUTES under display contention — observed on hardware: a page whose TLS
+ * cert triggers this verify (rsa2048.badssl.com, whose leaf cert is
+ * RSA-2048/PKCS#1-SHA256) hung >2.5 min with the offload and connected in ~9 s
+ * with it off. The offload does fall back to the shadow on a *returned* miss,
+ * but under contention the wait blocks rather than returning a timeout, so the
+ * fallback never fires. Unlike ECDSA-P256 verify (990->22 ms) and the derives
+ * (400-1300->8-14 ms), offloading a ~120 ms RSA verify is a net loss — the same
+ * conclusion the AEAD size gate reaches for small records. ENV:
+ * ZZ9K_RSA_VERIFY_OFFLOAD re-enables the board path for testing. Read once. */
+static int zz9k_rsa_verify_offload_enabled(void)
+{
+  static int cached = -1;
+  if (cached < 0) {
+    cached = (getenv("ZZ9K_RSA_VERIFY_OFFLOAD") != NULL) ? 1 : 0;
+  }
+  return cached;
+}
+
 static int zz9k_rsa_sig_verify(void *vctx, const unsigned char *sig,
                                size_t siglen, const unsigned char *tbs,
                                size_t tbslen)
@@ -695,15 +716,16 @@ static int zz9k_rsa_sig_verify(void *vctx, const unsigned char *sig,
     return 0;
   }
   if (zz9k_rsa_sig_accel_eligible(ctx, siglen, tbslen)) {
-    int v = zz9k_prov_rsa_verify(sig, (uint32_t)siglen, tbs, ctx->key->n,
-                                 ctx->key->nbytes * 8U, ctx->key->e,
-                                 ctx->provctx);
-    if (v >= 0) {
-      return v;
+    if (zz9k_rsa_verify_offload_enabled()) {
+      int v = zz9k_prov_rsa_verify(sig, (uint32_t)siglen, tbs, ctx->key->n,
+                                   ctx->key->nbytes * 8U, ctx->key->e,
+                                   ctx->provctx);
+      if (v >= 0) {
+        return v;
+      }
     }
-    /* Board could not verify (capability absent, or offload timed out under
-     * display contention): fall back to the default provider via the shadow —
-     * the same offload-or-fallback posture the ECDSA and P-256 KX paths use. */
+    /* Default path (and offload-miss fallback): verify via the default-provider
+     * shadow — fast, correct, and no mailbox round trip to stall under load. */
     return zz9k_rsa_verify_pkcs1_sha256_via_default(ctx, sig, siglen, tbs,
                                                     tbslen);
   }
