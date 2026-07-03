@@ -965,6 +965,16 @@ static inline int zz9k_request_diag_timing(ZZ9KRequest *request)
   return ZZ9K_STATUS_OK;
 }
 
+static inline int zz9k_request_diag_sched(ZZ9KRequest *request)
+{
+  if (!request) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  zz9k_request_init(request, ZZ9K_OP_DIAG_SCHED);
+  return ZZ9K_STATUS_OK;
+}
+
 #ifdef __cplusplus
 }
 #endif
