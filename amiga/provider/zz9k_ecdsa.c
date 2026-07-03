@@ -185,7 +185,14 @@ done:
 /* pub = scalar*G on the board. Returns 0 when the board cannot run keygen
  * (capability absent, or a mailbox timeout under display contention); the
  * caller (zz9k_ec_gen) then falls back to a default-provider keypair via
- * zz9k_p256_default_genkey rather than failing the key share. */
+ * zz9k_p256_default_genkey rather than failing the key share.
+ *
+ * CONTRACT: this is a 0/1 BOOLEAN, NOT the -1-on-miss sentinel used by
+ * zz9k_prov_{ecdsa,rsa}_verify. Callers use the result directly in boolean `&&`
+ * context (the import path at zz9k_ec_import and the keygen at zz9k_ec_gen), so
+ * returning -1 here would read as truthy and fail OPEN — a partial key marked
+ * has_pub with a garbage point. Keep the boolean contract; the fallback lives in
+ * the caller, not in a sentinel. Same for zz9k_prov_p256_derive below. */
 static int zz9k_prov_p256_keygen(unsigned char pub[ZZ9K_P256_POINT_LEN],
                                  const unsigned char scalar[ZZ9K_P256_SCALAR_LEN],
                                  ZZ9K_PROV_CTX *provctx)
