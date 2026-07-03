@@ -442,6 +442,58 @@ static int test_p256_ecdh_vector2(void)
   return 0;
 }
 
+/* P-256 keygen (scalar*G -> full uncompressed point). Cross-checks: d=1 must
+ * yield the generator exactly; keygen's X must match the trusted ECDH path
+ * d*G for a non-trivial scalar; a full DH round trip proves Y is correct; and
+ * out-of-range scalars are rejected. */
+static int test_p256_keygen(void)
+{
+  static const uint8_t alice_d[32] = {
+    0xea, 0x6a, 0xb0, 0xeb, 0x32, 0x16, 0xac, 0x90,
+    0xef, 0x2e, 0xed, 0x0a, 0xea, 0xcb, 0xab, 0x4a,
+    0x5c, 0xe3, 0x74, 0x64, 0x46, 0x0c, 0xc4, 0xf6,
+    0xde, 0x29, 0xce, 0x43, 0xf8, 0xae, 0xd7, 0x3b
+  };
+  static const uint8_t bob_d[32] = {
+    0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+    0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10,
+    0x0f, 0x1e, 0x2d, 0x3c, 0x4b, 0x5a, 0x69, 0x78,
+    0x87, 0x96, 0xa5, 0xb4, 0xc3, 0xd2, 0xe1, 0xf0
+  };
+  uint8_t g_uncompressed[65];
+  uint8_t pub[65], pub_b[65];
+  uint8_t d[32], z1[32], z2[32], xcheck[32];
+
+  /* Serialize the curve generator to uncompressed SEC1 form. */
+  g_uncompressed[0] = 0x04U;
+  bn_to_be(g_uncompressed + 1, p256_gx, P256_LIMBS);
+  bn_to_be(g_uncompressed + 33, p256_gy, P256_LIMBS);
+
+  /* d = 1 -> the public point is exactly the generator. */
+  memset(d, 0, sizeof(d));
+  d[31] = 1U;
+  if (!zz9k_soft_p256_keygen(pub, d)) return 1;
+  if (!bytes_equal(pub, g_uncompressed, 65U)) return 2;
+
+  /* keygen X must equal the trusted ECDH path d*G for a non-trivial scalar. */
+  if (!zz9k_soft_p256_keygen(pub, alice_d)) return 3;
+  if (!zz9k_soft_p256_ecdh(xcheck, alice_d, g_uncompressed)) return 4;
+  if (!bytes_equal(pub + 1, xcheck, 32U)) return 5;
+
+  /* Full-point DH round trip: a*(b*G) == b*(a*G) proves Y is correct. */
+  if (!zz9k_soft_p256_keygen(pub_b, bob_d)) return 6;
+  if (!zz9k_soft_p256_ecdh(z1, alice_d, pub_b)) return 7;
+  if (!zz9k_soft_p256_ecdh(z2, bob_d, pub)) return 8;
+  if (!bytes_equal(z1, z2, 32U)) return 9;
+
+  /* Out-of-range scalars must be rejected. */
+  memset(d, 0, sizeof(d));
+  if (zz9k_soft_p256_keygen(pub, d)) return 10;          /* d = 0 */
+  memset(d, 0xFF, sizeof(d));
+  if (zz9k_soft_p256_keygen(pub, d)) return 11;          /* d >= n */
+  return 0;
+}
+
 /* Second, independent ECDSA-P256 vector plus tamper rejection. */
 static int test_ecdsa_verify_p256_vector2(void)
 {
@@ -735,6 +787,11 @@ int main(void)
   rc = test_p256_ecdh_vector2();
   if (rc) {
     printf("FAIL: test_p256_ecdh_vector2 returned %d\n", rc);
+    failures++;
+  }
+  rc = test_p256_keygen();
+  if (rc) {
+    printf("FAIL: test_p256_keygen returned %d\n", rc);
     failures++;
   }
   rc = test_ecdsa_verify_p256_fips186_4();

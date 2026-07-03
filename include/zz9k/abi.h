@@ -232,7 +232,11 @@ enum ZZ9KServiceFlags {
   ZZ9K_SERVICE_FLAG_CRYPTO_P256       = 1U << 17,
   ZZ9K_SERVICE_FLAG_CRYPTO_ECDSA_P256 = 1U << 18,
   ZZ9K_SERVICE_FLAG_CRYPTO_RSA_2048   = 1U << 19,
-  ZZ9K_SERVICE_FLAG_CRYPTO_AES_GCM    = 1U << 20
+  ZZ9K_SERVICE_FLAG_CRYPTO_AES_GCM    = 1U << 20,
+  /* P-256 keygen (scalar*G -> full 65-byte point) via the KX op's KEYGEN flag.
+   * Distinct from CRYPTO_P256 (derive only): v2.2.0 advertises derive without
+   * keygen, so the provider must gate ECDHE keygen offload on this bit. */
+  ZZ9K_SERVICE_FLAG_CRYPTO_P256_KEYGEN = 1U << 21
 };
 
 enum ZZ9KAudioSampleFormat {
@@ -1370,6 +1374,13 @@ typedef enum ZZ9KCryptoKxAlgorithm {
   ZZ9K_CRYPTO_KX_X25519  = 1U,
   ZZ9K_CRYPTO_KX_P256    = 2U
 } ZZ9KCryptoKxAlgorithm;
+
+/* KX descriptor flags. KEYGEN turns a P-256 KX request into a base-point
+ * multiply: `scalar` is the private key, `point` is unused, and `dst` receives
+ * the full uncompressed public point (ZZ9K_CRYPTO_P256_POINT_BYTES). Firmware
+ * that predates the keygen primitive rejects a non-zero flags word with
+ * UNSUPPORTED, so callers must gate on ZZ9K_SERVICE_FLAG_CRYPTO_P256_KEYGEN. */
+#define ZZ9K_CRYPTO_KX_FLAG_KEYGEN 1U
 
 typedef enum ZZ9KCryptoVerifyAlgorithm {
   ZZ9K_CRYPTO_VERIFY_NONE                     = 0,

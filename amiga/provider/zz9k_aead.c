@@ -25,11 +25,13 @@
 #include <openssl/params.h>
 #include <openssl/crypto.h>
 #include <openssl/rand.h>
+#include <openssl/evp.h>
 
 #include "zz9k-crypto-soft.h"
 #include "zz9k_offload.h"
 
 #include <string.h>
+#include <stdlib.h>
 
 /* Cipher mode values mirror EVP_CIPH_GCM_MODE / EVP_CIPH_STREAM_CIPHER so the
  * EVP layer recognises the mode without pulling in <openssl/evp.h> here. */
@@ -45,10 +47,16 @@ enum {
 #define ZZ9K_AEAD_IVLEN  12
 #define ZZ9K_AEAD_TAGLEN 16
 
-/* Measured synchronous-offload break-even for ChaCha20-Poly1305 on m68k
- * (docs/zz9k-crypto-acceleration.md): below ~2 KB the software reference is
- * faster than the mailbox round trip. */
-#define ZZ9K_CHACHA_OFFLOAD_MIN 2048U
+/* Record size (bytes) at/above which an AEAD record offloads to the board;
+ * smaller records run in the default provider's software. The offload is a flat
+ * ~7 ms mailbox round trip that only beats the m68k software above ~1.6 KiB
+ * (measured, tools/zz9k-cryptoprofile.c "aead" sweep). 2 KiB is throughput-
+ * neutral at the crossover and, by keeping the many small TLS records a page
+ * load emits off the doorbell, cuts the round-trip count — and the contention
+ * exposure under display load — to just the bulk records offload actually wins.
+ * Override with ENV:ZZ9K_AEAD_OFFLOAD_MIN to retune on hardware without a
+ * rebuild (see zz9k_aead_offload_min). */
+#define ZZ9K_AEAD_OFFLOAD_MIN_BYTES 2048
 
 /* TLS 1.2 record framing (RFC 5288 / RFC 7905). */
 #define ZZ9K_TLS_AAD_LEN     13
@@ -85,6 +93,97 @@ typedef struct {
   int tls_aad_set;
 } ZZ9K_AEAD_CTX;
 
+#ifdef ZZ9K_PROVIDER_OFFLOAD
+/* EVP algorithm name for a zz9k AEAD id, used to fetch the software cipher. */
+static const char *zz9k_aead_evp_name(int alg)
+{
+  switch (alg) {
+  case ZZ9K_AEAD_AES128_GCM:        return "AES-128-GCM";
+  case ZZ9K_AEAD_AES256_GCM:        return "AES-256-GCM";
+  case ZZ9K_AEAD_CHACHA20_POLY1305: return "ChaCha20-Poly1305";
+  default:                          return NULL;
+  }
+}
+
+/* The record-size offload threshold, read once from ENV:ZZ9K_AEAD_OFFLOAD_MIN
+ * (bytes) so the crossover can be retuned on hardware without a rebuild;
+ * defaults to the measured ZZ9K_AEAD_OFFLOAD_MIN_BYTES. getenv on AmigaOS hits
+ * ENV: so it is cached rather than read per record. */
+static size_t zz9k_aead_offload_min(void)
+{
+  static long cached = -1;   /* -1 = not yet read */
+  if (cached < 0) {
+    const char *e = getenv("ZZ9K_AEAD_OFFLOAD_MIN");
+    long v = (e != NULL) ? atol(e) : (long)ZZ9K_AEAD_OFFLOAD_MIN_BYTES;
+    cached = (v < 0) ? 0 : v;
+  }
+  return (size_t)cached;
+}
+
+/* One-shot AEAD through the default (AmiSSL software) provider, pinned with
+ * "provider=default" so the fetch cannot bridge back into this provider. This
+ * serves both the small-record path (below the offload threshold) and the
+ * offload-miss fallback. It is deliberately NOT the zz9k_soft_* reference the
+ * host build uses below: that reference miscomputes ChaCha tags inside the
+ * base-relative amissl.library (root cause undetermined), whereas the default
+ * provider is validated in-lib by zz9k_amissl_selftest's
+ * chacha_evp_kat("provider=default"). Same contract as zz9k_prov_aead: `tag` is
+ * an output for encrypt and an input for decrypt; the tag length is the AEAD
+ * default 16 — the only length the TLS record layer and the board offload use.
+ * Returns 1 on success (decrypt: tag verified), 0 otherwise. */
+static int zz9k_aead_default_oneshot(int alg, int enc, const unsigned char *key,
+                                     size_t keylen, const unsigned char *iv,
+                                     const unsigned char *aad, size_t aadlen,
+                                     const unsigned char *in, size_t inlen,
+                                     unsigned char *out, unsigned char *tag,
+                                     ZZ9K_PROV_CTX *provctx)
+{
+  const char *name = zz9k_aead_evp_name(alg);
+  EVP_CIPHER *cipher = NULL;
+  EVP_CIPHER_CTX *ctx = NULL;
+  int outl = 0, tmpl = 0, ok = 0;
+
+  (void)keylen;   /* the cipher name fixes the key length */
+  if (name == NULL) {
+    return 0;
+  }
+  cipher = EVP_CIPHER_fetch(provctx != NULL ? provctx->libctx : NULL, name,
+                            "provider=default");
+  ctx = EVP_CIPHER_CTX_new();
+  if (cipher == NULL || ctx == NULL) {
+    goto done;
+  }
+  if (enc) {
+    if (!EVP_EncryptInit_ex2(ctx, cipher, key, iv, NULL) ||
+        (aadlen > 0 &&
+         !EVP_EncryptUpdate(ctx, NULL, &outl, aad, (int)aadlen)) ||
+        !EVP_EncryptUpdate(ctx, out, &outl, in, (int)inlen) ||
+        !EVP_EncryptFinal_ex(ctx, out + outl, &tmpl) ||
+        !EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_GET_TAG, ZZ9K_AEAD_TAGLEN,
+                             tag)) {
+      goto done;
+    }
+    ok = 1;
+  } else {
+    if (!EVP_DecryptInit_ex2(ctx, cipher, key, iv, NULL) ||
+        !EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_TAG, ZZ9K_AEAD_TAGLEN,
+                             tag) ||
+        (aadlen > 0 &&
+         !EVP_DecryptUpdate(ctx, NULL, &outl, aad, (int)aadlen)) ||
+        !EVP_DecryptUpdate(ctx, out, &outl, in, (int)inlen)) {
+      goto done;
+    }
+    /* Final verifies the tag: 1 = authentic, 0 = reject. */
+    ok = (EVP_DecryptFinal_ex(ctx, out + outl, &tmpl) == 1);
+  }
+
+done:
+  EVP_CIPHER_CTX_free(ctx);
+  EVP_CIPHER_free(cipher);
+  return ok;
+}
+#endif /* ZZ9K_PROVIDER_OFFLOAD */
+
 /* One-shot AEAD over a whole record. `tag` is an output for encrypt and an
  * input for decrypt. Returns 1 on success (decrypt: tag valid), 0 otherwise. */
 static int zz9k_prov_aead(int alg, int enc, const unsigned char *key,
@@ -95,34 +194,49 @@ static int zz9k_prov_aead(int alg, int enc, const unsigned char *key,
                           ZZ9K_PROV_CTX *provctx)
 {
 #ifdef ZZ9K_PROVIDER_OFFLOAD
-  /* On the Amiga every record offloads — the AEAD ciphers are only advertised
-   * when the board's crypto service is live (see zz9k_query_operation), and
-   * AES-GCM additionally only with its capability flag, because AEAD firmware
-   * that predates the algorithm bits in the descriptor flags treats them as
-   * don't-care and would run the legacy ChaCha20-Poly1305 while reporting
-   * success.
+  /* On the Amiga the AEAD ciphers are only advertised when the board's crypto
+   * service is live (see zz9k_query_operation), and AES-GCM additionally only
+   * with its capability flag, because AEAD firmware that predates the algorithm
+   * bits in the descriptor flags treats them as don't-care and would run the
+   * legacy ChaCha20-Poly1305 while reporting success.
    *
-   * A failed offload (allocation/mailbox error, or a decrypt with a bad tag —
-   * both return negative) FAILS the operation rather than falling back to the
-   * portable software reference: that code computes wrong ChaCha tags inside
-   * the base-relative amissl.library build despite passing its KATs in every
-   * standalone build (root cause undetermined), and silent wrong crypto is
-   * far worse than a failed record. The host build (no ZZ9K_PROVIDER_OFFLOAD)
-   * runs the software reference below, which is what the parity tests cover. */
+   * Records offload only at/above the size threshold. The offload is a flat
+   * ~7 ms mailbox round trip; below ~1.6 KiB the m68k software is faster, and
+   * far more importantly, the many small records a page load emits would each
+   * be a doorbell round trip — hundreds per page — which under display load
+   * (core-0's completion poll starved) balloon and, with no fallback, fail a
+   * record into a browser retry/timeout cascade. Small records therefore run
+   * in the default provider's software (no mailbox, correct crypto).
+   *
+   * A failed offload (allocation/mailbox error/timeout, or a decrypt whose tag
+   * the board rejected — all return non-positive) also falls back to the
+   * default provider rather than failing the record: for a valid record this
+   * recovers it, so a display-load stall no longer kills the connection; for a
+   * genuinely bad decrypt tag the software path rejects it too, so
+   * authentication is preserved. The fallback is the default provider, NOT the
+   * zz9k_soft_* reference below — that reference computes wrong ChaCha tags
+   * inside the base-relative amissl.library despite passing its KATs in every
+   * standalone build (root cause undetermined). The host build (no
+   * ZZ9K_PROVIDER_OFFLOAD) runs the software reference below, which the parity
+   * tests cover. */
   {
     int aes = (alg != ZZ9K_AEAD_CHACHA20_POLY1305);
     int r;
-    if (aes && !ZZ9K_PROV_CAN_OFFLOAD(provctx,
-                                      ZZ9K_SERVICE_FLAG_CRYPTO_AES_GCM)) {
-      return 0;
-    }
-    if (!ZZ9K_PROV_CAN_OFFLOAD_SERVICE(provctx)) {
-      return 0;
+    if (inlen < zz9k_aead_offload_min() ||
+        (aes && !ZZ9K_PROV_CAN_OFFLOAD(provctx,
+                                       ZZ9K_SERVICE_FLAG_CRYPTO_AES_GCM)) ||
+        !ZZ9K_PROV_CAN_OFFLOAD_SERVICE(provctx)) {
+      return zz9k_aead_default_oneshot(alg, enc, key, keylen, iv, aad, aadlen,
+                                       in, inlen, out, tag, provctx);
     }
     r = zz9k_offload_aead(provctx->sdk_ctx, aes, (unsigned int)keylen, !enc,
                           key, iv, aad, (unsigned int)aadlen, in,
                           (unsigned int)inlen, out, tag);
-    return r > 0 ? 1 : 0;
+    if (r > 0) {
+      return 1;
+    }
+    return zz9k_aead_default_oneshot(alg, enc, key, keylen, iv, aad, aadlen,
+                                     in, inlen, out, tag, provctx);
   }
 #else
   (void)provctx;

@@ -95,6 +95,54 @@ static ZZ9KOffloadCtx *zz9k_offload_acquire(void *vctx)
   return o;
 }
 
+/* A momentarily busy mailbox or a single timed-out call is worth a bounded
+ * retry: the crypto ops are pure functions of their inputs (same
+ * scalar/key/nonce/point -> same output), so re-issuing is safe. BUSY/TIMEOUT
+ * are rare on the serialized per-task mailbox, so a small fixed attempt count
+ * with immediate re-issue suffices — there is no dos.library Delay() to lean
+ * on inside amissl.library. Without this, any transient status collapsed to a
+ * hard offload failure (and, under offload-or-fail, a failed handshake). */
+#define ZZ9K_OFFLOAD_MAX_ATTEMPTS 3
+
+static int zz9k_offload_transient(int status)
+{
+  return status == ZZ9K_STATUS_BUSY || status == ZZ9K_STATUS_TIMEOUT;
+}
+
+static int zz9k_offload_run_kx(ZZ9KContext *sdk, const ZZ9KCryptoKxDesc *desc,
+                               ZZ9KCryptoResult *result)
+{
+  int attempts = ZZ9K_OFFLOAD_MAX_ATTEMPTS;
+  int st;
+  do {
+    st = zz9k_crypto_kx(sdk, desc, result);
+  } while (st != ZZ9K_STATUS_OK && zz9k_offload_transient(st) && --attempts > 0);
+  return st;
+}
+
+static int zz9k_offload_run_aead(ZZ9KContext *sdk,
+                                 const ZZ9KCryptoAeadDesc *desc,
+                                 ZZ9KCryptoResult *result)
+{
+  int attempts = ZZ9K_OFFLOAD_MAX_ATTEMPTS;
+  int st;
+  do {
+    st = zz9k_crypto_aead(sdk, desc, result);
+  } while (st != ZZ9K_STATUS_OK && zz9k_offload_transient(st) && --attempts > 0);
+  return st;
+}
+
+static int zz9k_offload_run_verify(ZZ9KContext *sdk,
+                                   const ZZ9KCryptoVerifyDesc *desc, int *valid)
+{
+  int attempts = ZZ9K_OFFLOAD_MAX_ATTEMPTS;
+  int st;
+  do {
+    st = zz9k_crypto_verify(sdk, desc, valid);
+  } while (st != ZZ9K_STATUS_OK && zz9k_offload_transient(st) && --attempts > 0);
+  return st;
+}
+
 void *zz9k_offload_open(unsigned int *service_flags)
 {
   ZZ9KContext *sdk = NULL;
@@ -175,8 +223,73 @@ int zz9k_offload_x25519(void *vctx, unsigned char out[32],
     goto out;
   }
   memset(&result, 0, sizeof(result));
-  if (zz9k_crypto_kx(o->sdk, &desc, &result) == ZZ9K_STATUS_OK) {
+  if (zz9k_offload_run_kx(o->sdk, &desc, &result) == ZZ9K_STATUS_OK) {
     memcpy(out, (const void *)o->dst.data, 32);
+    rc = 1;
+  }
+
+out:
+  o->in_use = 0;
+  return rc;
+}
+
+int zz9k_offload_p256_derive(void *vctx, unsigned char out[32],
+                             const unsigned char scalar[32],
+                             const unsigned char peer[65])
+{
+  ZZ9KOffloadCtx *o = zz9k_offload_acquire(vctx);
+  ZZ9KCryptoKxDesc desc;
+  ZZ9KCryptoResult result;
+  int rc = -1;
+
+  if (o == NULL) {
+    return -1;
+  }
+  if (!zz9k_offload_ensure(o, &o->key, 32U) ||
+      !zz9k_offload_ensure(o, &o->src, 65U) ||
+      !zz9k_offload_ensure(o, &o->dst, 32U)) {
+    goto out;
+  }
+  memcpy((void *)o->key.data, scalar, 32);
+  memcpy((void *)o->src.data, peer, 65);   /* src carries the 65-byte peer point */
+  if (!zz9k_crypto_build_p256_desc(&desc, o->key.handle, 0, o->src.handle, 0,
+                                   o->dst.handle, 0)) {
+    goto out;
+  }
+  memset(&result, 0, sizeof(result));
+  if (zz9k_offload_run_kx(o->sdk, &desc, &result) == ZZ9K_STATUS_OK) {
+    memcpy(out, (const void *)o->dst.data, 32);
+    rc = 1;
+  }
+
+out:
+  o->in_use = 0;
+  return rc;
+}
+
+int zz9k_offload_p256_keygen(void *vctx, unsigned char pub[65],
+                             const unsigned char scalar[32])
+{
+  ZZ9KOffloadCtx *o = zz9k_offload_acquire(vctx);
+  ZZ9KCryptoKxDesc desc;
+  ZZ9KCryptoResult result;
+  int rc = -1;
+
+  if (o == NULL) {
+    return -1;
+  }
+  if (!zz9k_offload_ensure(o, &o->key, 32U) ||
+      !zz9k_offload_ensure(o, &o->dst, 65U)) {
+    goto out;
+  }
+  memcpy((void *)o->key.data, scalar, 32);
+  if (!zz9k_crypto_build_p256_keygen_desc(&desc, o->key.handle, 0,
+                                          o->dst.handle, 0)) {
+    goto out;
+  }
+  memset(&result, 0, sizeof(result));
+  if (zz9k_offload_run_kx(o->sdk, &desc, &result) == ZZ9K_STATUS_OK) {
+    memcpy(pub, (const void *)o->dst.data, 65);
     rc = 1;
   }
 
@@ -235,7 +348,7 @@ int zz9k_offload_aead(void *vctx, int aes, unsigned int keylen, int decrypt,
     goto out;
   }
   memset(&result, 0, sizeof(result));
-  if (zz9k_crypto_aead(o->sdk, &desc, &result) == ZZ9K_STATUS_OK) {
+  if (zz9k_offload_run_aead(o->sdk, &desc, &result) == ZZ9K_STATUS_OK) {
     memcpy(out, (const void *)o->dst.data, inlen);
     if (!decrypt) {
       memcpy(tag, (const unsigned char *)o->dst.data + inlen, 16);
@@ -273,7 +386,7 @@ int zz9k_offload_verify(void *vctx, unsigned int algorithm,
                                      0, keylen)) {
     goto out;
   }
-  if (zz9k_crypto_verify(o->sdk, &desc, valid) == ZZ9K_STATUS_OK) {
+  if (zz9k_offload_run_verify(o->sdk, &desc, valid) == ZZ9K_STATUS_OK) {
     rc = 1;
   }
 

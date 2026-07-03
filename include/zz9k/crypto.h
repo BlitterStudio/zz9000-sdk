@@ -355,6 +355,31 @@ static inline int zz9k_crypto_build_p256_desc(
                                    dst_handle, dst_offset);
 }
 
+/* P-256 keygen: scalar*G. `scalar` is the 32-byte private key and `dst`
+ * receives the full uncompressed public point (ZZ9K_CRYPTO_P256_POINT_BYTES).
+ * There is no peer point, so this builder does not require one; it sets the
+ * KEYGEN flag, which only firmware advertising ZZ9K_SERVICE_FLAG_CRYPTO_P256_-
+ * KEYGEN honours (older firmware rejects a non-zero flags word). */
+static inline int zz9k_crypto_build_p256_keygen_desc(
+    ZZ9KCryptoKxDesc *desc,
+    uint32_t scalar_handle, uint32_t scalar_offset,
+    uint32_t dst_handle, uint32_t dst_offset)
+{
+  if (!desc ||
+      scalar_handle == ZZ9K_INVALID_HANDLE ||
+      dst_handle    == ZZ9K_INVALID_HANDLE)
+    return 0;
+  memset(desc, 0, sizeof(*desc));
+  desc->scalar_handle = scalar_handle;
+  desc->scalar_offset = scalar_offset;
+  desc->point_handle  = ZZ9K_INVALID_HANDLE;   /* no peer point for keygen */
+  desc->dst_handle    = dst_handle;
+  desc->dst_offset    = dst_offset;
+  desc->algorithm     = ZZ9K_CRYPTO_KX_P256;
+  desc->flags         = ZZ9K_CRYPTO_KX_FLAG_KEYGEN;
+  return 1;
+}
+
 /* Signature verification (ECDSA-P256 or RSA-PKCS1-2048, both over SHA-256).
  * hash_* references the message digest, sig_* the signature, key_* the public
  * key (uncompressed P-256 point, or RSA modulus). */

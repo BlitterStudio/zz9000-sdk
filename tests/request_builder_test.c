@@ -1096,10 +1096,59 @@ static int test_crypto_kx_builder_encodes_descriptor(void)
   /* P-256 reuses the same payload with the P-256 algorithm id. */
   if (!zz9k_crypto_build_p256_desc(&desc, 0x11U, 0U, 0x22U, 0U, 0x33U, 0U))
     return 12;
-  zz9k_request_crypto_kx(&request, &desc);
+  if (zz9k_request_crypto_kx(&request, &desc) != ZZ9K_STATUS_OK) return 13;
   payload =
       (const struct ZZ9KCryptoKxPayload *)request.entry.payload.inline_data;
-  if (zz9k_get_be32(payload->algorithm) != ZZ9K_CRYPTO_KX_P256) return 13;
+  if (zz9k_get_be32(payload->algorithm) != ZZ9K_CRYPTO_KX_P256) return 14;
+  return 0;
+}
+
+/* P-256 ephemeral keygen (scalar*G) has no peer point, so its descriptor
+ * carries point_handle == ZZ9K_INVALID_HANDLE by design. The wire builder must
+ * accept it: every P-256 ECDHE key share depends on it. (Regression guard —
+ * the builder used to require a point_handle for *all* KX ops and rejected
+ * keygen client-side with BAD_REQUEST, so it never reached the board and every
+ * P-256 handshake failed with "provider keymgmt failure".) */
+static int test_crypto_kx_builder_allows_p256_keygen(void)
+{
+  ZZ9KCryptoKxDesc desc;
+  ZZ9KRequest request;
+  const struct ZZ9KCryptoKxPayload *payload;
+
+  if (!zz9k_crypto_build_p256_keygen_desc(&desc, 0x11U, 0x10U, 0x33U, 0x30U))
+    return 1;
+  if (zz9k_request_crypto_kx(&request, &desc) != ZZ9K_STATUS_OK) return 2;
+  if (request.entry.opcode != ZZ9K_OP_CRYPTO_KX) return 3;
+  if (request.entry.payload_len != sizeof(struct ZZ9KCryptoKxPayload)) return 4;
+  payload =
+      (const struct ZZ9KCryptoKxPayload *)request.entry.payload.inline_data;
+  if (zz9k_get_be32(payload->scalar_handle) != 0x11U) return 5;
+  if (zz9k_get_be32(payload->scalar_offset) != 0x10U) return 6;
+  if (zz9k_get_be32(payload->point_handle)  != ZZ9K_INVALID_HANDLE) return 7;
+  if (zz9k_get_be32(payload->dst_handle)    != 0x33U) return 8;
+  if (zz9k_get_be32(payload->dst_offset)    != 0x30U) return 9;
+  if (zz9k_get_be32(payload->algorithm) != ZZ9K_CRYPTO_KX_P256) return 10;
+  if (zz9k_get_be32(payload->flags) != ZZ9K_CRYPTO_KX_FLAG_KEYGEN) return 11;
+
+  /* Keygen still needs a scalar and a destination buffer. */
+  if (!zz9k_crypto_build_p256_keygen_desc(&desc, 0x11U, 0U, 0x33U, 0U))
+    return 12;
+  desc.scalar_handle = ZZ9K_INVALID_HANDLE;
+  if (zz9k_request_crypto_kx(&request, &desc) != ZZ9K_STATUS_BAD_REQUEST)
+    return 13;
+  if (!zz9k_crypto_build_p256_keygen_desc(&desc, 0x11U, 0U, 0x33U, 0U))
+    return 14;
+  desc.dst_handle = ZZ9K_INVALID_HANDLE;
+  if (zz9k_request_crypto_kx(&request, &desc) != ZZ9K_STATUS_BAD_REQUEST)
+    return 15;
+
+  /* The relaxation is keygen-specific: a non-keygen KX op (flags == 0) with a
+   * missing peer point is still a bad request. */
+  if (!zz9k_crypto_build_p256_desc(&desc, 0x11U, 0U, 0x22U, 0U, 0x33U, 0U))
+    return 16;
+  desc.point_handle = ZZ9K_INVALID_HANDLE;   /* flags stays 0 (derive) */
+  if (zz9k_request_crypto_kx(&request, &desc) != ZZ9K_STATUS_BAD_REQUEST)
+    return 17;
   return 0;
 }
 
@@ -1185,6 +1234,9 @@ int main(void)
 
   result = test_crypto_kx_builder_encodes_descriptor();
   if (result) return 200 + result;
+
+  result = test_crypto_kx_builder_allows_p256_keygen();
+  if (result) return 260 + result;
 
   result = test_crypto_verify_builder_encodes_descriptor();
   if (result) return 220 + result;

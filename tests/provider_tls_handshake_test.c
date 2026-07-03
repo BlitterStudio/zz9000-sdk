@@ -45,6 +45,8 @@ static int make_cert(OSSL_LIB_CTX *libctx, const char *keytype,
 
   if (strcmp(keytype, "EC") == 0) {
     pkey = EVP_PKEY_Q_keygen(libctx, NULL, "EC", "P-256");
+  } else if (strcmp(keytype, "EC-P384") == 0) {
+    pkey = EVP_PKEY_Q_keygen(libctx, NULL, "EC", "P-384");
   } else {
     pkey = EVP_PKEY_Q_keygen(libctx, NULL, "RSA", (size_t)2048);
   }
@@ -240,8 +242,8 @@ int main(void)
 {
   OSSL_LIB_CTX *client_libctx = OSSL_LIB_CTX_new();
   OSSL_LIB_CTX *server_libctx = OSSL_LIB_CTX_new();
-  EVP_PKEY *ec_key = NULL, *rsa_key = NULL;
-  X509 *ec_cert = NULL, *rsa_cert = NULL;
+  EVP_PKEY *ec_key = NULL, *rsa_key = NULL, *ec384_key = NULL;
+  X509 *ec_cert = NULL, *rsa_cert = NULL, *ec384_cert = NULL;
   int rc = 0;
 
   if (client_libctx == NULL || server_libctx == NULL) {
@@ -253,7 +255,8 @@ int main(void)
     return 1;
   }
   if (!make_cert(server_libctx, "EC", &ec_key, &ec_cert) ||
-      !make_cert(server_libctx, "RSA", &rsa_key, &rsa_cert)) {
+      !make_cert(server_libctx, "RSA", &rsa_key, &rsa_cert) ||
+      !make_cert(server_libctx, "EC-P384", &ec384_key, &ec384_cert)) {
     printf("FAIL: certificate creation\n");
     return 1;
   }
@@ -298,11 +301,22 @@ int main(void)
                   "TLS1.2 RSA aes-gcm P256", TLS1_2_VERSION, TLS1_2_VERSION,
                   rsa_key, rsa_cert, "P-256",
                   "ECDHE-RSA-AES128-GCM-SHA256", NULL);
+  /* Delegation regression: the client's EC KEYMGMT/ECDSA now own "EC" for
+   * every curve, but only P-256 is accelerated. A P-384 server cert forces
+   * our EC keymgmt to build a shadow EVP_PKEY (default provider) at import
+   * and our ECDSA verify to forward to it — this must still succeed. The
+   * handshake's own key exchange uses X25519 (P-384 is never offered as a
+   * TLS group), so this isolates cert-chain delegation from key exchange. */
+  rc |= !run_case(client_libctx, server_libctx,
+                  "TLS1.3 ECDSA-P384 cert (delegated) x25519", TLS1_3_VERSION,
+                  TLS1_3_VERSION, ec384_key, ec384_cert, "X25519", NULL, NULL);
 
   EVP_PKEY_free(ec_key);
   EVP_PKEY_free(rsa_key);
+  EVP_PKEY_free(ec384_key);
   X509_free(ec_cert);
   X509_free(rsa_cert);
+  X509_free(ec384_cert);
   OSSL_LIB_CTX_free(client_libctx);
   OSSL_LIB_CTX_free(server_libctx);
   if (rc == 0) {

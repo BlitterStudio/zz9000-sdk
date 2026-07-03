@@ -98,6 +98,15 @@ int zz9k_soft_p256_ecdh(uint8_t shared_secret[32],
                         const uint8_t public_point[65]);
 
 /*
+ * P-256 keygen: public_point = private_key * G (SEC 1). `private_key` is a
+ * 32-byte scalar in [1, n-1]; writes the uncompressed 65-byte public point
+ * (0x04 || X || Y) to `public_point`. Returns 1 on success, 0 if the scalar is
+ * out of range or the result is the point at infinity.
+ */
+int zz9k_soft_p256_keygen(uint8_t public_point[65],
+                          const uint8_t private_key[32]);
+
+/*
  * ECDSA-P256 SHA-256 signature verification (SEC 1 / FIPS 186-4).
  * `signature_r` and `signature_s` are each 32-byte big-endian integers.
  * `message_hash` is the 32-byte SHA-256 digest of the message.

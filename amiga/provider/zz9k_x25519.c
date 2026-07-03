@@ -525,20 +525,14 @@ static void zz9k_x25519_exch_freectx(void *vctx)
   OPENSSL_free(vctx);
 }
 
-static const OSSL_DISPATCH zz9k_x25519_keyexch_functions[] = {
+/* Non-static: the KEYEXCH OSSL_ALGORITHM table (X25519 + ECDH) is assembled
+ * centrally in zz9k_algorithms.c since it spans two key-exchange
+ * implementations, same as the KEYMGMT table. */
+const OSSL_DISPATCH zz9k_x25519_keyexch_functions[] = {
   { OSSL_FUNC_KEYEXCH_NEWCTX, (void (*)(void))zz9k_x25519_exch_newctx },
   { OSSL_FUNC_KEYEXCH_INIT, (void (*)(void))zz9k_x25519_exch_init },
   { OSSL_FUNC_KEYEXCH_SET_PEER, (void (*)(void))zz9k_x25519_exch_set_peer },
   { OSSL_FUNC_KEYEXCH_DERIVE, (void (*)(void))zz9k_x25519_exch_derive },
   { OSSL_FUNC_KEYEXCH_FREECTX, (void (*)(void))zz9k_x25519_exch_freectx },
   { 0, NULL }
-};
-
-/* ---- Algorithm table ---- (the KEYMGMT table is assembled centrally in
- * zz9k_algorithms.c since it spans several key types). */
-
-const OSSL_ALGORITHM zz9k_keyexch_algorithms[] = {
-  { "X25519", "provider=zz9000", zz9k_x25519_keyexch_functions,
-    "ZZ9000 X25519 key exchange" },
-  { NULL, NULL, NULL, NULL }
 };
