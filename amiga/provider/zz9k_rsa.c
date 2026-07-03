@@ -58,9 +58,10 @@ static int zz9k_prov_rsa_verify(const unsigned char *sig, uint32_t siglen,
    * RSA verify. Current firmware accepts RSA-2048/3072/4096 (BearSSL is
    * size-agnostic up to 4096-bit) under the single RSA_PKCS1 algorithm id.
    * The key is marshalled as modulus || exponent, the exponent in 4 big-endian
-   * bytes. A negative return falls through to the software reference — as does
-   * an "invalid" verdict for moduli wider than 2048 bits, in case the deployed
-   * firmware predates the wider sizes and bound-checks rather than errors. */
+   * bytes. On an offload miss the caller falls back to the default provider
+   * (fast) via the key's shadow; an "invalid" verdict for moduli wider than
+   * 2048 bits is treated as a miss too, in case the deployed firmware predates
+   * the wider sizes and bound-checks rather than errors. */
   if (ZZ9K_PROV_CAN_OFFLOAD(provctx, ZZ9K_SERVICE_FLAG_CRYPTO_RSA_2048)) {
     unsigned int nbytes = nbits / 8U;
     if (nbytes <= ZZ9K_RSA_MAX_BYTES) {
@@ -78,10 +79,24 @@ static int zz9k_prov_rsa_verify(const unsigned char *sig, uint32_t siglen,
       }
     }
   }
+  /* Capability absent, or the offload timed out because the ZZ9000 is busy
+   * driving the display: return -1 so the caller falls back to the default
+   * provider (fast) instead of the in-tree software reference (used only on the
+   * host build below). */
+  return -1;
+#elif defined(ZZ9K_TEST_DEFAULT_FALLBACK)
+  (void)sig;
+  (void)siglen;
+  (void)hash;
+  (void)n;
+  (void)nbits;
+  (void)e;
+  (void)provctx;
+  return -1;   /* force the caller to exercise the default-provider fallback */
 #else
   (void)provctx;
-#endif
   return zz9k_soft_rsa_verify_pkcs1_sha256(sig, siglen, hash, n, nbits, e);
+#endif
 }
 
 /* ---- RSA KEYMGMT ---- */
@@ -623,6 +638,53 @@ static int zz9k_rsa_sig_verify_delegated(ZZ9K_RSA_SIG_CTX *ctx,
   return rc == 1 ? 1 : 0;
 }
 
+/* Fallback for the accelerated PKCS#1 v1.5 / SHA-256 path when the board cannot
+ * serve the offload (capability absent, or a mailbox timeout under display
+ * contention): verify through the key's default-provider shadow rather than the
+ * ~1.4x-slower in-tree software reference. The accelerated path is always
+ * SHA-256 PKCS#1 (the firmware/software reference assume SHA-256 and
+ * zz9k_rsa_sig_accel_eligible enforces a 32-byte digest), so force that digest
+ * here instead of replaying ctx->mdname — which accel_eligible permits to be
+ * empty. Same provider=default recursion guard as zz9k_rsa_sig_verify_delegated. */
+static int zz9k_rsa_verify_pkcs1_sha256_via_default(ZZ9K_RSA_SIG_CTX *ctx,
+                                                    const unsigned char *sig,
+                                                    size_t siglen,
+                                                    const unsigned char *tbs,
+                                                    size_t tbslen)
+{
+  EVP_PKEY_CTX *pctx;
+  OSSL_PARAM params[3];
+  int pad = ZZ9K_RSA_PKCS1_PADDING;
+  int n = 0;
+  int rc;
+
+  if (ctx->key == NULL || ctx->key->shadow == NULL) {
+    return 0;
+  }
+  pctx = EVP_PKEY_CTX_new_from_pkey(
+      (OSSL_LIB_CTX *)(ctx->provctx != NULL ? ctx->provctx->libctx : NULL),
+      ctx->key->shadow, "provider=default");
+  if (pctx == NULL) {
+    return 0;
+  }
+  if (EVP_PKEY_verify_init(pctx) <= 0) {
+    EVP_PKEY_CTX_free(pctx);
+    return 0;
+  }
+  ZZ9K_PARAM_INT(&params[n], OSSL_SIGNATURE_PARAM_PAD_MODE, &pad);
+  n++;
+  ZZ9K_PARAM_UTF8(&params[n], OSSL_SIGNATURE_PARAM_DIGEST, "SHA256");
+  n++;
+  ZZ9K_PARAM_END(&params[n]);
+  if (EVP_PKEY_CTX_set_params(pctx, params) <= 0) {
+    EVP_PKEY_CTX_free(pctx);
+    return 0;
+  }
+  rc = EVP_PKEY_verify(pctx, sig, siglen, tbs, tbslen);
+  EVP_PKEY_CTX_free(pctx);
+  return rc == 1 ? 1 : 0;
+}
+
 static int zz9k_rsa_sig_verify(void *vctx, const unsigned char *sig,
                                size_t siglen, const unsigned char *tbs,
                                size_t tbslen)
@@ -633,9 +695,17 @@ static int zz9k_rsa_sig_verify(void *vctx, const unsigned char *sig,
     return 0;
   }
   if (zz9k_rsa_sig_accel_eligible(ctx, siglen, tbslen)) {
-    return zz9k_prov_rsa_verify(sig, (uint32_t)siglen, tbs, ctx->key->n,
-                                ctx->key->nbytes * 8U, ctx->key->e,
-                                ctx->provctx);
+    int v = zz9k_prov_rsa_verify(sig, (uint32_t)siglen, tbs, ctx->key->n,
+                                 ctx->key->nbytes * 8U, ctx->key->e,
+                                 ctx->provctx);
+    if (v >= 0) {
+      return v;
+    }
+    /* Board could not verify (capability absent, or offload timed out under
+     * display contention): fall back to the default provider via the shadow —
+     * the same offload-or-fallback posture the ECDSA and P-256 KX paths use. */
+    return zz9k_rsa_verify_pkcs1_sha256_via_default(ctx, sig, siglen, tbs,
+                                                    tbslen);
   }
   return zz9k_rsa_sig_verify_delegated(ctx, sig, siglen, tbs, tbslen);
 }
