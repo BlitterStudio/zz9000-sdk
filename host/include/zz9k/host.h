@@ -78,6 +78,13 @@ typedef struct ZZ9KDiagTimingInfo {
   uint32_t max_us;
 } ZZ9KDiagTimingInfo;
 
+typedef struct ZZ9KDiagSchedInfo {
+  uint32_t version;
+  uint32_t core1_online;
+  uint32_t tasks_on_core1;
+  uint32_t tasks_on_core0;
+} ZZ9KDiagSchedInfo;
+
 typedef struct ZZ9KServiceInfo {
   uint32_t service_id;
   uint32_t version;
@@ -210,6 +217,7 @@ int zz9k_decompress_stream_close(ZZ9KContext *ctx, uint32_t session,
                                  uint32_t flags);
 int zz9k_read_diag(ZZ9KContext *ctx, ZZ9KDiagInfo *diag);
 int zz9k_read_diag_timing(ZZ9KContext *ctx, ZZ9KDiagTimingInfo *timing);
+int zz9k_read_diag_sched(ZZ9KContext *ctx, ZZ9KDiagSchedInfo *sched);
 int zz9k_completion_irq_supported(ZZ9KContext *ctx);
 int zz9k_completion_irq_enable(ZZ9KContext *ctx, int enable);
 int zz9k_completion_irq_ack(ZZ9KContext *ctx);

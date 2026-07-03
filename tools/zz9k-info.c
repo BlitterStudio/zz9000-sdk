@@ -201,12 +201,24 @@ static void print_diag_timing(const ZZ9KDiagTimingInfo *timing)
          (unsigned long)timing->max_us);
 }
 
+static void print_diag_sched(const ZZ9KDiagSchedInfo *sched)
+{
+  if (sched->core1_online) {
+    printf("Scheduler:         core 1 = online, crypto tasks core1=%lu core0=%lu\n",
+           (unsigned long)sched->tasks_on_core1,
+           (unsigned long)sched->tasks_on_core0);
+  } else {
+    printf("Scheduler:         core 1 = offline (single-core fallback)\n");
+  }
+}
+
 int main(void)
 {
   ZZ9KContext *ctx = 0;
   ZZ9KCaps caps;
   ZZ9KDiagInfo diag;
   ZZ9KDiagTimingInfo timing;
+  ZZ9KDiagSchedInfo sched;
   int status;
 
   printf("zz9k-info: opening SDK mailbox\n");
@@ -246,6 +258,14 @@ int main(void)
     print_diag_timing(&timing);
   } else if (status != ZZ9K_STATUS_UNSUPPORTED) {
     printf("Timing diagnostics:   %s (%d)\n",
+           zz9k_status_name(status), status);
+  }
+
+  status = zz9k_read_diag_sched(ctx, &sched);
+  if (status == ZZ9K_STATUS_OK) {
+    print_diag_sched(&sched);
+  } else if (status != ZZ9K_STATUS_UNSUPPORTED) {
+    printf("Scheduler diagnostics: %s (%d)\n",
            zz9k_status_name(status), status);
   }
 

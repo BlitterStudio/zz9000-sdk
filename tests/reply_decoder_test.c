@@ -284,6 +284,36 @@ static int test_diag_timing_decoder(void)
   return 0;
 }
 
+static int test_diag_sched_decoder(void)
+{
+  ZZ9KMailboxEntry reply;
+  ZZ9KDiagSchedInfo sched;
+
+  memset(&reply, 0, sizeof(reply));
+  reply.opcode = ZZ9K_OP_DIAG_SCHED;
+  reply.status = ZZ9K_STATUS_OK;
+  reply.payload_len = sizeof(ZZ9KDiagSchedPayload);
+  zz9k_put_be32(&reply.payload.inline_data[0], 1U);
+  zz9k_put_be32(&reply.payload.inline_data[4], 1U);
+  zz9k_put_be32(&reply.payload.inline_data[8], 1234U);
+  zz9k_put_be32(&reply.payload.inline_data[12], 57U);
+
+  memset(&sched, 0, sizeof(sched));
+  if (zz9k_reply_diag_sched(&reply, &sched) != ZZ9K_STATUS_OK) return 1;
+  if (sched.version != 1U) return 2;
+  if (sched.core1_online != 1U) return 3;
+  if (sched.tasks_on_core1 != 1234U) return 4;
+  if (sched.tasks_on_core0 != 57U) return 5;
+
+  reply.opcode = ZZ9K_OP_DIAG_TIMING;
+  if (zz9k_reply_diag_sched(&reply, &sched) !=
+      ZZ9K_STATUS_INTERNAL_ERROR) {
+    return 6;
+  }
+
+  return 0;
+}
+
 static int test_crypto_result_decoder(void)
 {
   ZZ9KMailboxEntry reply;
@@ -545,6 +575,9 @@ int main(void)
 
   result = test_diag_timing_decoder();
   if (result) return 150 + result;
+
+  result = test_diag_sched_decoder();
+  if (result) return 155 + result;
 
   result = test_crypto_result_decoder();
   if (result) return 160 + result;

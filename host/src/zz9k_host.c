@@ -1664,6 +1664,30 @@ int zz9k_read_diag_timing(ZZ9KContext *ctx, ZZ9KDiagTimingInfo *timing)
   return zz9k_reply_diag_timing(&reply, timing);
 }
 
+int zz9k_read_diag_sched(ZZ9KContext *ctx, ZZ9KDiagSchedInfo *sched)
+{
+  ZZ9KRequest request;
+  ZZ9KMailboxEntry reply;
+  int status;
+
+  if (!ctx || !sched) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  memset(sched, 0, sizeof(*sched));
+  memset(&reply, 0, sizeof(reply));
+  status = zz9k_request_diag_sched(&request);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  status = zz9k_call(ctx, &request, &reply, ZZ9K_DEFAULT_TIMEOUT_TICKS);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  return zz9k_reply_diag_sched(&reply, sched);
+}
+
 static int zz9k_enqueue_request_locked(ZZ9KContext *ctx, ZZ9KRequest *request,
                                        uint32_t *request_id)
 {
