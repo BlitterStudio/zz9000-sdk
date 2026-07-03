@@ -39,6 +39,10 @@ typedef char diag_timing_payload_is_48_bytes[
   (sizeof(ZZ9KDiagTimingPayload) == 48U) ? 1 : -1
 ];
 
+typedef char diag_sched_payload_is_16_bytes[
+  (sizeof(ZZ9KDiagSchedPayload) == 16U) ? 1 : -1
+];
+
 typedef char query_service_payload_is_48_bytes[
   (sizeof(ZZ9KQueryServicePayload) == 48U) ? 1 : -1
 ];
@@ -187,6 +191,12 @@ int main(void)
   }
   if (ZZ9K_OP_DIAG_TIMING != ZZ9K_SERVICE_DIAG + 0x01U) {
     return 24;
+  }
+  if (ZZ9K_OP_DIAG_SCHED != ZZ9K_SERVICE_DIAG + 0x02U) {
+    return 25;
+  }
+  if (ZZ9K_OP_DIAG_SCHED != 0x0902U) {
+    return 26;
   }
   if (ZZ9K_SERVICE_FLAG_CODEC_DECOMPRESS_STREAM != (1U << 23)) {
     return 22;

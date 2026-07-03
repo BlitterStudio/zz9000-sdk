@@ -166,7 +166,8 @@ enum ZZ9KOpcode {
   ZZ9K_OP_CRYPTO_VERIFY    = ZZ9K_SERVICE_CRYPTO + 0x04,
 
   ZZ9K_OP_DIAG_READ = ZZ9K_SERVICE_DIAG + 0x00,
-  ZZ9K_OP_DIAG_TIMING = ZZ9K_SERVICE_DIAG + 0x01
+  ZZ9K_OP_DIAG_TIMING = ZZ9K_SERVICE_DIAG + 0x01,
+  ZZ9K_OP_DIAG_SCHED = ZZ9K_SERVICE_DIAG + 0x02
 };
 
 enum ZZ9KCapability {
@@ -331,6 +332,19 @@ typedef struct ZZ9KDiagTimingPayload {
   uint8_t max_opcode[4];
   uint8_t max_us[4];
 } ZZ9KDiagTimingPayload;
+
+/* DIAG_SCHED (0x0902): dual-core scheduler observability. core1_online is 1 when
+ * the core-1 worker is up (else single-core fallback); tasks_on_core{1,0} count
+ * crypto tasks executed on each core (actual execution core, not dispatch). */
+typedef struct ZZ9KDiagSchedPayload {
+  uint8_t version[4];
+  uint8_t core1_online[4];
+  uint8_t tasks_on_core1[4];
+  uint8_t tasks_on_core0[4];
+} ZZ9KDiagSchedPayload;
+
+typedef char ZZ9KDiagSchedPayload_must_be_16_bytes[
+  (sizeof(ZZ9KDiagSchedPayload) == 16U) ? 1 : -1];
 
 typedef struct ZZ9KQueryServicePayload {
   uint8_t service_id[4];
