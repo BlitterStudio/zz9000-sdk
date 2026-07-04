@@ -1,0 +1,122 @@
+#!/bin/sh
+# Cross-repo drift guard for the hand-mirrored mailbox ABI constants.
+#
+# The SDK (include/zz9k/abi.h) defines ZZ9K_OP_* / ZZ9K_SERVICE_* and the
+# firmware (ZZ9000OS/src/sdk_mailbox.h) mirrors them as SDK_OP_* / SDK_SERVICE_*
+# BY HAND across two repos. A silent divergence (same name, different opcode)
+# misdispatches on hardware and is invisible to the host suite. This script
+# compares every op/service NAME present in BOTH headers and fails on any
+# numeric mismatch. Names present in only one side are reported but allowed:
+# the firmware legitimately implements a subset (no CANCEL/GFX/MODULE/VENDOR).
+#
+# Usage:
+#   scripts/check-abi-mirror.sh [SDK_ABI_H] [FIRMWARE_SDK_MAILBOX_H]
+# Defaults assume the firmware repo is a sibling checkout of the SDK repo, or
+# is pointed at by $ZZ9K_FIRMWARE_HEADER.
+#
+# Exit: 0 = in sync, 1 = mismatch(es), 2 = a header could not be read.
+set -eu
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+SDK_ABI=${1:-"$SCRIPT_DIR/../include/zz9k/abi.h"}
+FW_HDR=${2:-${ZZ9K_FIRMWARE_HEADER:-"$SCRIPT_DIR/../../zz9000-firmware/ZZ9000_proto.sdk/ZZ9000OS/src/sdk_mailbox.h"}}
+
+for f in "$SDK_ABI" "$FW_HDR"; do
+  if [ ! -r "$f" ]; then
+    echo "check-abi-mirror: cannot read header: $f" >&2
+    echo "  pass paths explicitly, or set \$ZZ9K_FIRMWARE_HEADER" >&2
+    exit 2
+  fi
+done
+
+echo "check-abi-mirror: SDK  = $SDK_ABI"
+echo "check-abi-mirror: FW   = $FW_HDR"
+
+# The SDK file is read first (FNR==NR) so all ZZ9K_SERVICE_* bases are known
+# before the firmware file is parsed and the ops are resolved in END. Pure
+# POSIX awk (no strtonum / 3-arg match) so it runs under mawk and gawk alike.
+awk '
+function hex2dec(s,   n,i,c,d) {
+  sub(/^0[xX]/, "", s); sub(/[uUlL]+$/, "", s); n = 0
+  if (s == "") return -1
+  for (i = 1; i <= length(s); i++) {
+    c = tolower(substr(s, i, 1)); d = index("0123456789abcdef", c) - 1
+    if (d < 0) return -1
+    n = n * 16 + d
+  }
+  return n
+}
+# ---- SDK header (first file) ----
+FNR == NR {
+  s = $0; gsub(/[,;].*$/, "", s); gsub(/[ \t]+/, " ", s)
+  n = split(s, a, " ")
+  # ZZ9K_SERVICE_<NAME> = 0x<hex>   (flags use "1U << N" -> no 0x token, skipped)
+  if (s ~ /ZZ9K_SERVICE_[A-Z0-9_]+ = 0x/) {
+    name = ""; val = ""
+    for (i = 1; i <= n; i++) {
+      if (a[i] ~ /^ZZ9K_SERVICE_/) name = substr(a[i], 14)
+      else if (a[i] ~ /^0x/) val = a[i]
+    }
+    if (name != "" && name !~ /^FLAG_/ && val != "") sdksvc[name] = hex2dec(val)
+  }
+  # ZZ9K_OP_<NAME> = ZZ9K_SERVICE_<BASE> + 0x<off>
+  if (s ~ /ZZ9K_OP_[A-Z0-9_]+ = ZZ9K_SERVICE_[A-Z0-9_]+ \+ 0x/) {
+    op = ""; base = ""; off = ""
+    for (i = 1; i <= n; i++) {
+      if (a[i] ~ /^ZZ9K_OP_/) op = substr(a[i], 9)
+      else if (a[i] ~ /^ZZ9K_SERVICE_/) base = substr(a[i], 14)
+      else if (a[i] ~ /^0x/) off = a[i]
+    }
+    if (op != "" && base != "" && off != "") { opbase[op] = base; opoff[op] = off }
+  }
+  next
+}
+# ---- firmware header (second file) ----
+/^[ \t]*#[ \t]*define[ \t]+SDK_OP_[A-Z0-9_]+[ \t]+0x/ {
+  s = $0; gsub(/[ \t]+/, " ", s); n = split(s, a, " ")
+  for (i = 1; i <= n; i++) if (a[i] ~ /^SDK_OP_/) { name = substr(a[i], 8); break }
+  for (i = 1; i <= n; i++) if (a[i] ~ /^0x/) { fwop[name] = hex2dec(a[i]); break }
+}
+/^[ \t]*#[ \t]*define[ \t]+SDK_SERVICE_[A-Z0-9_]+[ \t]+0x/ {
+  s = $0; gsub(/[ \t]+/, " ", s); n = split(s, a, " ")
+  for (i = 1; i <= n; i++) if (a[i] ~ /^SDK_SERVICE_/) { name = substr(a[i], 13); break }
+  if (name ~ /^FLAG_/) next
+  for (i = 1; i <= n; i++) if (a[i] ~ /^0x/) { fwsvc[name] = hex2dec(a[i]); break }
+}
+END {
+  mism = 0; common = 0; sdkonly = 0; fwonly = 0
+  # Resolve SDK ops to absolute values now that all bases are known.
+  for (op in opbase) {
+    b = opbase[op]
+    if (!(b in sdksvc)) { printf("  ! SDK op ZZ9K_OP_%s references unknown base ZZ9K_SERVICE_%s\n", op, b); mism++; continue }
+    sdkop[op] = sdksvc[b] + hex2dec(opoff[op])
+  }
+  # Compare ops.
+  for (op in sdkop) {
+    if (op in fwop) {
+      common++
+      if (sdkop[op] != fwop[op]) {
+        printf("  MISMATCH  op %-26s SDK ZZ9K_OP_%s=0x%04x  FW SDK_OP_%s=0x%04x\n",
+               op, op, sdkop[op], op, fwop[op]); mism++
+      }
+    } else { sdkonly++; sdkonly_names = sdkonly_names " " op }
+  }
+  for (op in fwop) if (!(op in sdkop)) { fwonly++; fwonly_names = fwonly_names " " op }
+  # Compare service bases.
+  for (sv in sdksvc) {
+    if (sv in fwsvc) {
+      common++
+      if (sdksvc[sv] != fwsvc[sv]) {
+        printf("  MISMATCH  service %-20s SDK ZZ9K_SERVICE_%s=0x%04x  FW SDK_SERVICE_%s=0x%04x\n",
+               sv, sv, sdksvc[sv], sv, fwsvc[sv]); mism++
+      }
+    }
+  }
+  printf("check-abi-mirror: %d common name(s) compared, %d SDK-only, %d firmware-only op(s)\n",
+         common, sdkonly, fwonly)
+  if (sdkonly > 0) printf("  SDK-only ops (firmware does not implement):%s\n", sdkonly_names)
+  if (fwonly  > 0) printf("  firmware-only ops (not in SDK abi.h):%s\n", fwonly_names)
+  if (mism > 0) { printf("check-abi-mirror: FAIL — %d mismatch(es)\n", mism); exit 1 }
+  printf("check-abi-mirror: OK — no drift\n")
+}
+' "$SDK_ABI" "$FW_HDR"
