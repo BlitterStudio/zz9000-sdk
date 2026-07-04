@@ -31,6 +31,28 @@ jobs:
             echo "$files" | xargs shellcheck --severity=error
           fi
 
+  abi-mirror:
+    name: ABI mirror check (SDK vs firmware)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout SDK
+        uses: actions/checkout@v4
+
+      # The firmware repo is public; clone only the one header we compare against
+      # (shallow, no history) so the check sees the current firmware opcodes.
+      - name: Checkout firmware (for its mailbox ABI header)
+        uses: actions/checkout@v4
+        with:
+          repository: BlitterStudio/zz9000-firmware
+          path: zz9000-firmware
+          fetch-depth: 1
+
+      - name: Compare mailbox ABI constants
+        run: |
+          sh scripts/check-abi-mirror.sh \
+            include/zz9k/abi.h \
+            zz9000-firmware/ZZ9000_proto.sdk/ZZ9000OS/src/sdk_mailbox.h
+
   host-tests:
     name: host tests (cmake + ctest)
     runs-on: ubuntu-24.04

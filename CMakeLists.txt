@@ -1095,6 +1095,18 @@ target_include_directories(mp3_tool_logic_test
 target_link_libraries(mp3_tool_logic_test PRIVATE zz9k_host)
 add_test(NAME mp3_tool_logic_test COMMAND mp3_tool_logic_test)
 
+# Self-test for scripts/check-abi-mirror.sh (the SDK<->firmware opcode drift
+# guard). Fixture-based, so it needs neither the firmware repo nor hardware; the
+# real cross-repo check runs in its own CI job. POSIX-shell only, hence UNIX-gated
+# so a native-Windows ctest run does not trip over a missing `sh`.
+if(UNIX)
+  add_test(
+    NAME check_abi_mirror_selftest
+    COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/check-abi-mirror-selftest.sh
+                ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-abi-mirror.sh
+  )
+endif()
+
 add_executable(zz9k_info
   tools/zz9k-info.c
 )
