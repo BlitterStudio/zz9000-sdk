@@ -25,7 +25,9 @@ support libraries have been removed from this branch.
 
 Start new AmigaOS-side work with [`docs/zz9k-library.md`](docs/zz9k-library.md).
 Firmware-side service metadata is described in
-[`docs/zz9k-modules.md`](docs/zz9k-modules.md).
+[`docs/zz9k-modules.md`](docs/zz9k-modules.md); conventions for third-party and
+loadable-module services in the `0x8000+` range are in
+[`docs/zz9k-vendor-services.md`](docs/zz9k-vendor-services.md).
 
 Hardware-accelerated TLS — the ZZ9000 crypto-offload OpenSSL provider, shipped
 as a drop-in `amissl.library` so every AmiSSL application gets faster
