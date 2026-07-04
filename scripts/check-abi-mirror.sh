@@ -2,14 +2,15 @@
 # Cross-repo drift guard for the hand-mirrored mailbox ABI constants.
 #
 # The SDK (include/zz9k/abi.h) defines ZZ9K_OP_* / ZZ9K_SERVICE_* /
-# ZZ9K_SERVICE_FLAG_* and the firmware (ZZ9000OS/src/sdk_mailbox.h) mirrors them
-# as SDK_OP_* / SDK_SERVICE_* / SDK_SERVICE_FLAG_* BY HAND across two repos. A
-# silent divergence (same name, different opcode or flag bit) misdispatches or
-# mis-advertises capabilities on hardware and is invisible to the host suite.
-# This script compares every op/service/flag NAME present in BOTH headers and
-# fails on any numeric mismatch. Names present in only one side are reported but
-# allowed: the firmware legitimately implements a subset (no CANCEL/GFX/MODULE/
-# VENDOR ops, and fewer capability flags than the SDK enumerates).
+# ZZ9K_SERVICE_FLAG_* / ZZ9K_CAP_* and the firmware (ZZ9000OS/src/sdk_mailbox.h)
+# mirrors them as SDK_OP_* / SDK_SERVICE_* / SDK_SERVICE_FLAG_* / SDK_CAP_* BY
+# HAND across two repos. A silent divergence (same name, different opcode, flag
+# bit, or capability bit) misdispatches or mis-advertises capabilities on
+# hardware and is invisible to the host suite. This script compares every
+# op/service/flag/cap NAME present in BOTH headers and fails on any numeric
+# mismatch. Names present in only one side are reported but allowed: the firmware
+# legitimately implements a subset (no CANCEL/GFX/MODULE/VENDOR ops, and fewer
+# capability flags and cap bits than the SDK enumerates).
 #
 # Usage:
 #   scripts/check-abi-mirror.sh [SDK_ABI_H] [FIRMWARE_SDK_MAILBOX_H]
@@ -80,6 +81,16 @@ FNR == NR {
     }
     if (name != "" && bit ~ /^[0-9]+$/) sdkflag[name] = bit + 0
   }
+  # ZZ9K_CAP_<NAME> = 1U << <bit>   (name at 10: "ZZ9K_CAP_"; global caps board
+  # advertises in QUERY_CAPS, mirrored firmware-side as SDK_CAP_<NAME>)
+  if (s ~ /ZZ9K_CAP_[A-Z0-9_]+ = 1U? << [0-9]+/) {
+    name = ""; bit = ""
+    for (i = 1; i <= n; i++) {
+      if (a[i] ~ /^ZZ9K_CAP_/) name = substr(a[i], 10)
+      else if (a[i] == "<<" && (i + 1) <= n) bit = a[i + 1]
+    }
+    if (name != "" && bit ~ /^[0-9]+$/) sdkcap[name] = bit + 0
+  }
   next
 }
 # ---- firmware header (second file) ----
@@ -103,6 +114,18 @@ FNR == NR {
     else if (a[i] == "<<" && (i + 1) <= n) bit = a[i + 1]
   }
   if (name != "" && bit ~ /^[0-9]+$/) fwflag[name] = bit + 0
+}
+# #define SDK_CAP_<NAME> (1U << <bit>)   (name at 9: "SDK_CAP_"). Composite
+# aliases like SDK_*_CAPABILITY_BITS do not start with SDK_CAP_ and carry no
+# "<<", so this pattern skips them and only captures the single-bit defines.
+/^[ \t]*#[ \t]*define[ \t]+SDK_CAP_[A-Z0-9_]+[ \t]+.*<</ {
+  s = $0; gsub(/[()]/, " ", s); gsub(/[ \t]+/, " ", s); n = split(s, a, " ")
+  name = ""; bit = ""
+  for (i = 1; i <= n; i++) {
+    if (a[i] ~ /^SDK_CAP_/) name = substr(a[i], 9)
+    else if (a[i] == "<<" && (i + 1) <= n) bit = a[i + 1]
+  }
+  if (name != "" && bit ~ /^[0-9]+$/) fwcap[name] = bit + 0
 }
 END {
   mism = 0; common = 0; sdkonly = 0; fwonly = 0
@@ -145,8 +168,20 @@ END {
       }
     }
   }
-  printf("check-abi-mirror: %d common name(s) compared (incl. %d service flag[s]), %d SDK-only, %d firmware-only op(s)\n",
-         common, flagcommon, sdkonly, fwonly)
+  # Compare global capability bits (ZZ9K_CAP_* vs SDK_CAP_*), by NAME. Firmware
+  # advertises a subset (no MODULES/GFX_OPS/STORAGE_OPS) -> SDK-only caps allowed.
+  capcommon = 0
+  for (cp in sdkcap) {
+    if (cp in fwcap) {
+      common++; capcommon++
+      if (sdkcap[cp] != fwcap[cp]) {
+        printf("  MISMATCH  cap %-25s SDK ZZ9K_CAP_%s=1<<%d  FW SDK_CAP_%s=1<<%d\n",
+               cp, cp, sdkcap[cp], cp, fwcap[cp]); mism++
+      }
+    }
+  }
+  printf("check-abi-mirror: %d common name(s) compared (incl. %d service flag[s], %d cap bit[s]), %d SDK-only, %d firmware-only op(s)\n",
+         common, flagcommon, capcommon, sdkonly, fwonly)
   if (sdkonly > 0) printf("  SDK-only ops (firmware does not implement):%s\n", sdkonly_names)
   if (fwonly  > 0) printf("  firmware-only ops (not in SDK abi.h):%s\n", fwonly_names)
   if (mism > 0) { printf("check-abi-mirror: FAIL — %d mismatch(es)\n", mism); exit 1 }
