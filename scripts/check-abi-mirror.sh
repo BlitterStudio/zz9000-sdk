@@ -1,13 +1,15 @@
 #!/bin/sh
 # Cross-repo drift guard for the hand-mirrored mailbox ABI constants.
 #
-# The SDK (include/zz9k/abi.h) defines ZZ9K_OP_* / ZZ9K_SERVICE_* and the
-# firmware (ZZ9000OS/src/sdk_mailbox.h) mirrors them as SDK_OP_* / SDK_SERVICE_*
-# BY HAND across two repos. A silent divergence (same name, different opcode)
-# misdispatches on hardware and is invisible to the host suite. This script
-# compares every op/service NAME present in BOTH headers and fails on any
-# numeric mismatch. Names present in only one side are reported but allowed:
-# the firmware legitimately implements a subset (no CANCEL/GFX/MODULE/VENDOR).
+# The SDK (include/zz9k/abi.h) defines ZZ9K_OP_* / ZZ9K_SERVICE_* /
+# ZZ9K_SERVICE_FLAG_* and the firmware (ZZ9000OS/src/sdk_mailbox.h) mirrors them
+# as SDK_OP_* / SDK_SERVICE_* / SDK_SERVICE_FLAG_* BY HAND across two repos. A
+# silent divergence (same name, different opcode or flag bit) misdispatches or
+# mis-advertises capabilities on hardware and is invisible to the host suite.
+# This script compares every op/service/flag NAME present in BOTH headers and
+# fails on any numeric mismatch. Names present in only one side are reported but
+# allowed: the firmware legitimately implements a subset (no CANCEL/GFX/MODULE/
+# VENDOR ops, and fewer capability flags than the SDK enumerates).
 #
 # Usage:
 #   scripts/check-abi-mirror.sh [SDK_ABI_H] [FIRMWARE_SDK_MAILBOX_H]
@@ -69,6 +71,15 @@ FNR == NR {
     }
     if (op != "" && base != "" && off != "") { opbase[op] = base; opoff[op] = off }
   }
+  # ZZ9K_SERVICE_FLAG_<NAME> = 1U << <bit>   (name at 19: "ZZ9K_SERVICE_FLAG_")
+  if (s ~ /ZZ9K_SERVICE_FLAG_[A-Z0-9_]+ = 1U? << [0-9]+/) {
+    name = ""; bit = ""
+    for (i = 1; i <= n; i++) {
+      if (a[i] ~ /^ZZ9K_SERVICE_FLAG_/) name = substr(a[i], 19)
+      else if (a[i] == "<<" && (i + 1) <= n) bit = a[i + 1]
+    }
+    if (name != "" && bit ~ /^[0-9]+$/) sdkflag[name] = bit + 0
+  }
   next
 }
 # ---- firmware header (second file) ----
@@ -82,6 +93,16 @@ FNR == NR {
   for (i = 1; i <= n; i++) if (a[i] ~ /^SDK_SERVICE_/) { name = substr(a[i], 13); break }
   if (name ~ /^FLAG_/) next
   for (i = 1; i <= n; i++) if (a[i] ~ /^0x/) { fwsvc[name] = hex2dec(a[i]); break }
+}
+# #define SDK_SERVICE_FLAG_<NAME> (1U << <bit>)   (name at 18: "SDK_SERVICE_FLAG_")
+/^[ \t]*#[ \t]*define[ \t]+SDK_SERVICE_FLAG_[A-Z0-9_]+[ \t]+.*<</ {
+  s = $0; gsub(/[()]/, " ", s); gsub(/[ \t]+/, " ", s); n = split(s, a, " ")
+  name = ""; bit = ""
+  for (i = 1; i <= n; i++) {
+    if (a[i] ~ /^SDK_SERVICE_FLAG_/) name = substr(a[i], 18)
+    else if (a[i] == "<<" && (i + 1) <= n) bit = a[i + 1]
+  }
+  if (name != "" && bit ~ /^[0-9]+$/) fwflag[name] = bit + 0
 }
 END {
   mism = 0; common = 0; sdkonly = 0; fwonly = 0
@@ -112,8 +133,20 @@ END {
       }
     }
   }
-  printf("check-abi-mirror: %d common name(s) compared, %d SDK-only, %d firmware-only op(s)\n",
-         common, sdkonly, fwonly)
+  # Compare service-flag bit positions (per-name; the same bit is legitimately
+  # reused across differently-named flags, so comparison is by NAME only).
+  flagcommon = 0
+  for (fl in sdkflag) {
+    if (fl in fwflag) {
+      common++; flagcommon++
+      if (sdkflag[fl] != fwflag[fl]) {
+        printf("  MISMATCH  flag %-24s SDK ...FLAG_%s=1<<%d  FW ...FLAG_%s=1<<%d\n",
+               fl, fl, sdkflag[fl], fl, fwflag[fl]); mism++
+      }
+    }
+  }
+  printf("check-abi-mirror: %d common name(s) compared (incl. %d service flag[s]), %d SDK-only, %d firmware-only op(s)\n",
+         common, flagcommon, sdkonly, fwonly)
   if (sdkonly > 0) printf("  SDK-only ops (firmware does not implement):%s\n", sdkonly_names)
   if (fwonly  > 0) printf("  firmware-only ops (not in SDK abi.h):%s\n", fwonly_names)
   if (mism > 0) { printf("check-abi-mirror: FAIL — %d mismatch(es)\n", mism); exit 1 }

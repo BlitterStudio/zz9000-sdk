@@ -27,24 +27,45 @@ enum ZZ9KOpcode {
   ZZ9K_OP_PING = ZZ9K_SERVICE_CORE + 0x02,
   ZZ9K_OP_DECODE_JPEG = ZZ9K_SERVICE_IMAGE + 0x01
 };
+enum ZZ9KServiceFlags {
+  ZZ9K_SERVICE_FLAG_FIRMWARE = 1U << 0,
+  ZZ9K_SERVICE_FLAG_IMAGE_JPEG = 1U << 16,
+  ZZ9K_SERVICE_FLAG_IMAGE_PNG = 1U << 17
+};
 EOF
 
-# Clean firmware mirror (all common names match).
+# Clean firmware mirror (all common names match). Firmware implements only a
+# subset of the SDK flags (no IMAGE_PNG) — subset is allowed, not a drift.
 cat > "$WORK/fw_ok.h" <<'EOF'
 #define SDK_SERVICE_CORE   0x0000U
 #define SDK_SERVICE_IMAGE  0x0400U
 #define SDK_OP_NOP         0x0000U
 #define SDK_OP_PING        0x0002U
 #define SDK_OP_DECODE_JPEG 0x0401U
+#define SDK_SERVICE_FLAG_FIRMWARE   (1U << 0)
+#define SDK_SERVICE_FLAG_IMAGE_JPEG (1U << 16)
 EOF
 
-# Drifted firmware mirror (DECODE_JPEG opcode wrong).
+# Drifted firmware mirror (DECODE_JPEG opcode wrong; flags all match).
 cat > "$WORK/fw_drift.h" <<'EOF'
 #define SDK_SERVICE_CORE   0x0000U
 #define SDK_SERVICE_IMAGE  0x0400U
 #define SDK_OP_NOP         0x0000U
 #define SDK_OP_PING        0x0002U
 #define SDK_OP_DECODE_JPEG 0x0499U
+#define SDK_SERVICE_FLAG_FIRMWARE   (1U << 0)
+#define SDK_SERVICE_FLAG_IMAGE_JPEG (1U << 16)
+EOF
+
+# Flag-drifted firmware mirror (ops match; IMAGE_JPEG flag at wrong bit).
+cat > "$WORK/fw_flagdrift.h" <<'EOF'
+#define SDK_SERVICE_CORE   0x0000U
+#define SDK_SERVICE_IMAGE  0x0400U
+#define SDK_OP_NOP         0x0000U
+#define SDK_OP_PING        0x0002U
+#define SDK_OP_DECODE_JPEG 0x0401U
+#define SDK_SERVICE_FLAG_FIRMWARE   (1U << 0)
+#define SDK_SERVICE_FLAG_IMAGE_JPEG (1U << 18)
 EOF
 
 fail=0
@@ -77,6 +98,18 @@ else
     echo "selftest: case 3 (missing) PASS"
   else
     echo "selftest: case 3 (missing) FAIL — exit $rc, expected 2"; cat "$WORK/out3"; fail=1
+  fi
+fi
+
+# Case 4: planted service-flag drift -> exit 1 and the flag mismatch is reported.
+if sh "$CHECK" "$WORK/abi.h" "$WORK/fw_flagdrift.h" >"$WORK/out4" 2>&1; then
+  echo "selftest: case 4 (flag drift) FAIL — expected non-zero exit, got 0"; cat "$WORK/out4"; fail=1
+else
+  rc=$?
+  if [ "$rc" -eq 1 ] && grep -q "MISMATCH  flag IMAGE_JPEG" "$WORK/out4"; then
+    echo "selftest: case 4 (flag drift) PASS"
+  else
+    echo "selftest: case 4 (flag drift) FAIL — exit $rc, expected 1 + IMAGE_JPEG flag mismatch"; cat "$WORK/out4"; fail=1
   fi
 fi
 
