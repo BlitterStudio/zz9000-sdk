@@ -40,6 +40,11 @@
 #define ZZ9K_BENCH_LOCAL_SURFACE_BYTES \
   (ZZ9K_BENCH_LOCAL_SURFACE_WIDTH * ZZ9K_BENCH_LOCAL_SURFACE_HEIGHT * \
    ZZ9K_BENCH_LOCAL_SURFACE_BPP)
+/* 68k CPU -> shared-buffer (Zorro) write bandwidth probe. Two block sizes so
+ * the small case shows per-transfer overhead and the large case shows the
+ * sustained Zorro write ceiling an offload broadcast actually pays. */
+#define ZZ9K_BENCH_CPU_WRITE_SMALL_BYTES (16UL * 1024UL)
+#define ZZ9K_BENCH_CPU_WRITE_LARGE_BYTES (256UL * 1024UL)
 #define ZZ9K_BENCH_PING_PIPE_DEPTH 16U
 #define ZZ9K_BENCH_CRYPTO_PIPE_DEPTH 16U
 #define ZZ9K_BENCH_TLS_RECORD_BYTES (16UL * 1024UL)
@@ -808,6 +813,101 @@ out:
   }
   if (src.handle != 0 && src.handle != ZZ9K_INVALID_HANDLE) {
     zz9k_free_shared(ctx, src.handle);
+  }
+  return rc;
+}
+
+/*
+ * Time the 68k CPU doing a plain memcpy from local RAM into the shared
+ * (Zorro-mapped) buffer. Unlike "ARM mem copy" (which runs on the card), this
+ * is the cost the Amiga side pays to push bytes across the bus — the real per
+ * frame budget for any 68k->ARM broadcast protocol. src[0] is stirred each
+ * iteration so the copy cannot be hoisted, and the tail byte is checked after
+ * the timed loop to prove the writes landed.
+ */
+static int zz9k_bench_run_cpu_write_block(const ZZ9KBenchTimer *timer,
+                                          uint32_t iterations,
+                                          uint32_t ticks_per_second,
+                                          const ZZ9KSharedBuffer *dst,
+                                          uint8_t *src,
+                                          uint32_t block_bytes,
+                                          const char *label)
+{
+  volatile uint8_t *data;
+  ZZ9KBenchTick start_ticks;
+  ZZ9KBenchTick write_ticks;
+  uint32_t i;
+
+  if (dst->length < block_bytes) {
+    printf("%s: shared buffer too small\n", label);
+    return 1;
+  }
+
+  data = (volatile uint8_t *)dst->data;
+  start_ticks = zz9k_bench_timer_now(timer);
+  for (i = 0; i < iterations; i++) {
+    src[0] = (uint8_t)i;
+    memcpy((void *)data, src, block_bytes);
+  }
+  write_ticks = zz9k_bench_elapsed_ticks(start_ticks,
+                                         zz9k_bench_timer_now(timer));
+
+  if (data[block_bytes - 1U] != src[block_bytes - 1U]) {
+    printf("%s: write verification failed\n", label);
+    return 1;
+  }
+
+  zz9k_bench_print_transfer(label, block_bytes * iterations,
+                            write_ticks, ticks_per_second);
+  return 0;
+}
+
+static int zz9k_bench_run_cpu_shared_write(ZZ9KContext *ctx,
+                                           const ZZ9KBenchTimer *timer,
+                                           uint32_t iterations,
+                                           uint32_t ticks_per_second)
+{
+  static uint8_t local_src[ZZ9K_BENCH_CPU_WRITE_LARGE_BYTES];
+  ZZ9KSharedBuffer dst;
+  uint32_t i;
+  int status;
+  int rc = 1;
+
+  memset(&dst, 0, sizeof(dst));
+
+  status = zz9k_alloc_shared(ctx, ZZ9K_BENCH_CPU_WRITE_LARGE_BYTES, 64U, 0,
+                             &dst);
+  if (status != ZZ9K_STATUS_OK) {
+    printf("cpu write alloc: %s (%d)\n", zz9k_status_name(status), status);
+    goto out;
+  }
+  if (!dst.data) {
+    printf("cpu write: shared buffer is not CPU-visible\n");
+    goto out;
+  }
+
+  for (i = 0; i < (uint32_t)sizeof(local_src); i++) {
+    local_src[i] = (uint8_t)((i * 37U + 11U) & 0xffU);
+  }
+
+  printf("cpu write:        68k CPU memcpy local RAM -> shared buffer\n");
+
+  if (zz9k_bench_run_cpu_write_block(
+          timer, iterations, ticks_per_second, &dst, local_src,
+          ZZ9K_BENCH_CPU_WRITE_SMALL_BYTES, "CPU shared write 16K") != 0) {
+    goto out;
+  }
+  if (zz9k_bench_run_cpu_write_block(
+          timer, iterations, ticks_per_second, &dst, local_src,
+          ZZ9K_BENCH_CPU_WRITE_LARGE_BYTES, "CPU shared write 256K") != 0) {
+    goto out;
+  }
+
+  rc = 0;
+
+out:
+  if (dst.handle != 0 && dst.handle != ZZ9K_INVALID_HANDLE) {
+    zz9k_free_shared(ctx, dst.handle);
   }
   return rc;
 }
@@ -1813,6 +1913,10 @@ int main(int argc, char **argv)
     goto out;
   }
   if (zz9k_bench_run_memory(ctx, &timer, iterations, ticks_per_second) != 0) {
+    goto out;
+  }
+  if (zz9k_bench_run_cpu_shared_write(ctx, &timer, iterations,
+                                      ticks_per_second) != 0) {
     goto out;
   }
   if (zz9k_bench_run_local_surface_copy(ctx, &timer, iterations,

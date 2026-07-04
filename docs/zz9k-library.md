@@ -339,6 +339,17 @@ The `zz9k-bench` tool measures a 1280x720 BGRA8888 ARM-local surface copy as
 the benchmark fills and copies SDK surfaces entirely on the ARM/DDR3 side and
 does not require those pixels to be mapped into m68k address space.
 
+The complementary direction is measured by the `CPU shared write 16K` and
+`CPU shared write 256K` lines: the Amiga's own CPU running `memcpy` from local
+RAM into a shared buffer over the Zorro bus. Unlike `ARM local copy` (which
+never crosses the bus) and `ARM mem copy` (which runs on the card), these lines
+capture the bandwidth the 68k side actually pays to push bytes to the card —
+the real per-frame budget for any 68k→ARM broadcast protocol (game state,
+offload payloads). The small block exposes per-transfer overhead; the large
+block shows the sustained Zorro write ceiling. Expect these to be far slower
+than the card-local lines, and to vary strongly with the host's Zorro
+implementation (Zorro II vs III, accelerator bus bridges).
+
 ## Image Scaling
 
 `ZZ9KScaleImage()` scales a same-format source surface into another SDK surface
