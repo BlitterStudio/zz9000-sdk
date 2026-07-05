@@ -755,6 +755,18 @@ target_include_directories(archive_tool_logic_test
 target_link_libraries(archive_tool_logic_test PRIVATE zz9k_host zz9k_lha_unix)
 add_test(NAME archive_tool_logic_test COMMAND archive_tool_logic_test)
 
+add_executable(lha_decode_accept_test
+  tests/lha_decode_accept_test.c
+)
+
+target_include_directories(lha_decode_accept_test
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools/lha-unix
+)
+
+target_link_libraries(lha_decode_accept_test PRIVATE zz9k_lha_unix)
+add_test(NAME lha_decode_accept_test COMMAND lha_decode_accept_test)
+
 add_executable(libdecode_tool_source_test
   tests/libdecode_tool_source_test.c
 )

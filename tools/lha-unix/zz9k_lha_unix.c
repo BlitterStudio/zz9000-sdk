@@ -12,6 +12,26 @@
 extern int zz9k_lha_unix_error;
 
 int
+zz9k_lha_unix_decode_accept(int had_error,
+                            uint32_t read_size,
+                            uint32_t packed_size,
+                            int check_crc,
+                            uint16_t actual_crc,
+                            uint16_t expected_crc)
+{
+    if (had_error) {
+        return 0;
+    }
+    if (check_crc) {
+        /* CRC-16 over the output is authoritative: accept regardless of how
+         * many packed bytes the decoder consumed. */
+        return actual_crc == expected_crc ? 1 : 0;
+    }
+    /* No CRC to lean on: fall back to the read-size sanity check. */
+    return read_size == packed_size ? 1 : 0;
+}
+
+int
 zz9k_lha_unix_decode_method(FILE *input,
                             FILE *output,
                             uint32_t original_size,
@@ -45,13 +65,9 @@ zz9k_lha_unix_decode_method(FILE *input,
     if (actual_crc) {
         *actual_crc = (uint16_t)crc;
     }
-    if (zz9k_lha_unix_error || read_size != (off_t)packed_size) {
-        return 0;
-    }
-    if (check_crc && (uint16_t)crc != expected_crc) {
-        return 0;
-    }
-    return 1;
+    return zz9k_lha_unix_decode_accept(zz9k_lha_unix_error,
+                                       (uint32_t)read_size, packed_size,
+                                       check_crc, (uint16_t)crc, expected_crc);
 }
 
 int
