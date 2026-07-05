@@ -4711,7 +4711,20 @@ static int zz9k_archive_lha_method_supported(uint32_t method)
          method == ZZ9K_ARCHIVE_LHA_METHOD_LH7;
 }
 
+static uint32_t zz9k_archive_lha_method_to_compression(uint32_t method)
+{
+  switch (method) {
+  case ZZ9K_ARCHIVE_LHA_METHOD_LH1: return ZZ9K_COMPRESSION_LH1;
+  case ZZ9K_ARCHIVE_LHA_METHOD_LH5: return ZZ9K_COMPRESSION_LH5;
+  case ZZ9K_ARCHIVE_LHA_METHOD_LH6: return ZZ9K_COMPRESSION_LH6;
+  case ZZ9K_ARCHIVE_LHA_METHOD_LH7: return ZZ9K_COMPRESSION_LH7;
+  default: return 0U;
+  }
+}
+
 static int zz9k_archive_lha_decode_method_to_file(
+    ZZ9KContext *ctx,
+    const ZZ9KServiceInfo *service,
     const uint8_t *data,
     uint32_t length,
     const ZZ9KArchiveEntry *entry,
@@ -4726,6 +4739,37 @@ static int zz9k_archive_lha_decode_method_to_file(
       !zz9k_archive_lha_method_supported(entry->method)) {
     return 0;
   }
+
+  if (ctx && service &&
+      zz9k_archive_lha_method_supported(entry->method)) {
+    uint32_t algo = zz9k_archive_lha_method_to_compression(entry->method);
+    if (algo != 0U && zz9k_archive_service_supports(service, algo)) {
+      uint8_t *decoded = 0;
+      ZZ9KDecompressResult res;
+      if (zz9k_archive_decompress_to_memory(
+              ctx, service, algo, data + entry->data_offset,
+              entry->compressed_size, entry->uncompressed_size,
+              &decoded, &res)) {
+        int crc_ok = 1;
+        if ((entry->flags & ZZ9K_ARCHIVE_ENTRY_FLAG_CRC32) != 0U) {
+          crc_ok = ((uint16_t)res.checksum == (uint16_t)entry->crc32);
+        }
+        if (crc_ok && res.bytes_written == entry->uncompressed_size) {
+          int wrote_ok = 1;
+          if (output && entry->uncompressed_size != 0U &&
+              fwrite(decoded, 1U, entry->uncompressed_size, output) !=
+                  entry->uncompressed_size) {
+            wrote_ok = 0;
+          }
+          free(decoded);
+          if (wrote_ok) return 1;   /* offloaded */
+        } else {
+          free(decoded);      /* CRC/size miss -> fall back to software */
+        }
+      }
+    }
+  }
+
   input = tmpfile();
   if (!input) {
     printf("lha temporary input failed: %s\n", entry->name);
@@ -4751,22 +4795,33 @@ static int zz9k_archive_lha_decode_method_to_file(
       (int)entry->method);
   fclose(input);
   if (!ok) {
-    printf("lha lh%lu decode failed: %s crc=0x%04x expected=0x%04lx\n",
-           (unsigned long)entry->method, entry->name,
-           (unsigned int)decoded_crc, (unsigned long)entry->crc32);
+    if ((entry->flags & ZZ9K_ARCHIVE_ENTRY_FLAG_CRC32) != 0U) {
+      printf("lha lh%lu decode failed: %s crc=0x%04x expected=0x%04lx\n",
+             (unsigned long)entry->method, entry->name,
+             (unsigned int)decoded_crc, (unsigned long)entry->crc32);
+    } else {
+      printf("lha lh%lu decode failed: %s (no stored CRC; size/stream "
+             "check)\n",
+             (unsigned long)entry->method, entry->name);
+    }
   }
   return ok;
 }
 
-static int zz9k_archive_lha_decode_lh5_to_file(const uint8_t *data,
+static int zz9k_archive_lha_decode_lh5_to_file(ZZ9KContext *ctx,
+                                               const ZZ9KServiceInfo *service,
+                                               const uint8_t *data,
                                                uint32_t length,
                                                const ZZ9KArchiveEntry *entry,
                                                FILE *output)
 {
-  return zz9k_archive_lha_decode_method_to_file(data, length, entry, output);
+  return zz9k_archive_lha_decode_method_to_file(ctx, service, data, length,
+                                                entry, output);
 }
 
-static int zz9k_archive_extract_lha_lh5(const uint8_t *data,
+static int zz9k_archive_extract_lha_lh5(ZZ9KContext *ctx,
+                                        const ZZ9KServiceInfo *service,
+                                        const uint8_t *data,
                                         uint32_t length,
                                         const char *output_dir,
                                         const ZZ9KArchiveEntry *entry)
@@ -4777,7 +4832,8 @@ static int zz9k_archive_extract_lha_lh5(const uint8_t *data,
   if (!zz9k_archive_open_output_entry(output_dir, entry, &file)) {
     return 0;
   }
-  ok = zz9k_archive_lha_decode_method_to_file(data, length, entry, file);
+  ok = zz9k_archive_lha_decode_method_to_file(ctx, service, data, length,
+                                              entry, file);
   if (fclose(file) != 0) {
     ok = 0;
   }
@@ -6885,7 +6941,9 @@ static int zz9k_archive_handle_zip(ZZ9KContext *ctx,
   return ok;
 }
 
-static int zz9k_archive_handle_lha(const uint8_t *data,
+static int zz9k_archive_handle_lha(ZZ9KContext *ctx,
+                                   const ZZ9KServiceInfo *service,
+                                   const uint8_t *data,
                                    uint32_t length,
                                    const char *command,
                                    const char *output_dir)
@@ -6936,9 +6994,11 @@ static int zz9k_archive_handle_lha(const uint8_t *data,
     }
     if (zz9k_archive_lha_method_supported(entry->method)) {
       if (strcmp(command, "t") == 0) {
-        ok &= zz9k_archive_lha_decode_method_to_file(data, length, entry, 0);
+        ok &= zz9k_archive_lha_decode_method_to_file(ctx, service, data,
+                                                     length, entry, 0);
       } else if (strcmp(command, "x") == 0) {
-        ok &= zz9k_archive_extract_lha_lh5(data, length, output_dir, entry);
+        ok &= zz9k_archive_extract_lha_lh5(ctx, service, data, length,
+                                           output_dir, entry);
       }
       continue;
     }
@@ -9187,17 +9247,28 @@ static int zz9k_archive_run(const char *command, const char *archive_path,
                (strcmp(command, "l") != 0 &&
                  format == ZZ9K_ARCHIVE_FORMAT_LZMA_ALONE) ||
                 (strcmp(command, "l") != 0 &&
-                 format == ZZ9K_ARCHIVE_FORMAT_ZIP);
+                 format == ZZ9K_ARCHIVE_FORMAT_ZIP) ||
+                (strcmp(command, "l") != 0 &&
+                 format == ZZ9K_ARCHIVE_FORMAT_LHA);
   if (need_codec && !codec_ready) {
+    int lha_soft = (format == ZZ9K_ARCHIVE_FORMAT_LHA);
+
     status = zz9k_open(&ctx);
     if (status != ZZ9K_STATUS_OK) {
-      printf("open failed: %s (%d)\n", zz9k_status_name(status), status);
-      goto out;
+      if (!lha_soft) {
+        printf("open failed: %s (%d)\n", zz9k_status_name(status), status);
+        goto out;
+      }
+      ctx = 0;                    /* LHA: no board -> software decode */
+    } else if (!zz9k_archive_require_codec_service(ctx, &service)) {
+      if (!lha_soft) {
+        goto out;
+      }
+      zz9k_close(ctx);
+      ctx = 0;                    /* LHA: no codec service -> software */
+    } else {
+      codec_ready = 1;
     }
-    if (!zz9k_archive_require_codec_service(ctx, &service)) {
-      goto out;
-    }
-    codec_ready = 1;
   }
 
   if (format == ZZ9K_ARCHIVE_FORMAT_GZIP) {
@@ -9210,7 +9281,8 @@ static int zz9k_archive_run(const char *command, const char *archive_path,
     ok = zz9k_archive_handle_tar(ctx, &service, data, length,
                                  command, output_dir);
   } else if (format == ZZ9K_ARCHIVE_FORMAT_LHA) {
-    ok = zz9k_archive_handle_lha(data, length, command, output_dir);
+    ok = zz9k_archive_handle_lha(ctx, codec_ready ? &service : 0,
+                                 data, length, command, output_dir);
   } else if (format == ZZ9K_ARCHIVE_FORMAT_LZMA_ALONE) {
     ok = zz9k_archive_handle_lzma(ctx, need_codec ? &service : 0,
                                   data, length, command, output_dir,

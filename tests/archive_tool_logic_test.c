@@ -4433,7 +4433,7 @@ static int test_lha_level1_lhd_and_lh0_extract(void)
   if (strcmp(entries[1].name, "dir/stored.txt") != 0) return 5;
   if (entries[1].method != ZZ9K_ARCHIVE_LHA_METHOD_LH0) return 6;
   if (entries[1].is_dir) return 7;
-  if (!zz9k_archive_handle_lha(lha, lha_len, "x", output_dir)) {
+  if (!zz9k_archive_handle_lha(0, 0, lha, lha_len, "x", output_dir)) {
     rc = 8;
     goto out;
   }
@@ -4471,7 +4471,7 @@ static int test_lha_extract_match_filter_skips_unmatched(void)
   remove(output_dir);
   make_lha_level1_lhd_and_lh0(lha, &lha_len);
   zz9k_archive_match_filter = "stored";
-  if (!zz9k_archive_handle_lha(lha, lha_len, "x", output_dir)) {
+  if (!zz9k_archive_handle_lha(0, 0, lha, lha_len, "x", output_dir)) {
     rc = 1;
     goto out;
   }
@@ -4550,7 +4550,7 @@ static int test_lha_lh5_docker_fixture_extracts(void)
   if (entries[0].uncompressed_size != 58000U) return 6;
   if (entries[0].crc32 != 0x14e1U) return 7;
   if (!zz9k_archive_handle_lha(
-          lha_lh5_docker_fixture,
+          0, 0, lha_lh5_docker_fixture,
           (uint32_t)sizeof(lha_lh5_docker_fixture), "x", output_dir)) {
     return 8;
   }
@@ -4626,7 +4626,7 @@ static int test_lha_lh6_lh7_docker_fixtures_extract(void)
       return 4 + pass * 20;
     }
     if (!zz9k_archive_handle_lha(
-            fixture, (uint32_t)sizeof(fixture), "x", output_dir)) {
+            0, 0, fixture, (uint32_t)sizeof(fixture), "x", output_dir)) {
       return 5 + pass * 20;
     }
     file = fopen(output_path, "rb");
@@ -4683,7 +4683,7 @@ static int test_lha_lh1_docker_fixture_extracts(void)
   if (entries[0].uncompressed_size != 1360U) return 5;
   if (entries[0].crc32 != 0x6355U) return 6;
   if (!zz9k_archive_handle_lha(
-          lha_lh1_docker_fixture,
+          0, 0, lha_lh1_docker_fixture,
           (uint32_t)sizeof(lha_lh1_docker_fixture), "x", output_dir)) {
     return 7;
   }
@@ -4717,7 +4717,7 @@ static int test_lha_lh0_extract(void)
   remove("archive_tool_lha_out/dir");
   remove(output_dir);
   make_lha_lh0(lha, &lha_len);
-  if (!zz9k_archive_handle_lha(lha, lha_len, "x", output_dir)) {
+  if (!zz9k_archive_handle_lha(0, 0, lha, lha_len, "x", output_dir)) {
     rc = 1;
     goto out;
   }
@@ -6210,6 +6210,32 @@ static int test_tar_rejects_bad_header_checksum(void)
   return 0;
 }
 
+static int test_lha_method_to_compression_mapper(void)
+{
+  if (zz9k_archive_lha_method_to_compression(ZZ9K_ARCHIVE_LHA_METHOD_LH1) !=
+      ZZ9K_COMPRESSION_LH1) {
+    return 1;
+  }
+  if (zz9k_archive_lha_method_to_compression(ZZ9K_ARCHIVE_LHA_METHOD_LH5) !=
+      ZZ9K_COMPRESSION_LH5) {
+    return 2;
+  }
+  if (zz9k_archive_lha_method_to_compression(ZZ9K_ARCHIVE_LHA_METHOD_LH6) !=
+      ZZ9K_COMPRESSION_LH6) {
+    return 3;
+  }
+  if (zz9k_archive_lha_method_to_compression(ZZ9K_ARCHIVE_LHA_METHOD_LH7) !=
+      ZZ9K_COMPRESSION_LH7) {
+    return 4;
+  }
+  /* Unsupported / lh0-stored methods must not map to a codec algorithm. */
+  if (zz9k_archive_lha_method_to_compression(ZZ9K_ARCHIVE_LHA_METHOD_LH0) !=
+      0U) {
+    return 5;
+  }
+  return 0;
+}
+
 int main(void)
 {
   int rc;
@@ -6721,6 +6747,11 @@ int main(void)
     printf("test_7z_split_writer_handles_zero_length_substreams failed: %d\n",
            rc);
     return 420 + rc;
+  }
+  rc = test_lha_method_to_compression_mapper();
+  if (rc) {
+    printf("test_lha_method_to_compression_mapper failed: %d\n", rc);
+    return 430 + rc;
   }
   return 0;
 }

@@ -27,7 +27,13 @@ zz9k_lha_unix_decode_accept(int had_error,
          * many packed bytes the decoder consumed. */
         return actual_crc == expected_crc ? 1 : 0;
     }
-    /* No CRC to lean on: fall back to the read-size sanity check. */
+    /* No CRC to lean on: fall back to the read-size sanity check. Bug #39:
+     * actual_crc/expected_crc are NOT consulted here, so a caller must not
+     * report this outcome with CRC wording -- an "actual == expected"
+     * coincidence (e.g. both zero) must never be read as a CRC match when
+     * check_crc is off. Callers should report the read-size/decode failure
+     * without a "crc=... expected=..." line in that case (see
+     * zz9k_archive_lha_decode_method_to_file). */
     return read_size == packed_size ? 1 : 0;
 }
 
