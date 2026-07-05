@@ -222,6 +222,20 @@ int zz9k_read_diag_timing(ZZ9KContext *ctx, ZZ9KDiagTimingInfo *timing);
 int zz9k_read_diag_sched(ZZ9KContext *ctx, ZZ9KDiagSchedInfo *sched);
 int zz9k_completion_irq_supported(ZZ9KContext *ctx);
 int zz9k_completion_irq_enable(ZZ9KContext *ctx, int enable);
+
+/*
+ * Arm this context to block on the SDK completion IRQ inside zz9k_call()
+ * instead of busy-polling. Amiga-only; returns ZZ9K_STATUS_UNSUPPORTED on the
+ * host or when the firmware does not advertise ZZ9K_CAP_IRQ_COMPLETION. On any
+ * failure the context is left unarmed and zz9k_call keeps the poll/spin path.
+ * The arming task is captured as the wake target, so arm and every subsequent
+ * zz9k_call on this context must run on the same task. Idempotent.
+ */
+int zz9k_arm_completion_irq(ZZ9KContext *ctx);
+
+/* Reverse of zz9k_arm_completion_irq. Safe on an unarmed context. */
+void zz9k_disarm_completion_irq(ZZ9KContext *ctx);
+
 int zz9k_completion_irq_ack(ZZ9KContext *ctx);
 int zz9k_interrupt_status(ZZ9KContext *ctx, uint16_t *status);
 int zz9k_submit(ZZ9KContext *ctx, ZZ9KRequest *request,

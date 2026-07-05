@@ -792,6 +792,7 @@ int zz9k_attach_mailbox(ZZ9KContext **ctx, const ZZ9KBoard *board,
 
 void zz9k_close(ZZ9KContext *ctx)
 {
+  zz9k_disarm_completion_irq(ctx);
   zz9k_free_host(ctx);
 }
 
@@ -854,6 +855,165 @@ int zz9k_completion_irq_enable(ZZ9KContext *ctx, int enable)
   *ctx->sdk_irq_control = enable ? ZZ9K_SDK_IRQ_ENABLE_VALUE :
                                    ZZ9K_SDK_IRQ_DISABLE_VALUE;
   return ZZ9K_STATUS_OK;
+}
+
+#if ZZ9K_HOST_AMIGA
+static int zz9k_sdk_should_use_int2(void)
+{
+  BPTR f = Open((CONST_STRPTR)"ENV:ZZ9K_INT2", MODE_OLDFILE);
+  if (f) {
+    Close(f);
+    return 1;
+  }
+  return 0;
+}
+
+static uint32_t zz9k_sdk_isr(ZZ9KContext *ctx asm("a1"))
+{
+  uint16_t status = 0;
+
+  if (!ctx || zz9k_interrupt_status(ctx, &status) != ZZ9K_STATUS_OK) {
+    return 0;
+  }
+  if ((status & ZZ9K_INTERRUPT_SDK) == 0U) {
+    return 0;   /* not our interrupt: let the next server look */
+  }
+  zz9k_completion_irq_ack(ctx);
+  if (ctx->irq_task && ctx->irq_signal_mask) {
+    Signal(ctx->irq_task, ctx->irq_signal_mask);
+  }
+  return 1;
+}
+
+static int zz9k_timer_open(ZZ9KContext *ctx)
+{
+  ctx->timer_port = CreateMsgPort();
+  if (!ctx->timer_port) {
+    return ZZ9K_STATUS_NO_MEMORY;
+  }
+  ctx->timer_request = (struct timerequest *)CreateIORequest(
+      ctx->timer_port, sizeof(struct timerequest));
+  if (!ctx->timer_request) {
+    DeleteMsgPort(ctx->timer_port);
+    ctx->timer_port = 0;
+    return ZZ9K_STATUS_NO_MEMORY;
+  }
+  if (OpenDevice((CONST_STRPTR)TIMERNAME, UNIT_MICROHZ,
+                 (struct IORequest *)ctx->timer_request, 0) != 0) {
+    DeleteIORequest((struct IORequest *)ctx->timer_request);
+    ctx->timer_request = 0;
+    DeleteMsgPort(ctx->timer_port);
+    ctx->timer_port = 0;
+    return ZZ9K_STATUS_UNSUPPORTED;
+  }
+  ctx->timer_open = 1;
+  return ZZ9K_STATUS_OK;
+}
+
+static void zz9k_timer_close(ZZ9KContext *ctx)
+{
+  if (ctx->timer_open) {
+    CloseDevice((struct IORequest *)ctx->timer_request);
+    ctx->timer_open = 0;
+  }
+  if (ctx->timer_request) {
+    DeleteIORequest((struct IORequest *)ctx->timer_request);
+    ctx->timer_request = 0;
+  }
+  if (ctx->timer_port) {
+    DeleteMsgPort(ctx->timer_port);
+    ctx->timer_port = 0;
+  }
+}
+#endif /* ZZ9K_HOST_AMIGA */
+
+int zz9k_arm_completion_irq(ZZ9KContext *ctx)
+{
+#if ZZ9K_HOST_AMIGA
+  int status;
+
+  if (!ctx) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+  if (ctx->irq_armed) {
+    return ZZ9K_STATUS_OK;
+  }
+  if (!zz9k_completion_irq_supported(ctx) || !ctx->sdk_irq_control) {
+    return ZZ9K_STATUS_UNSUPPORTED;
+  }
+
+  ctx->irq_signal_bit = AllocSignal(-1);
+  if (ctx->irq_signal_bit < 0) {
+    return ZZ9K_STATUS_NO_MEMORY;
+  }
+  ctx->irq_task = FindTask(0);
+  ctx->irq_signal_mask = 1UL << ctx->irq_signal_bit;
+  ctx->irq_int_bit = zz9k_sdk_should_use_int2() ? INTB_PORTS : INTB_EXTER;
+
+  memset(&ctx->irq, 0, sizeof(ctx->irq));
+  ctx->irq.is_Node.ln_Type = NT_INTERRUPT;
+  ctx->irq.is_Node.ln_Pri = 0;
+  ctx->irq.is_Node.ln_Name = (char *)"zz9k SDK IRQ";
+  ctx->irq.is_Data = ctx;
+  ctx->irq.is_Code = (void (*)())zz9k_sdk_isr;
+
+  status = zz9k_timer_open(ctx);
+  if (status != ZZ9K_STATUS_OK) {
+    FreeSignal(ctx->irq_signal_bit);
+    ctx->irq_signal_bit = -1;
+    ctx->irq_task = 0;
+    ctx->irq_signal_mask = 0;
+    return status;
+  }
+
+  Forbid();
+  AddIntServer(ctx->irq_int_bit, &ctx->irq);
+  Permit();
+
+  (void)SetSignal(0, ctx->irq_signal_mask);
+  (void)zz9k_completion_irq_ack(ctx);
+  if (zz9k_completion_irq_enable(ctx, 1) != ZZ9K_STATUS_OK) {
+    Forbid();
+    RemIntServer(ctx->irq_int_bit, &ctx->irq);
+    Permit();
+    zz9k_timer_close(ctx);
+    FreeSignal(ctx->irq_signal_bit);
+    ctx->irq_signal_bit = -1;
+    ctx->irq_task = 0;
+    ctx->irq_signal_mask = 0;
+    return ZZ9K_STATUS_UNSUPPORTED;
+  }
+
+  ctx->irq_armed = 1;
+  return ZZ9K_STATUS_OK;
+#else
+  (void)ctx;
+  return ZZ9K_STATUS_UNSUPPORTED;
+#endif
+}
+
+void zz9k_disarm_completion_irq(ZZ9KContext *ctx)
+{
+#if ZZ9K_HOST_AMIGA
+  if (!ctx || !ctx->irq_armed) {
+    return;
+  }
+  (void)zz9k_completion_irq_enable(ctx, 0);
+  (void)zz9k_completion_irq_ack(ctx);
+  Forbid();
+  RemIntServer(ctx->irq_int_bit, &ctx->irq);
+  Permit();
+  zz9k_timer_close(ctx);
+  if (ctx->irq_signal_bit >= 0) {
+    FreeSignal(ctx->irq_signal_bit);
+    ctx->irq_signal_bit = -1;
+  }
+  ctx->irq_task = 0;
+  ctx->irq_signal_mask = 0;
+  ctx->irq_armed = 0;
+#else
+  (void)ctx;
+#endif
 }
 
 int zz9k_query_caps(ZZ9KContext *ctx, ZZ9KCaps *caps)

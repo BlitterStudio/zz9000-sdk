@@ -286,6 +286,36 @@ static int test_hard_transport_error(void)
   return 0;
 }
 
+static int test_host_arm_is_noop(void)
+{
+  struct TestMailbox mailbox;
+  uint16_t doorbell = 0;
+  ZZ9KContext *ctx;
+  ZZ9KRequest request;
+  ZZ9KMailboxEntry reply;
+  int status;
+
+  reset_hooks();
+  ctx = open_ctx(&mailbox, &doorbell);
+  if (!ctx) return 1;
+
+  status = zz9k_arm_completion_irq(ctx);          /* no Amiga -> UNSUPPORTED */
+  check(status == ZZ9K_STATUS_UNSUPPORTED, "host arm returns UNSUPPORTED");
+
+  zz9k_set_idle_hook_for_test(idle_inject);       /* spin path completes it */
+  zz9k_set_block_hook_for_test(block_never_i);    /* must stay unused */
+  build_ping(&request);
+  memset(&reply, 0, sizeof(reply));
+
+  status = zz9k_call(ctx, &request, &reply, ZZ9K_DEFAULT_TIMEOUT_TICKS);
+  check(status == ZZ9K_STATUS_OK, "host stays on spin path after failed arm");
+  check(g_block_called_flag == 0, "failed arm never engages block seam");
+
+  zz9k_disarm_completion_irq(ctx);                /* idempotent no-op */
+  zz9k_close(ctx);
+  return 0;
+}
+
 int main(void)
 {
   test_reply_present_before_first_block();
@@ -294,6 +324,7 @@ int main(void)
   test_ctrl_c();
   test_unarmed_uses_spin_path();
   test_hard_transport_error();
+  test_host_arm_is_noop();
 
   if (failures) {
     printf("call_irq_wait_test: %d failure(s)\n", failures);
