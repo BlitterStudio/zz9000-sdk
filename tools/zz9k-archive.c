@@ -1294,13 +1294,16 @@ static int zz9k_archive_lha_list(const uint8_t *data,
       *count = entries_used;
       return 1;
     }
-    if (pos + 21U > length) {
-      /* Fewer bytes remain than a minimal LHA header. This is trailing
-         padding or junk after the final member: some archivers omit or
-         malform the terminating zero header-size byte (e.g. a stray "0\0\0"
-         instead of a single 0x00). Treat it as end-of-archive and keep the
-         members parsed so far -- matching lha/7-Zip -- rather than
-         discarding the whole archive. */
+    if (pos + 24U > length) {
+      /* Fewer bytes remain than a minimal LHA header (24 = the smallest
+         valid header: 2 size/checksum bytes + a 22-byte level-0 base). This
+         is trailing padding or junk after the final member: some archivers
+         omit or malform the terminating zero header-size byte (e.g. a stray
+         "0\0\0" instead of a single 0x00). Treat it as end-of-archive and
+         keep the members parsed so far -- matching lha/7-Zip -- rather than
+         discarding the whole archive. (The checksum validator below also
+         floors at 24 bytes, so a 21-23 byte tail would otherwise hard-fail
+         the whole archive here.) */
       *count = entries_used;
       return 1;
     }

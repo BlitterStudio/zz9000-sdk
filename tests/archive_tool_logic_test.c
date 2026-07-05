@@ -4472,25 +4472,51 @@ static int test_lha_ends_at_eof_without_terminator(void)
  * Regression: a sub-header remnant after the final member (e.g. a stray
  * "0\0\0" instead of a single 0x00 terminator) must be treated as
  * end-of-archive, not a hard failure that discards every parsed member.
+ *
+ * MoveLow ends exactly at EOF with NO 0x00 terminator byte, so a trailing
+ * remnant drives the parser through the short-tail end-of-archive guard
+ * (Fix B). (Undelete ends in a real 0x00 terminator and would exit via the
+ * explicit-terminator branch before ever reaching Fix B, so it cannot test
+ * this path.)
  */
 static int test_lha_trailing_junk_after_last_member(void)
 {
   uint8_t buf[3000];
   ZZ9KArchiveEntry entries[4];
   uint32_t count = 0U;
-  uint32_t total = zz9k_lha_undelete_len + 3U;
 
-  if (total > sizeof(buf)) return 1;
-  memcpy(buf, zz9k_lha_undelete, zz9k_lha_undelete_len);
-  buf[zz9k_lha_undelete_len + 0U] = 0x30U;   /* '0' -- not a 0x00 terminator */
-  buf[zz9k_lha_undelete_len + 1U] = 0x00U;
-  buf[zz9k_lha_undelete_len + 2U] = 0x00U;
-  memset(entries, 0, sizeof(entries));
-  if (!zz9k_archive_lha_list(buf, total, entries, 4U, &count)) {
-    return 2;
+  /* Case 1: a stray 3-byte "0\0\0" remnant after the final member. The
+     non-zero header-size byte skips the terminator branch; only 3 bytes
+     remain, so the short-tail guard must rescue the two parsed members. */
+  {
+    uint32_t total = zz9k_lha_movelow_len + 3U;
+    if (total > sizeof(buf)) return 1;
+    memcpy(buf, zz9k_lha_movelow, zz9k_lha_movelow_len);
+    buf[zz9k_lha_movelow_len + 0U] = 0x30U; /* '0' -- not a 0x00 terminator */
+    buf[zz9k_lha_movelow_len + 1U] = 0x00U;
+    buf[zz9k_lha_movelow_len + 2U] = 0x00U;
+    memset(entries, 0, sizeof(entries));
+    if (!zz9k_archive_lha_list(buf, total, entries, 4U, &count)) return 2;
+    if (count != 2U) return 3;
+    if (strcmp(entries[1].name, "MoveLow.readme") != 0) return 4;
   }
-  if (count != 2U) return 3;
-  if (strcmp(entries[1].name, "UndElEtE.e") != 0) return 4;
+
+  /* Case 2: a 22-byte non-zero remnant -- shorter than the 24-byte minimum
+     header. The short-tail guard (>= 24 bytes) must catch it. The earlier
+     21-byte guard let a 21-23 byte tail fall into the checksum validator,
+     which floors at 24 bytes and hard-failed the entire archive. */
+  {
+    uint32_t total = zz9k_lha_movelow_len + 22U;
+    if (total > sizeof(buf)) return 5;
+    memcpy(buf, zz9k_lha_movelow, zz9k_lha_movelow_len);
+    memset(buf + zz9k_lha_movelow_len, 0, 22U);
+    buf[zz9k_lha_movelow_len] = 0x30U; /* non-zero header-size byte */
+    count = 0U;
+    memset(entries, 0, sizeof(entries));
+    if (!zz9k_archive_lha_list(buf, total, entries, 4U, &count)) return 6;
+    if (count != 2U) return 7;
+  }
+
   return 0;
 }
 
