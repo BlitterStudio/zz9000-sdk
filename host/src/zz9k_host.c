@@ -46,6 +46,15 @@
 struct ExpansionBase *ExpansionBase;
 #endif
 
+#if ZZ9K_HOST_AMIGA
+/* GetVar() dispatches through this global library base. Standalone tools
+ * receive a definition from libnix's auto-open stubs, but a resident library
+ * linked with -nostdlib (e.g. amissl.library carrying the provider) has none,
+ * so the definition lives here. zz9k_sync_wait_timeout_ms() opens dos.library
+ * itself and save/restores this base around the call. */
+struct DosLibrary *DOSBase;
+#endif
+
 #define ZZ9K_SYNC_COOKIE_MASK 0x5aa55aa5UL
 #define ZZ9K_MAILBOX_SEMAPHORE_NAME "zz9000.sdk.mailbox"
 
@@ -269,9 +278,24 @@ static void zz9k_idle_between_polls(void)
 static uint32_t zz9k_sync_wait_timeout_ms(void)
 {
 #if ZZ9K_HOST_AMIGA
+  struct DosLibrary *previous_dos_base;
+  struct Library *dos_base;
   UBYTE buf[16];
-  LONG len = GetVar((CONST_STRPTR)"ZZ9K_SYNC_WAIT_TIMEOUT_MS", buf,
-                    (LONG)sizeof(buf) - 1, 0);
+  LONG len;
+
+  dos_base = OpenLibrary((CONST_STRPTR)"dos.library", 0);
+  if (!dos_base) {
+    return ZZ9K_SYNC_WAIT_TIMEOUT_MS_DEFAULT;
+  }
+  previous_dos_base = DOSBase;
+  DOSBase = (struct DosLibrary *)dos_base;
+
+  len = GetVar((CONST_STRPTR)"ZZ9K_SYNC_WAIT_TIMEOUT_MS", buf,
+               (LONG)sizeof(buf) - 1, 0);
+
+  DOSBase = previous_dos_base;
+  CloseLibrary(dos_base);
+
   if (len > 0) {
     long v = atol((const char *)buf);
     if (v > 0) {

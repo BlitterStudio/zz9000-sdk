@@ -77,7 +77,6 @@ static void inject_reply(struct TestMailbox *m)
 
 static uint32_t now_hook(void) { return g_now_ms; }
 
-static void block_never(void) { g_block_called_flag = 1; }
 static int block_never_i(void) { g_block_called_flag = 1; return 0; }
 static void idle_inject(void) { inject_reply(g_mbox); }
 
@@ -261,6 +260,32 @@ static int test_unarmed_uses_spin_path(void)
   return 0;
 }
 
+static int test_hard_transport_error(void)
+{
+  struct TestMailbox mailbox;
+  uint16_t doorbell = 0;
+  ZZ9KContext *ctx;
+  ZZ9KRequest request;
+  ZZ9KMailboxEntry reply;
+  int status;
+
+  reset_hooks();
+  ctx = open_ctx(&mailbox, &doorbell);
+  if (!ctx) return 1;
+  zz9k_set_armed_for_test(ctx, 1);
+  zz9k_set_block_hook_for_test(block_never_i);   /* must NOT block on a hard error */
+  build_ping(&request);
+  /* Corrupt the completion head so consume returns a hard (non-BUSY) error. */
+  zz9k_put_be32(mailbox.descriptor.completion_head, 99);
+  memset(&reply, 0, sizeof(reply));
+
+  status = zz9k_call(ctx, &request, &reply, ZZ9K_DEFAULT_TIMEOUT_TICKS);
+  check(status == ZZ9K_STATUS_BAD_REQUEST, "hard consume error returns immediately");
+  check(g_block_called_flag == 0, "hard error never blocks");
+  zz9k_close(ctx);
+  return 0;
+}
+
 int main(void)
 {
   test_reply_present_before_first_block();
@@ -268,6 +293,7 @@ int main(void)
   test_hard_timeout();
   test_ctrl_c();
   test_unarmed_uses_spin_path();
+  test_hard_transport_error();
 
   if (failures) {
     printf("call_irq_wait_test: %d failure(s)\n", failures);
