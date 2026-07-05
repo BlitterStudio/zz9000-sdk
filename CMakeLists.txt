@@ -780,6 +780,11 @@ target_include_directories(lha_decode_accept_test
 target_link_libraries(lha_decode_accept_test PRIVATE zz9k_lha_unix)
 add_test(NAME lha_decode_accept_test COMMAND lha_decode_accept_test)
 
+add_executable(compression_lzh_helper_test tests/compression_lzh_helper_test.c)
+target_include_directories(compression_lzh_helper_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME compression_lzh_helper_test COMMAND compression_lzh_helper_test)
+
 add_executable(libdecode_tool_source_test
   tests/libdecode_tool_source_test.c
 )
