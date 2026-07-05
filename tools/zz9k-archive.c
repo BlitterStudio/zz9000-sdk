@@ -1294,9 +1294,17 @@ static int zz9k_archive_lha_list(const uint8_t *data,
       *count = entries_used;
       return 1;
     }
-    if (pos + 21U > length ||
-        !zz9k_archive_lha_header_checksum_valid(data + pos,
-                                                length - pos) ||
+    if (pos + 21U > length) {
+      /* Fewer bytes remain than a minimal LHA header. This is trailing
+         padding or junk after the final member: some archivers omit or
+         malform the terminating zero header-size byte (e.g. a stray "0\0\0"
+         instead of a single 0x00). Treat it as end-of-archive and keep the
+         members parsed so far -- matching lha/7-Zip -- rather than
+         discarding the whole archive. */
+      *count = entries_used;
+      return 1;
+    }
+    if (!zz9k_archive_lha_header_checksum_valid(data + pos, length - pos) ||
         data[pos + 20U] > 2U) {
       return 0;
     }
@@ -1384,9 +1392,17 @@ static int zz9k_archive_lha_list(const uint8_t *data,
       }
       data_offset = ext_pos;
     }
-    if (level == 1U && ext_total != 0U &&
-        data_offset <= length &&
-        compressed_size > length - data_offset) {
+    if (level == 1U && ext_total != 0U) {
+      /* In an LHA level-1 header the "compressed size" field (offset 7)
+         spans BOTH the extended headers and the compressed data. The data
+         begins after the extended headers (data_offset == ext_pos), so the
+         real compressed-data size is the field minus the total
+         extended-header bytes. This correction must apply to every level-1
+         entry that carries extended headers -- not only when the
+         uncorrected size would overrun end-of-file. Otherwise multi-member
+         archives, and any leading -lhd- directory entry (whose data size is
+         zero, so the field equals ext_total exactly), over-skip by
+         ext_total and mis-locate the next header. */
       if (compressed_size < ext_total) {
         return 0;
       }
@@ -1461,7 +1477,13 @@ static int zz9k_archive_lha_list(const uint8_t *data,
     entries_used++;
     pos = data_offset + compressed_size;
   }
-  return 0;
+  /* Loop exited because pos reached the end of the data (each entry's size
+     was bounds-checked, so pos == length here). The archive's members were
+     all consumed without encountering a zero terminator header -- common for
+     archives that simply end at the final member's data. That is a complete,
+     successful parse, not a failure. */
+  *count = entries_used;
+  return 1;
 }
 
 static int zz9k_archive_lzma_output_capacity(
