@@ -25,6 +25,14 @@
 #include <libraries/expansion.h>
 #include <proto/exec.h>
 #include <proto/expansion.h>
+#include <exec/interrupts.h>
+#include <exec/tasks.h>
+#include <exec/ports.h>
+#include <hardware/intbits.h>
+#include <devices/timer.h>
+#include <dos/dos.h>
+#include <proto/dos.h>
+#include <stdlib.h>
 #else
 #include <stdlib.h>
 #endif
@@ -61,6 +69,17 @@ struct ZZ9KContext {
   uint32_t completion_ring_entries;
   uint32_t next_request_id;
   uint32_t sync_cookie_mask;
+  unsigned char irq_armed;
+#if ZZ9K_HOST_AMIGA
+  struct Interrupt irq;
+  struct Task *irq_task;
+  unsigned long irq_signal_mask;
+  int irq_signal_bit;
+  int irq_int_bit;
+  struct MsgPort *timer_port;
+  struct timerequest *timer_request;
+  int timer_open;
+#endif
 };
 
 static void *zz9k_alloc_host(size_t size)
@@ -207,6 +226,27 @@ void zz9k_set_idle_hook_for_test(void (*hook)(void))
 {
   zz9k_idle_hook_for_test = hook;
 }
+
+static uint32_t (*zz9k_now_hook_for_test)(void);
+
+void zz9k_set_now_hook_for_test(uint32_t (*hook)(void))
+{
+  zz9k_now_hook_for_test = hook;
+}
+
+static int (*zz9k_block_hook_for_test)(void);
+
+void zz9k_set_block_hook_for_test(int (*hook)(void))
+{
+  zz9k_block_hook_for_test = hook;
+}
+
+void zz9k_set_armed_for_test(ZZ9KContext *ctx, int armed)
+{
+  if (ctx) {
+    ctx->irq_armed = (unsigned char)(armed ? 1 : 0);
+  }
+}
 #endif
 
 static void zz9k_idle_between_polls(void)
@@ -221,6 +261,129 @@ static void zz9k_idle_between_polls(void)
     zz9k_idle_hook_for_test();
   }
 #endif
+}
+
+#define ZZ9K_SYNC_WAIT_HEARTBEAT_MICROS 4000UL
+#define ZZ9K_SYNC_WAIT_TIMEOUT_MS_DEFAULT 5000UL
+
+static uint32_t zz9k_sync_wait_timeout_ms(void)
+{
+#if ZZ9K_HOST_AMIGA
+  UBYTE buf[16];
+  LONG len = GetVar((CONST_STRPTR)"ZZ9K_SYNC_WAIT_TIMEOUT_MS", buf,
+                    (LONG)sizeof(buf) - 1, 0);
+  if (len > 0) {
+    long v = atol((const char *)buf);
+    if (v > 0) {
+      return (uint32_t)v;
+    }
+  }
+  return ZZ9K_SYNC_WAIT_TIMEOUT_MS_DEFAULT;
+#else
+  const char *env = getenv("ZZ9K_SYNC_WAIT_TIMEOUT_MS");
+  if (env && *env) {
+    long v = atol(env);
+    if (v > 0) {
+      return (uint32_t)v;
+    }
+  }
+  return ZZ9K_SYNC_WAIT_TIMEOUT_MS_DEFAULT;
+#endif
+}
+
+/* Monotonic-ish millisecond reading; unsigned deltas absorb wrap. */
+static uint32_t zz9k_now_ms(ZZ9KContext *ctx)
+{
+#if ZZ9K_HOST_AMIGA
+  if (!ctx->timer_open || !ctx->timer_request) {
+    return 0;
+  }
+  ctx->timer_request->tr_node.io_Command = TR_GETSYSTIME;
+  DoIO((struct IORequest *)ctx->timer_request);
+  return (uint32_t)ctx->timer_request->tr_time.tv_secs * 1000UL +
+         (uint32_t)(ctx->timer_request->tr_time.tv_micro / 1000UL);
+#else
+  (void)ctx;
+  if (zz9k_now_hook_for_test) {
+    return zz9k_now_hook_for_test();
+  }
+  return 0;
+#endif
+}
+
+/* Sleep until the SDK completion IRQ, the heartbeat, or Ctrl-C.
+ * Returns nonzero iff woken by Ctrl-C. */
+static int zz9k_wait_block(ZZ9KContext *ctx)
+{
+#if ZZ9K_HOST_AMIGA
+  unsigned long wait_mask;
+  unsigned long signals;
+  int have_timer = ctx->timer_open && ctx->timer_request && ctx->timer_port;
+
+  wait_mask = ctx->irq_signal_mask | SIGBREAKF_CTRL_C;
+  if (have_timer) {
+    ctx->timer_request->tr_node.io_Command = TR_ADDREQUEST;
+    ctx->timer_request->tr_time.tv_secs = 0;
+    ctx->timer_request->tr_time.tv_micro = ZZ9K_SYNC_WAIT_HEARTBEAT_MICROS;
+    SendIO((struct IORequest *)ctx->timer_request);
+    wait_mask |= (1UL << ctx->timer_port->mp_SigBit);
+  }
+
+  signals = Wait(wait_mask);
+
+  if (have_timer) {
+    if (!CheckIO((struct IORequest *)ctx->timer_request)) {
+      AbortIO((struct IORequest *)ctx->timer_request);
+    }
+    WaitIO((struct IORequest *)ctx->timer_request);
+  }
+
+  return (signals & SIGBREAKF_CTRL_C) ? 1 : 0;
+#else
+  (void)ctx;
+  if (zz9k_block_hook_for_test) {
+    return zz9k_block_hook_for_test();
+  }
+  return 0;
+#endif
+}
+
+/* Forward declaration: defined later in this file, needed here because
+ * zz9k_await_completion_locked is placed alongside the other wait seams. */
+static int zz9k_consume_next_completion_locked(ZZ9KContext *ctx,
+                                               ZZ9KMailboxEntry *reply);
+
+/* Armed replacement for the busy-poll loop. Caller holds the mailbox lock and
+ * has already enqueued request_id. Polls the ring, sleeping between polls. */
+static int zz9k_await_completion_locked(ZZ9KContext *ctx, uint32_t request_id,
+                                        uint16_t opcode, uint32_t sync_cookie,
+                                        ZZ9KMailboxEntry *reply,
+                                        uint32_t hard_timeout_ms)
+{
+  uint32_t start = zz9k_now_ms(ctx);
+  int status;
+
+  for (;;) {
+    status = zz9k_consume_next_completion_locked(ctx, reply);
+    if (status == ZZ9K_STATUS_OK) {
+      if (reply->request_id == request_id &&
+          reply->opcode == opcode &&
+          reply->user_cookie == sync_cookie) {
+        return reply->status;
+      }
+      continue;   /* foreign completion: drop and re-poll without blocking */
+    }
+    if (status != ZZ9K_STATUS_BUSY) {
+      return status;   /* hard transport error */
+    }
+    /* ring empty: sleep, then re-poll */
+    if (zz9k_wait_block(ctx) != 0) {
+      return ZZ9K_STATUS_CANCELLED;
+    }
+    if (zz9k_now_ms(ctx) - start >= hard_timeout_ms) {
+      return ZZ9K_STATUS_TIMEOUT;
+    }
+  }
 }
 
 static void zz9k_put_wire_be16(volatile uint8_t *p, uint16_t value)
@@ -2282,6 +2445,13 @@ int zz9k_call(ZZ9KContext *ctx, ZZ9KRequest *request, ZZ9KMailboxEntry *reply,
 
   status = zz9k_enqueue_request_locked(ctx, request, &request_id);
   if (status != ZZ9K_STATUS_QUEUED) {
+    goto done;
+  }
+
+  if (ctx->irq_armed) {
+    status = zz9k_await_completion_locked(ctx, request_id,
+                                          request->entry.opcode, sync_cookie,
+                                          reply, zz9k_sync_wait_timeout_ms());
     goto done;
   }
 

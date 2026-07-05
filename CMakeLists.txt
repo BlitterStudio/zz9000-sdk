@@ -113,6 +113,19 @@ target_include_directories(host_mailbox_test
 target_link_libraries(host_mailbox_test PRIVATE zz9k_host)
 add_test(NAME host_mailbox_test COMMAND host_mailbox_test)
 
+add_executable(call_irq_wait_test
+  tests/call_irq_wait_test.c
+)
+
+target_include_directories(call_irq_wait_test
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/host/include
+)
+
+target_link_libraries(call_irq_wait_test PRIVATE zz9k_host)
+add_test(NAME call_irq_wait_test COMMAND call_irq_wait_test)
+
 add_executable(host_mailbox_source_test
   tests/host_mailbox_source_test.c
 )
