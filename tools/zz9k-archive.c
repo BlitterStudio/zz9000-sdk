@@ -4763,6 +4763,9 @@ static int zz9k_archive_lha_decode_method_to_file(
           }
           free(decoded);
           if (wrote_ok) return 1;   /* offloaded */
+          printf("lha lh%lu offload write failed: %s\n",
+                 (unsigned long)entry->method, entry->name);
+          return 0;
         } else {
           free(decoded);      /* CRC/size miss -> fall back to software */
         }
