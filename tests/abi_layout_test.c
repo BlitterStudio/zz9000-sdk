@@ -39,8 +39,8 @@ typedef char diag_timing_payload_is_48_bytes[
   (sizeof(ZZ9KDiagTimingPayload) == 48U) ? 1 : -1
 ];
 
-typedef char diag_sched_payload_is_16_bytes[
-  (sizeof(ZZ9KDiagSchedPayload) == 16U) ? 1 : -1
+typedef char diag_sched_payload_is_24_bytes[
+  (sizeof(ZZ9KDiagSchedPayload) == 24U) ? 1 : -1
 ];
 
 typedef char query_service_payload_is_48_bytes[

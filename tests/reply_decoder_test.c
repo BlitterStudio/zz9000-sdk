@@ -289,10 +289,12 @@ static int test_diag_sched_decoder(void)
   ZZ9KMailboxEntry reply;
   ZZ9KDiagSchedInfo sched;
 
+  /* Version-1 firmware: only the 16-byte base payload. Decode counters must
+   * default to zero and the decode must still succeed (backward compat). */
   memset(&reply, 0, sizeof(reply));
   reply.opcode = ZZ9K_OP_DIAG_SCHED;
   reply.status = ZZ9K_STATUS_OK;
-  reply.payload_len = sizeof(ZZ9KDiagSchedPayload);
+  reply.payload_len = ZZ9K_DIAG_SCHED_PAYLOAD_V1_BYTES;
   zz9k_put_be32(&reply.payload.inline_data[0], 1U);
   zz9k_put_be32(&reply.payload.inline_data[4], 1U);
   zz9k_put_be32(&reply.payload.inline_data[8], 1234U);
@@ -304,11 +306,34 @@ static int test_diag_sched_decoder(void)
   if (sched.core1_online != 1U) return 3;
   if (sched.tasks_on_core1 != 1234U) return 4;
   if (sched.tasks_on_core0 != 57U) return 5;
+  if (sched.decode_requests != 0U) return 6;
+  if (sched.decode_us != 0U) return 7;
+
+  /* Version-2 firmware: full 24-byte payload with decode counters. */
+  memset(&reply, 0, sizeof(reply));
+  reply.opcode = ZZ9K_OP_DIAG_SCHED;
+  reply.status = ZZ9K_STATUS_OK;
+  reply.payload_len = sizeof(ZZ9KDiagSchedPayload);
+  zz9k_put_be32(&reply.payload.inline_data[0], 2U);
+  zz9k_put_be32(&reply.payload.inline_data[4], 1U);
+  zz9k_put_be32(&reply.payload.inline_data[8], 4096U);
+  zz9k_put_be32(&reply.payload.inline_data[12], 12U);
+  zz9k_put_be32(&reply.payload.inline_data[16], 88U);
+  zz9k_put_be32(&reply.payload.inline_data[20], 654321U);
+
+  memset(&sched, 0, sizeof(sched));
+  if (zz9k_reply_diag_sched(&reply, &sched) != ZZ9K_STATUS_OK) return 8;
+  if (sched.version != 2U) return 9;
+  if (sched.core1_online != 1U) return 10;
+  if (sched.tasks_on_core1 != 4096U) return 11;
+  if (sched.tasks_on_core0 != 12U) return 12;
+  if (sched.decode_requests != 88U) return 13;
+  if (sched.decode_us != 654321U) return 14;
 
   reply.opcode = ZZ9K_OP_DIAG_TIMING;
   if (zz9k_reply_diag_sched(&reply, &sched) !=
       ZZ9K_STATUS_INTERNAL_ERROR) {
-    return 6;
+    return 15;
   }
 
   return 0;

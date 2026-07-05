@@ -204,11 +204,16 @@ static void print_diag_timing(const ZZ9KDiagTimingInfo *timing)
 static void print_diag_sched(const ZZ9KDiagSchedInfo *sched)
 {
   if (sched->core1_online) {
-    printf("Scheduler:         core 1 = online, crypto tasks core1=%lu core0=%lu\n",
+    printf("Scheduler:         core 1 = online, offload tasks core1=%lu core0=%lu\n",
            (unsigned long)sched->tasks_on_core1,
            (unsigned long)sched->tasks_on_core0);
   } else {
     printf("Scheduler:         core 1 = offline (single-core fallback)\n");
+  }
+  if (sched->version >= 2U) {
+    printf("  Decode offloads:   %lu requests, %lu us\n",
+           (unsigned long)sched->decode_requests,
+           (unsigned long)sched->decode_us);
   }
 }
 

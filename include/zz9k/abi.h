@@ -341,10 +341,17 @@ typedef struct ZZ9KDiagSchedPayload {
   uint8_t core1_online[4];
   uint8_t tasks_on_core1[4];
   uint8_t tasks_on_core0[4];
+  uint8_t decode_requests[4];  /* version 2+: decompress decode count */
+  uint8_t decode_us[4];        /* version 2+: cumulative decode microseconds */
 } ZZ9KDiagSchedPayload;
 
-typedef char ZZ9KDiagSchedPayload_must_be_16_bytes[
-  (sizeof(ZZ9KDiagSchedPayload) == 16U) ? 1 : -1];
+/* The version-1 base payload (core1_online + tasks_on_core{1,0}). Firmware that
+ * predates the decode-timing counters sends exactly this; version 2+ appends the
+ * decode_* fields. Decoders require the base and read the extension when present. */
+#define ZZ9K_DIAG_SCHED_PAYLOAD_V1_BYTES 16U
+
+typedef char ZZ9KDiagSchedPayload_must_be_24_bytes[
+  (sizeof(ZZ9KDiagSchedPayload) == 24U) ? 1 : -1];
 
 typedef struct ZZ9KQueryServicePayload {
   uint8_t service_id[4];

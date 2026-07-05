@@ -83,6 +83,8 @@ typedef struct ZZ9KDiagSchedInfo {
   uint32_t core1_online;
   uint32_t tasks_on_core1;
   uint32_t tasks_on_core0;
+  uint32_t decode_requests;  /* version 2+: decompress decode count; 0 on v1 firmware */
+  uint32_t decode_us;        /* version 2+: cumulative decode microseconds; 0 on v1 firmware */
 } ZZ9KDiagSchedInfo;
 
 typedef struct ZZ9KServiceInfo {
