@@ -4308,14 +4308,15 @@ static void zz9k_archive_print_shared_diag(ZZ9KContext *ctx,
          (unsigned long)diag.shared_heap_largest_free);
 }
 
-static int zz9k_archive_decompress_to_memory(ZZ9KContext *ctx,
-                                             const ZZ9KServiceInfo *service,
-                                             uint32_t algorithm,
-                                             const uint8_t *compressed,
-                                             uint32_t compressed_length,
-                                             uint32_t output_capacity,
-                                             uint8_t **output,
-                                             ZZ9KDecompressResult *result)
+static int zz9k_archive_decompress_to_memory_ex(ZZ9KContext *ctx,
+                                                const ZZ9KServiceInfo *service,
+                                                uint32_t algorithm,
+                                                const uint8_t *compressed,
+                                                uint32_t compressed_length,
+                                                uint32_t output_capacity,
+                                                uint8_t **output,
+                                                ZZ9KDecompressResult *result,
+                                                int verify_only)
 {
   ZZ9KSharedBuffer input;
   ZZ9KSharedBuffer decoded;
@@ -4337,10 +4338,13 @@ static int zz9k_archive_decompress_to_memory(ZZ9KContext *ctx,
     printf("unsupported empty codec job\n");
     return 0;
   }
-  bytes = (uint8_t *)malloc((size_t)output_capacity);
-  if (!bytes) {
-    printf("output allocation failed\n");
-    return 0;
+  bytes = 0;
+  if (!verify_only) {
+    bytes = (uint8_t *)malloc((size_t)output_capacity);
+    if (!bytes) {
+      printf("output allocation failed\n");
+      return 0;
+    }
   }
 
   status = zz9k_alloc_shared(ctx, compressed_length, 16U, 0U, &input);
@@ -4384,14 +4388,23 @@ static int zz9k_archive_decompress_to_memory(ZZ9KContext *ctx,
                                    output_capacity);
     goto out;
   }
-  if (result->bytes_written > output_capacity ||
-      !zz9k_shared_copy_from(bytes, &decoded, 0U, result->bytes_written)) {
-    printf("decoded copy failed\n");
-    goto out;
+  if (verify_only) {
+    /* "test": the board has already decoded and checksummed the member, so
+       the caller only needs result->checksum / result->bytes_written. Skip
+       copying the decoded plaintext back across Zorro -- on a large archive
+       that removes a full pass of the uncompressed size over the bus, which
+       is the entire point of the verify path. */
+    ok = 1;
+  } else {
+    if (result->bytes_written > output_capacity ||
+        !zz9k_shared_copy_from(bytes, &decoded, 0U, result->bytes_written)) {
+      printf("decoded copy failed\n");
+      goto out;
+    }
+    *output = bytes;
+    bytes = 0;
+    ok = 1;
   }
-  *output = bytes;
-  bytes = 0;
-  ok = 1;
 
 out:
   if (decoded.handle != 0U && decoded.handle != ZZ9K_INVALID_HANDLE) {
@@ -4402,6 +4415,20 @@ out:
   }
   free(bytes);
   return ok;
+}
+
+static int zz9k_archive_decompress_to_memory(ZZ9KContext *ctx,
+                                             const ZZ9KServiceInfo *service,
+                                             uint32_t algorithm,
+                                             const uint8_t *compressed,
+                                             uint32_t compressed_length,
+                                             uint32_t output_capacity,
+                                             uint8_t **output,
+                                             ZZ9KDecompressResult *result)
+{
+  return zz9k_archive_decompress_to_memory_ex(
+      ctx, service, algorithm, compressed, compressed_length, output_capacity,
+      output, result, 0);
 }
 
 static void zz9k_archive_print_entry(const ZZ9KArchiveEntry *entry)
@@ -4746,10 +4773,17 @@ static int zz9k_archive_lha_decode_method_to_file(
     if (algo != 0U && zz9k_archive_service_supports(service, algo)) {
       uint8_t *decoded = 0;
       ZZ9KDecompressResult res;
-      if (zz9k_archive_decompress_to_memory(
+      /* "test" passes output == NULL: we only need the ARM-computed CRC, so
+         run the codec in verify-only mode. The board still decodes and
+         checksums the member, but the decoded plaintext is never copied back
+         across Zorro -- on a whole-partition backup that spares a second pass
+         of the entire uncompressed size over the bus. Extract keeps the
+         plaintext so it can be written out. */
+      int verify_only = (output == 0);
+      if (zz9k_archive_decompress_to_memory_ex(
               ctx, service, algo, data + entry->data_offset,
               entry->compressed_size, entry->uncompressed_size,
-              &decoded, &res)) {
+              &decoded, &res, verify_only)) {
         int crc_ok = 1;
         if ((entry->flags & ZZ9K_ARCHIVE_ENTRY_FLAG_CRC32) != 0U) {
           crc_ok = ((uint16_t)res.checksum == (uint16_t)entry->crc32);
@@ -4761,7 +4795,7 @@ static int zz9k_archive_lha_decode_method_to_file(
                   entry->uncompressed_size) {
             wrote_ok = 0;
           }
-          free(decoded);
+          free(decoded);   /* NULL in verify-only mode; free(NULL) is safe */
           if (wrote_ok) return 1;   /* offloaded */
           printf("lha lh%lu offload write failed: %s\n",
                  (unsigned long)entry->method, entry->name);
