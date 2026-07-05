@@ -299,8 +299,11 @@ static inline int zz9k_reply_diag_sched(const ZZ9KMailboxEntry *reply,
   }
 
   memset(sched, 0, sizeof(*sched));
+  /* Require only the version-1 base payload so a firmware that predates the
+   * decode-timing counters still decodes; read the version-2 extension when
+   * the reply carries it (payload_len >= full struct size). */
   status = zz9k_reply_require(reply, ZZ9K_OP_DIAG_SCHED,
-                              sizeof(ZZ9KDiagSchedPayload));
+                              ZZ9K_DIAG_SCHED_PAYLOAD_V1_BYTES);
   if (status != ZZ9K_STATUS_OK) {
     return status;
   }
@@ -310,6 +313,10 @@ static inline int zz9k_reply_diag_sched(const ZZ9KMailboxEntry *reply,
   sched->core1_online = zz9k_get_be32(&payload[4]);
   sched->tasks_on_core1 = zz9k_get_be32(&payload[8]);
   sched->tasks_on_core0 = zz9k_get_be32(&payload[12]);
+  if (reply->payload_len >= sizeof(ZZ9KDiagSchedPayload)) {
+    sched->decode_requests = zz9k_get_be32(&payload[16]);
+    sched->decode_us = zz9k_get_be32(&payload[20]);
+  }
   return ZZ9K_STATUS_OK;
 }
 
