@@ -4263,6 +4263,9 @@ static int zz9k_archive_ensure_codec_open(ZZ9KContext **ctx,
     printf("open failed: %s (%d)\n", zz9k_status_name(status), status);
     return 0;
   }
+  /* Best-effort: block on the completion IRQ instead of busy-polling. On any
+   * failure the tool keeps the existing poll path unchanged. */
+  (void)zz9k_arm_completion_irq(*ctx);
   if (!zz9k_archive_require_codec_service(*ctx, service)) {
     return 0;
   }
@@ -9219,6 +9222,7 @@ static int zz9k_archive_run(const char *command, const char *archive_path,
 
 out:
   if (ctx) {
+    zz9k_disarm_completion_irq(ctx);
     zz9k_close(ctx);
   }
   free(data);
