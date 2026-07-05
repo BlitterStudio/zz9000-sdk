@@ -230,6 +230,10 @@ int zz9k_completion_irq_enable(ZZ9KContext *ctx, int enable);
  * failure the context is left unarmed and zz9k_call keeps the poll/spin path.
  * The arming task is captured as the wake target, so arm and every subsequent
  * zz9k_call on this context must run on the same task. Idempotent.
+ * While a zz9k_call on an armed context is blocked it holds the shared
+ * mailbox lock (up to ENV:ZZ9K_SYNC_WAIT_TIMEOUT_MS, default 5s), so a slow
+ * or wedged operation serializes all mailbox clients until it completes or
+ * times out.
  */
 int zz9k_arm_completion_irq(ZZ9KContext *ctx);
 

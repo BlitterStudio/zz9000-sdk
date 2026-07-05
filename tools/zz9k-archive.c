@@ -4264,7 +4264,10 @@ static int zz9k_archive_ensure_codec_open(ZZ9KContext **ctx,
     return 0;
   }
   /* Best-effort: block on the completion IRQ instead of busy-polling. On any
-   * failure the tool keeps the existing poll path unchanged. */
+   * failure the tool keeps the existing poll path unchanged.
+   * Only the codec-service path (all handle_*_file handlers funnel through
+   * here) is armed; the standalone-LZMA and in-memory fallback open sites
+   * intentionally stay on the busy-poll path this increment. */
   (void)zz9k_arm_completion_irq(*ctx);
   if (!zz9k_archive_require_codec_service(*ctx, service)) {
     return 0;

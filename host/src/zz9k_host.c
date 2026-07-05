@@ -47,11 +47,13 @@ struct ExpansionBase *ExpansionBase;
 #endif
 
 #if ZZ9K_HOST_AMIGA
-/* GetVar() dispatches through this global library base. Standalone tools
- * receive a definition from libnix's auto-open stubs, but a resident library
- * linked with -nostdlib (e.g. amissl.library carrying the provider) has none,
- * so the definition lives here. zz9k_sync_wait_timeout_ms() opens dos.library
- * itself and save/restores this base around the call. */
+/* GetVar() dispatches through this global library base. Compiled -fcommon,
+ * this tentative definition merges with (and yields to) whatever DOSBase a
+ * given link target already provides -- libnix startup for normal tools,
+ * clib2 for the amissl os3 build, or the resident library's own copy -- and
+ * supplies the symbol for any consumer that provides none.
+ * zz9k_sync_wait_timeout_ms() opens dos.library itself and save/restores this
+ * base around the call. */
 struct DosLibrary *DOSBase;
 #endif
 
@@ -297,7 +299,7 @@ static uint32_t zz9k_sync_wait_timeout_ms(void)
   CloseLibrary(dos_base);
 
   if (len > 0) {
-    long v = atol((const char *)buf);
+    long v = strtol((const char *)buf, NULL, 10);
     if (v > 0) {
       return (uint32_t)v;
     }
@@ -306,7 +308,7 @@ static uint32_t zz9k_sync_wait_timeout_ms(void)
 #else
   const char *env = getenv("ZZ9K_SYNC_WAIT_TIMEOUT_MS");
   if (env && *env) {
-    long v = atol(env);
+    long v = strtol(env, NULL, 10);
     if (v > 0) {
       return (uint32_t)v;
     }
