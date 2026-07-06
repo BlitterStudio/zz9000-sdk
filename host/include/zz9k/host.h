@@ -200,6 +200,9 @@ int zz9k_crypto_aead_batch(ZZ9KContext *ctx,
                            uint32_t timeout_ticks);
 int zz9k_decompress(ZZ9KContext *ctx, const ZZ9KDecompressDesc *desc,
                     ZZ9KDecompressResult *result);
+int zz9k_decompress_batch(ZZ9KContext *ctx,
+                          const ZZ9KDecompressBatchDesc *desc,
+                          ZZ9KDecompressBatchResult *result);
 int zz9k_decompress_test(ZZ9KContext *ctx,
                          const ZZ9KDecompressTestDesc *desc,
                          ZZ9KDecompressResult *result);

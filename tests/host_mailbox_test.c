@@ -2075,6 +2075,74 @@ static int test_decompress_builds_request_and_maps_result(void)
   return 0;
 }
 
+static int test_decompress_batch_maps_result(void)
+{
+  struct TestMailbox mailbox;
+  ZZ9KContext *ctx;
+  ZZ9KBoard board;
+  ZZ9KDecompressBatchDesc desc;
+  ZZ9KDecompressBatchResult result;
+
+  init_mailbox(&mailbox);
+  memset(&board, 0, sizeof(board));
+  memset(&desc, 0, sizeof(desc));
+  desc.arena_handle = 0x77U;
+  desc.arena_offset = 0U;
+  desc.arena_length = 0x1000U;
+
+  prepare_completion(&mailbox, 1, ZZ9K_OP_DECOMPRESS_BATCH, ZZ9K_STATUS_OK,
+                     sizeof(ZZ9KDecompressBatchResultPayload));
+  zz9k_put_be32(&mailbox.completion_ring[0].payload[0], 3U);
+  zz9k_put_be32(&mailbox.completion_ring[0].payload[4], 2U);
+  zz9k_put_be32(&mailbox.completion_ring[0].payload[8], 1U);
+  zz9k_put_be32(&mailbox.completion_ring[0].payload[12], 0U);
+
+  if (zz9k_attach_mailbox(&ctx, &board, &mailbox.descriptor, 0, 0) !=
+      ZZ9K_STATUS_OK) {
+    return 1;
+  }
+
+  memset(&result, 0, sizeof(result));
+  if (zz9k_decompress_batch(ctx, &desc, &result) != ZZ9K_STATUS_OK) {
+    zz9k_close(ctx);
+    return 2;
+  }
+  if (zz9k_get_be16(mailbox.request_ring[0].opcode) !=
+      ZZ9K_OP_DECOMPRESS_BATCH) {
+    zz9k_close(ctx);
+    return 3;
+  }
+  if (zz9k_get_be32(&mailbox.request_ring[0].payload[0]) != 0x77U) {
+    zz9k_close(ctx);
+    return 4;
+  }
+  if (zz9k_get_be32(&mailbox.request_ring[0].payload[8]) != 0x1000U) {
+    zz9k_close(ctx);
+    return 5;
+  }
+  if (result.members_total != 3U || result.members_ok != 2U ||
+      result.members_failed != 1U) {
+    zz9k_close(ctx);
+    return 6;
+  }
+
+  if (zz9k_decompress_batch(0, &desc, &result) != ZZ9K_STATUS_BAD_REQUEST) {
+    zz9k_close(ctx);
+    return 7;
+  }
+  if (zz9k_decompress_batch(ctx, 0, &result) != ZZ9K_STATUS_BAD_REQUEST) {
+    zz9k_close(ctx);
+    return 8;
+  }
+  if (zz9k_decompress_batch(ctx, &desc, 0) != ZZ9K_STATUS_BAD_REQUEST) {
+    zz9k_close(ctx);
+    return 9;
+  }
+
+  zz9k_close(ctx);
+  return 0;
+}
+
 static int test_decompress_stream_helpers_roundtrip_results(void)
 {
   struct TestMailbox mailbox;
@@ -2730,6 +2798,9 @@ int main(void)
 
   result = test_env_u32_reads_positive_decimal_or_fallback();
   if (result) return 356 + result;
+
+  result = test_decompress_batch_maps_result();
+  if (result) return 365 + result;
 
   return 0;
 }

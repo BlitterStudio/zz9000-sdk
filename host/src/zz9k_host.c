@@ -1831,6 +1831,33 @@ int zz9k_decompress(ZZ9KContext *ctx, const ZZ9KDecompressDesc *desc,
   return zz9k_reply_decompress_result(&reply, result);
 }
 
+int zz9k_decompress_batch(ZZ9KContext *ctx,
+                          const ZZ9KDecompressBatchDesc *desc,
+                          ZZ9KDecompressBatchResult *result)
+{
+  ZZ9KRequest request;
+  ZZ9KMailboxEntry reply;
+  int status;
+
+  if (!ctx || !desc || !result) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  memset(result, 0, sizeof(*result));
+  memset(&reply, 0, sizeof(reply));
+  status = zz9k_request_decompress_batch(&request, desc);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  status = zz9k_call(ctx, &request, &reply, ZZ9K_DEFAULT_TIMEOUT_TICKS);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  return zz9k_reply_decompress_batch_result(&reply, result);
+}
+
 int zz9k_decompress_test(ZZ9KContext *ctx,
                          const ZZ9KDecompressTestDesc *desc,
                          ZZ9KDecompressResult *result)
