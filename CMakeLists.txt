@@ -798,6 +798,11 @@ target_include_directories(compression_lzh_helper_test PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME compression_lzh_helper_test COMMAND compression_lzh_helper_test)
 
+add_executable(batch_arena_test tests/batch_arena_test.c)
+target_include_directories(batch_arena_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME batch_arena_test COMMAND batch_arena_test)
+
 add_executable(libdecode_tool_source_test
   tests/libdecode_tool_source_test.c
 )

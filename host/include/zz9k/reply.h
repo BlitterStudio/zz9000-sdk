@@ -8,6 +8,7 @@
 #define ZZ9K_REPLY_H
 
 #include "zz9k/audio.h"
+#include "zz9k/batch.h"
 #include "zz9k/host.h"
 #include "zz9k/compression.h"
 #include <string.h>
@@ -610,6 +611,30 @@ static inline int zz9k_reply_decompress_stream_result(
     return ZZ9K_STATUS_INTERNAL_ERROR;
   }
 
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_reply_decompress_batch_result(
+    const ZZ9KMailboxEntry *reply, ZZ9KDecompressBatchResult *result)
+{
+  const ZZ9KDecompressBatchResultPayload *payload;
+  int status;
+
+  if (!result) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+  memset(result, 0, sizeof(*result));
+  status = zz9k_reply_require(reply, ZZ9K_OP_DECOMPRESS_BATCH,
+                              sizeof(ZZ9KDecompressBatchResultPayload));
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  payload =
+      (const ZZ9KDecompressBatchResultPayload *)reply->payload.inline_data;
+  result->members_total = zz9k_get_be32(payload->members_total);
+  result->members_ok = zz9k_get_be32(payload->members_ok);
+  result->members_failed = zz9k_get_be32(payload->members_failed);
+  result->flags = zz9k_get_be32(payload->flags);
   return ZZ9K_STATUS_OK;
 }
 

@@ -579,6 +579,47 @@ static int test_decompress_result_decoder(void)
   return 0;
 }
 
+static int test_decompress_batch_result_decodes_counts(void)
+{
+  ZZ9KMailboxEntry reply;
+  ZZ9KDecompressBatchResult result;
+  ZZ9KDecompressBatchResultPayload *payload;
+
+  memset(&reply, 0, sizeof(reply));
+  reply.opcode = ZZ9K_OP_DECOMPRESS_BATCH;
+  reply.status = ZZ9K_STATUS_OK;
+  reply.payload_len = sizeof(ZZ9KDecompressBatchResultPayload);
+  payload = (ZZ9KDecompressBatchResultPayload *)reply.payload.inline_data;
+  zz9k_put_be32(payload->members_total, 5U);
+  zz9k_put_be32(payload->members_ok, 4U);
+  zz9k_put_be32(payload->members_failed, 1U);
+  zz9k_put_be32(payload->flags, 0U);
+
+  if (zz9k_reply_decompress_batch_result(&reply, &result) != ZZ9K_STATUS_OK) {
+    return 1;
+  }
+  if (result.members_total != 5U) return 2;
+  if (result.members_ok != 4U) return 3;
+  if (result.members_failed != 1U) return 4;
+  if (result.flags != 0U) return 5;
+
+  reply.opcode = ZZ9K_OP_DECOMPRESS;
+  if (zz9k_reply_decompress_batch_result(&reply, &result) == ZZ9K_STATUS_OK) {
+    return 6; /* wrong opcode must be rejected */
+  }
+  reply.opcode = ZZ9K_OP_DECOMPRESS_BATCH;
+  reply.status = ZZ9K_STATUS_UNSUPPORTED;
+  if (zz9k_reply_decompress_batch_result(&reply, &result) !=
+      ZZ9K_STATUS_UNSUPPORTED) {
+    return 7; /* firmware status must propagate */
+  }
+  if (zz9k_reply_decompress_batch_result(&reply, 0) !=
+      ZZ9K_STATUS_BAD_REQUEST) {
+    return 8;
+  }
+  return 0;
+}
+
 int main(void)
 {
   int result;
@@ -615,6 +656,9 @@ int main(void)
 
   result = test_decompress_result_decoder();
   if (result) return 180 + result;
+
+  result = test_decompress_batch_result_decodes_counts();
+  if (result) return 190 + result;
 
   return 0;
 }
