@@ -8,6 +8,7 @@
 #include "zz9k/caps.h"
 #include "zz9k/reply.h"
 #include "zz9k/request.h"
+#include <errno.h>
 #include <string.h>
 
 #if defined(__amigaos__) || defined(__amiga__) || defined(__AMIGA__) || \
@@ -277,6 +278,24 @@ static void zz9k_idle_between_polls(void)
 #define ZZ9K_SYNC_WAIT_HEARTBEAT_MICROS 4000UL
 #define ZZ9K_SYNC_WAIT_TIMEOUT_MS_DEFAULT 5000UL
 
+static int zz9k_parse_env_u32(const char *text, uint32_t *value)
+{
+  char *end;
+  long parsed;
+
+  if (!text || !*text || !value) {
+    return 0;
+  }
+  errno = 0;
+  parsed = strtol(text, &end, 10);
+  if (errno != 0 || end == text || *end != '\0' || parsed <= 0 ||
+      (unsigned long)parsed > 0xffffffffUL) {
+    return 0;
+  }
+  *value = (uint32_t)parsed;
+  return 1;
+}
+
 uint32_t zz9k_env_u32(const char *name, uint32_t fallback)
 {
 #if ZZ9K_HOST_AMIGA
@@ -284,6 +303,7 @@ uint32_t zz9k_env_u32(const char *name, uint32_t fallback)
   struct Library *dos_base;
   UBYTE buf[16];
   LONG len;
+  uint32_t value;
 
   dos_base = OpenLibrary((CONST_STRPTR)"dos.library", 0);
   if (!dos_base) {
@@ -297,20 +317,19 @@ uint32_t zz9k_env_u32(const char *name, uint32_t fallback)
   DOSBase = previous_dos_base;
   CloseLibrary(dos_base);
 
-  if (len > 0) {
-    long v = strtol((const char *)buf, NULL, 10);
-    if (v > 0) {
-      return (uint32_t)v;
+  if (len > 0 && len < (LONG)sizeof(buf)) {
+    buf[len] = '\0';
+    if (zz9k_parse_env_u32((const char *)buf, &value)) {
+      return value;
     }
   }
   return fallback;
 #else
   const char *env = getenv(name);
-  if (env && *env) {
-    long v = strtol(env, NULL, 10);
-    if (v > 0) {
-      return (uint32_t)v;
-    }
+  uint32_t value;
+
+  if (zz9k_parse_env_u32(env, &value)) {
+    return value;
   }
   return fallback;
 #endif

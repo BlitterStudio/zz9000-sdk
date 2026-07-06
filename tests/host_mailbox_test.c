@@ -4,6 +4,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200112L
+#endif
+
 #include "zz9k/host.h"
 #include <stddef.h>
 #include <stdint.h>
@@ -21,6 +25,24 @@ struct TestMailbox {
 void zz9k_set_idle_hook_for_test(void (*hook)(void));
 
 static struct TestMailbox *idle_test_mailbox;
+
+static void clear_test_env_u32(void)
+{
+#ifdef _WIN32
+  _putenv_s("ZZ9K_TEST_ENV_U32", "");
+#else
+  unsetenv("ZZ9K_TEST_ENV_U32");
+#endif
+}
+
+static void set_test_env_u32(const char *value)
+{
+#ifdef _WIN32
+  _putenv_s("ZZ9K_TEST_ENV_U32", value);
+#else
+  setenv("ZZ9K_TEST_ENV_U32", value, 1);
+#endif
+}
 
 static void init_mailbox(struct TestMailbox *mailbox)
 {
@@ -2641,19 +2663,25 @@ static int test_sync_call_times_out_without_completion(void)
 
 static int test_env_u32_reads_positive_decimal_or_fallback(void)
 {
-  unsetenv("ZZ9K_TEST_ENV_U32");
+  clear_test_env_u32();
   if (zz9k_env_u32("ZZ9K_TEST_ENV_U32", 42U) != 42U) return 1;
 
-  setenv("ZZ9K_TEST_ENV_U32", "1536", 1);
+  set_test_env_u32("1536");
   if (zz9k_env_u32("ZZ9K_TEST_ENV_U32", 42U) != 1536U) return 2;
 
-  setenv("ZZ9K_TEST_ENV_U32", "0", 1);
+  set_test_env_u32("0");
   if (zz9k_env_u32("ZZ9K_TEST_ENV_U32", 42U) != 42U) return 3;
 
-  setenv("ZZ9K_TEST_ENV_U32", "junk", 1);
+  set_test_env_u32("junk");
   if (zz9k_env_u32("ZZ9K_TEST_ENV_U32", 42U) != 42U) return 4;
 
-  unsetenv("ZZ9K_TEST_ENV_U32");
+  set_test_env_u32("1m");
+  if (zz9k_env_u32("ZZ9K_TEST_ENV_U32", 42U) != 42U) return 5;
+
+  set_test_env_u32("1536 ");
+  if (zz9k_env_u32("ZZ9K_TEST_ENV_U32", 42U) != 42U) return 6;
+
+  clear_test_env_u32();
   return 0;
 }
 
