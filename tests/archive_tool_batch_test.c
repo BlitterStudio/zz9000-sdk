@@ -346,6 +346,30 @@ static int test_extract_excludes_duplicate_paths(void)
   strcpy(entries[2].name, "DUP.BIN");
   if (!zz9k_archive_lha_batch_path_collides(entries, 3U, 2U)) return 8;
 
+  /* --strip-components: distinct raw names that resolve to the same
+     OUTPUT name must collide (a/foo vs b/foo with 1 component stripped);
+     distinct post-strip names must not. Restore the global afterwards. */
+  strcpy(entries[0].name, "a/foo");
+  strcpy(entries[1].name, "b/foo");
+  strcpy(entries[2].name, "b/bar");
+  zz9k_archive_strip_components = 1U;
+  if (!zz9k_archive_lha_batch_path_collides(entries, 3U, 0U)) {
+    zz9k_archive_strip_components = 0U;
+    return 9;
+  }
+  if (!zz9k_archive_lha_batch_path_collides(entries, 3U, 1U)) {
+    zz9k_archive_strip_components = 0U;
+    return 10;
+  }
+  if (zz9k_archive_lha_batch_path_collides(entries, 3U, 2U)) {
+    zz9k_archive_strip_components = 0U;
+    return 11;
+  }
+  zz9k_archive_strip_components = 0U;
+
+  /* without stripping the same raw names never collided */
+  if (zz9k_archive_lha_batch_path_collides(entries, 3U, 0U)) return 12;
+
   return 0;
 }
 

@@ -7365,22 +7365,34 @@ static int zz9k_archive_lha_paths_equal_ci(const char *a, const char *b)
   return *a == *b;
 }
 
-/* Does entry i's output path collide with any OTHER entry's path?
+/* Does entry i's OUTPUT path collide with any OTHER entry's output path?
    Batch-extract drains members out of archive order, so a duplicated
    path (lha-update-style archives) must stay on the sequential
-   per-entry path to preserve first/last-wins semantics. */
+   per-entry path to preserve first/last-wins semantics. Compare the
+   POST-TRANSFORM names from zz9k_archive_output_entry, not the raw
+   archive names: --strip-components can make distinct raw names (a/foo,
+   b/foo) resolve to the same output file. Entries that produce no output
+   at all cannot collide. */
 static int zz9k_archive_lha_batch_path_collides(const ZZ9KArchiveEntry *entries,
                                                 uint32_t count,
                                                 uint32_t index)
 {
+  ZZ9KArchiveEntry mine;
   uint32_t i;
 
+  if (!zz9k_archive_output_entry(&entries[index], &mine)) {
+    return 0;
+  }
   for (i = 0U; i < count; i++) {
+    ZZ9KArchiveEntry other;
+
     if (i == index) {
       continue;
     }
-    if (zz9k_archive_lha_paths_equal_ci(entries[i].name,
-                                        entries[index].name)) {
+    if (!zz9k_archive_output_entry(&entries[i], &other)) {
+      continue;
+    }
+    if (zz9k_archive_lha_paths_equal_ci(other.name, mine.name)) {
       return 1;
     }
   }
