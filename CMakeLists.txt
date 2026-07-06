@@ -803,6 +803,14 @@ target_include_directories(batch_arena_test PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME batch_arena_test COMMAND batch_arena_test)
 
+add_executable(lha_batch_reference_test tests/lha_batch_reference_test.c)
+target_include_directories(lha_batch_reference_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/tools/lha-unix
+  ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+target_link_libraries(lha_batch_reference_test PRIVATE zz9k_lha_unix)
+add_test(NAME lha_batch_reference_test COMMAND lha_batch_reference_test)
+
 add_executable(libdecode_tool_source_test
   tests/libdecode_tool_source_test.c
 )
