@@ -241,6 +241,40 @@ static int test_judge_maps_results_to_states(void)
   return 0;
 }
 
+static int test_offload_fits_predicate(void)
+{
+  ZZ9KArchiveEntry entry;
+  ZZ9KDiagInfo diag;
+
+  memset(&diag, 0, sizeof(diag));
+  diag.shared_heap_free = 10000U;
+  diag.shared_heap_largest_free = 6000U;
+
+  /* fits: small member, plenty of heap */
+  make_entry(&entry, ZZ9K_ARCHIVE_LHA_METHOD_LH5, 1000U, 2000U);
+  if (!zz9k_archive_lha_offload_fits(&diag, &entry)) return 1;
+
+  /* compressed input alone exceeds the largest free block */
+  make_entry(&entry, ZZ9K_ARCHIVE_LHA_METHOD_LH5, 7000U, 2000U);
+  if (zz9k_archive_lha_offload_fits(&diag, &entry)) return 2;
+
+  /* decoded output alone exceeds the largest free block */
+  make_entry(&entry, ZZ9K_ARCHIVE_LHA_METHOD_LH5, 1000U, 7000U);
+  if (zz9k_archive_lha_offload_fits(&diag, &entry)) return 3;
+
+  /* both fit the largest block individually, but their sum exceeds the
+     total free space (this is the real-world case: two ~3.5MB members
+     against a ~2.4MB-free shared heap) */
+  make_entry(&entry, ZZ9K_ARCHIVE_LHA_METHOD_LH5, 5000U, 5500U);
+  if (zz9k_archive_lha_offload_fits(&diag, &entry)) return 4;
+
+  /* no diag available: try the board as before */
+  make_entry(&entry, ZZ9K_ARCHIVE_LHA_METHOD_LH5, 5000U, 5500U);
+  if (!zz9k_archive_lha_offload_fits(0, &entry)) return 5;
+
+  return 0;
+}
+
 static int test_batch_run_no_service_leaves_all_none(void)
 {
   ZZ9KArchiveEntry entries[2];
@@ -288,5 +322,6 @@ int main(void)
   if ((rc = test_plan_chunk_test_mode_uncompressed_cap()) != 0) {
     return 600 + rc;
   }
+  if ((rc = test_offload_fits_predicate()) != 0) return 700 + rc;
   return 0;
 }

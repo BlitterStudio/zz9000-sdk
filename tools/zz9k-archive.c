@@ -4791,6 +4791,15 @@ static unsigned long zz9k_lha_diag_sw_codec_fail;
 static unsigned long zz9k_lha_diag_sw_unavailable;
 static unsigned long zz9k_lha_diag_bytes_in;
 
+/* Lazily-fetched, once-per-run snapshot of the board's shared-heap state,
+   consulted before a per-member offload attempt so members that cannot
+   possibly fit are skipped straight to software instead of paying for a
+   doomed board allocation (and its diagnostic printout) every time.
+   0 = not yet queried, 1 = queried OK, -1 = query failed (behave as before
+   and just try the board). */
+static ZZ9KDiagInfo zz9k_lha_board_diag;
+static int zz9k_lha_board_diag_valid;
+
 static void zz9k_lha_diag_reset(void)
 {
   zz9k_lha_diag_offloaded = 0UL;
@@ -4800,6 +4809,7 @@ static void zz9k_lha_diag_reset(void)
   zz9k_lha_diag_sw_codec_fail = 0UL;
   zz9k_lha_diag_sw_unavailable = 0UL;
   zz9k_lha_diag_bytes_in = 0UL;
+  zz9k_lha_board_diag_valid = 0;
 }
 
 static void zz9k_lha_diag_report(void)
@@ -4866,6 +4876,33 @@ static int zz9k_archive_lha_software_decode_to_file(
   return ok;
 }
 
+/* Can this member's per-member offload possibly get its board buffers?
+   Needs one block for the compressed input and one for the decoded output
+   (verify-only still allocates the output on the board). Conservative:
+   both must fit the largest free block, and their sum (plus alignment
+   slack) must fit the total free space. Computed in 64-bit so oversize
+   archive-reported sizes cannot wrap the check. */
+static int zz9k_archive_lha_offload_fits(const ZZ9KDiagInfo *diag,
+                                         const ZZ9KArchiveEntry *entry)
+{
+  uint64_t needed;
+  uint32_t slack = 64U;
+
+  if (!diag) {
+    return 1; /* no diag info: try the board as before */
+  }
+  if (entry->compressed_size > diag->shared_heap_largest_free ||
+      entry->uncompressed_size > diag->shared_heap_largest_free) {
+    return 0;
+  }
+  needed = (uint64_t)entry->compressed_size +
+           (uint64_t)entry->uncompressed_size + (uint64_t)slack;
+  if (needed > (uint64_t)diag->shared_heap_free) {
+    return 0;
+  }
+  return 1;
+}
+
 static int zz9k_archive_lha_decode_method_to_file(
     ZZ9KContext *ctx,
     const ZZ9KServiceInfo *service,
@@ -4886,44 +4923,60 @@ static int zz9k_archive_lha_decode_method_to_file(
     if (algo != 0U && zz9k_archive_service_supports(service, algo)) {
       uint8_t *decoded = 0;
       ZZ9KDecompressResult res;
+      int try_offload = 1;
+
+      if (zz9k_lha_board_diag_valid == 0) {
+        int status = zz9k_read_diag(ctx, &zz9k_lha_board_diag);
+        zz9k_lha_board_diag_valid = (status == ZZ9K_STATUS_OK) ? 1 : -1;
+      }
+      if (zz9k_lha_board_diag_valid == 1 &&
+          !zz9k_archive_lha_offload_fits(&zz9k_lha_board_diag, entry)) {
+        printf("lha lh%lu too large for board heap, software decode: %s\n",
+               (unsigned long)entry->method, entry->name);
+        zz9k_lha_diag_sw_codec_fail++;
+        try_offload = 0;
+      }
+
       /* "test" passes output == NULL: we only need the ARM-computed CRC, so
          run the codec in verify-only mode. The board still decodes and
          checksums the member, but the decoded plaintext is never copied back
          across Zorro -- on a whole-partition backup that spares a second pass
          of the entire uncompressed size over the bus. Extract keeps the
          plaintext so it can be written out. */
-      int verify_only = (output == 0);
-      zz9k_lha_diag_bytes_in += (unsigned long)entry->compressed_size;
-      if (zz9k_archive_decompress_to_memory_ex(
-              ctx, service, algo, data + entry->data_offset,
-              entry->compressed_size, entry->uncompressed_size,
-              &decoded, &res, verify_only)) {
-        int crc_ok = 1;
-        if ((entry->flags & ZZ9K_ARCHIVE_ENTRY_FLAG_CRC32) != 0U) {
-          crc_ok = ((uint16_t)res.checksum == (uint16_t)entry->crc32);
-        }
-        if (crc_ok && res.bytes_written == entry->uncompressed_size) {
-          int wrote_ok = 1;
-          if (output && entry->uncompressed_size != 0U &&
-              fwrite(decoded, 1U, entry->uncompressed_size, output) !=
-                  entry->uncompressed_size) {
-            wrote_ok = 0;
+      if (try_offload) {
+        int verify_only = (output == 0);
+        zz9k_lha_diag_bytes_in += (unsigned long)entry->compressed_size;
+        if (zz9k_archive_decompress_to_memory_ex(
+                ctx, service, algo, data + entry->data_offset,
+                entry->compressed_size, entry->uncompressed_size,
+                &decoded, &res, verify_only)) {
+          int crc_ok = 1;
+          if ((entry->flags & ZZ9K_ARCHIVE_ENTRY_FLAG_CRC32) != 0U) {
+            crc_ok = ((uint16_t)res.checksum == (uint16_t)entry->crc32);
           }
-          free(decoded);   /* NULL in verify-only mode; free(NULL) is safe */
-          if (wrote_ok) {
-            zz9k_lha_diag_offloaded++;
-            return 1;   /* offloaded */
+          if (crc_ok && res.bytes_written == entry->uncompressed_size) {
+            int wrote_ok = 1;
+            if (output && entry->uncompressed_size != 0U &&
+                fwrite(decoded, 1U, entry->uncompressed_size, output) !=
+                    entry->uncompressed_size) {
+              wrote_ok = 0;
+            }
+            free(decoded); /* NULL in verify-only mode; free(NULL) is safe */
+            if (wrote_ok) {
+              zz9k_lha_diag_offloaded++;
+              return 1;   /* offloaded */
+            }
+            printf("lha lh%lu offload write failed: %s\n",
+                   (unsigned long)entry->method, entry->name);
+            return 0;
+          } else {
+            free(decoded);    /* CRC/size miss -> fall back to software */
+            zz9k_lha_diag_sw_crc_miss++;
           }
-          printf("lha lh%lu offload write failed: %s\n",
-                 (unsigned long)entry->method, entry->name);
-          return 0;
         } else {
-          free(decoded);      /* CRC/size miss -> fall back to software */
-          zz9k_lha_diag_sw_crc_miss++;
+          /* board alloc / codec error (the helper already printed why) */
+          zz9k_lha_diag_sw_codec_fail++;
         }
-      } else {
-        /* board alloc / codec error (the helper already printed why) */
-        zz9k_lha_diag_sw_codec_fail++;
       }
     } else {
       zz9k_lha_diag_sw_unavailable++;   /* method not advertised by service */
