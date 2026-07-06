@@ -7222,17 +7222,30 @@ static int zz9k_archive_lha_batch_judge(const ZZ9KArchiveEntry *entry,
 
 /* Drain one batch-extracted member from the arena to the filesystem,
    preserving skip/dry-run semantics. Skipped/dry-run members do not pay
-   the Zorro copy-back. */
+   the Zorro copy-back.
+
+   A malloc or copy_from failure means NOTHING has been written to `file`
+   yet, so it is recoverable: decode the member in software directly into
+   the same still-open file rather than hard-failing the whole archive.
+   Do NOT re-open the output for the retry -- that would trip the "output
+   exists" check on the file this drain already created. An fwrite failure
+   is different: bytes may already be partially written, and falling back
+   to software there would interleave two decodes into the same file (a
+   bug class fixed once before in this codebase), so that stays a hard
+   failure with no retry. */
 static int zz9k_archive_lha_batch_drain_member(ZZ9KContext *ctx,
                                                const ZZ9KSharedBuffer *arena,
                                                const ZZ9KBatchLayout *layout,
                                                uint32_t dst_offset,
                                                const char *output_dir,
+                                               const uint8_t *data,
+                                               uint32_t length,
                                                const ZZ9KArchiveEntry *entry)
 {
   FILE *file = 0;
   uint8_t *bytes;
   int ok = 1;
+  int hard_fail = 0;
 
   (void)ctx;
   if (!zz9k_archive_open_output_entry(output_dir, entry, &file)) {
@@ -7241,24 +7254,33 @@ static int zz9k_archive_lha_batch_drain_member(ZZ9KContext *ctx,
   if (!zz9k_archive_last_output_skipped &&
       !zz9k_archive_last_output_dry_run && entry->uncompressed_size != 0U) {
     bytes = (uint8_t *)malloc((size_t)entry->uncompressed_size);
-    if (!bytes ||
-        !zz9k_shared_copy_from(bytes, arena,
-                               layout->output_offset + dst_offset,
-                               entry->uncompressed_size) ||
-        fwrite(bytes, 1U, entry->uncompressed_size, file) !=
-            entry->uncompressed_size) {
-      ok = 0;
+    if (!bytes) {
+      ok = zz9k_archive_lha_software_decode_to_file(data, length, entry,
+                                                    file);
+    } else if (!zz9k_shared_copy_from(bytes, arena,
+                                      layout->output_offset + dst_offset,
+                                      entry->uncompressed_size)) {
+      free(bytes);
+      ok = zz9k_archive_lha_software_decode_to_file(data, length, entry,
+                                                    file);
+    } else {
+      if (fwrite(bytes, 1U, entry->uncompressed_size, file) !=
+          entry->uncompressed_size) {
+        ok = 0;
+        hard_fail = 1;
+      }
+      free(bytes);
     }
-    free(bytes);
   }
   if (fclose(file) != 0) {
     ok = 0;
+    hard_fail = 1;
   }
   if (ok && !zz9k_archive_last_output_skipped &&
       !zz9k_archive_last_output_dry_run) {
     printf("x %s\n", entry->name);
   }
-  if (!ok) {
+  if (!ok && hard_fail) {
     printf("lha lh%lu offload write failed: %s\n",
            (unsigned long)entry->method, entry->name);
   }
@@ -7381,9 +7403,12 @@ static void zz9k_archive_lha_batch_run(ZZ9KContext *ctx,
   while (first < member_total) {
     ZZ9KLhaBatchChunk chunk;
     ZZ9KDecompressBatchDesc desc;
+    /* Aggregate counts are advisory; the per-member result table is
+       authoritative (firmware does not CRC-check). */
     ZZ9KDecompressBatchResult batch_result;
     uint32_t blob;
     uint32_t out_cursor;
+    unsigned long chunk_bytes_in;
     int status;
 
     if (zz9k_archive_lha_batch_plan_chunk(entries, members, member_total,
@@ -7402,6 +7427,7 @@ static void zz9k_archive_lha_batch_run(ZZ9KContext *ctx,
       break;
     }
     blob = 0U;
+    chunk_bytes_in = 0UL;
     for (i = 0U; i < chunk.count; i++) {
       const ZZ9KArchiveEntry *entry = &entries[members[chunk.first + i]];
 
@@ -7411,7 +7437,7 @@ static void zz9k_archive_lha_batch_run(ZZ9KContext *ctx,
         goto out; /* Zorro copy failure -> per-member for the remainder */
       }
       blob += entry->compressed_size;
-      zz9k_lha_diag_bytes_in += (unsigned long)entry->compressed_size;
+      chunk_bytes_in += (unsigned long)entry->compressed_size;
     }
 
     desc.arena_handle = arena.handle;
@@ -7420,12 +7446,15 @@ static void zz9k_archive_lha_batch_run(ZZ9KContext *ctx,
     status = zz9k_decompress_batch(ctx, &desc, &batch_result);
     if (status != ZZ9K_STATUS_OK) {
       /* Old firmware (UNSUPPORTED) or a transport/validation failure:
-         everything not yet judged stays NONE -> per-member fallback. */
+         everything not yet judged stays NONE -> per-member fallback. Do not
+         count these bytes: they will be retried (and counted) on the
+         per-member path. */
       printf("lha batch decode failed: %s (%d)\n", zz9k_status_name(status),
              status);
       break;
     }
     zz9k_lha_diag_chunks++;
+    zz9k_lha_diag_bytes_in += chunk_bytes_in;
 
     if (!zz9k_shared_copy_from(results, &arena, layout.result_offset,
                                chunk.count * ZZ9K_BATCH_RESULT_SIZE)) {
@@ -7445,7 +7474,7 @@ static void zz9k_archive_lha_batch_run(ZZ9KContext *ctx,
           mode == ZZ9K_BATCH_MODE_EXTRACT) {
         if (!zz9k_archive_lha_batch_drain_member(ctx, &arena, &layout,
                                                  out_cursor, output_dir,
-                                                 entry)) {
+                                                 data, length, entry)) {
           member_state = ZZ9K_LHA_BATCH_FAILED;
         }
       }
