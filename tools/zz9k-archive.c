@@ -4806,9 +4806,11 @@ static void zz9k_lha_diag_report(void)
          zz9k_lha_diag_bytes_in);
 }
 
-static int zz9k_archive_lha_decode_method_to_file(
-    ZZ9KContext *ctx,
-    const ZZ9KServiceInfo *service,
+/* Pure-software LHA member decode (the 68k fallback). output == NULL means
+   verify-only. Kept separate from the offload path so batch fallbacks can
+   decode in software WITHOUT re-attempting the offload that already
+   produced a bad result for the member. */
+static int zz9k_archive_lha_software_decode_to_file(
     const uint8_t *data,
     uint32_t length,
     const ZZ9KArchiveEntry *entry,
@@ -4818,6 +4820,53 @@ static int zz9k_archive_lha_decode_method_to_file(
   uint16_t decoded_crc = 0U;
   int ok;
 
+  (void)length;
+  input = tmpfile();
+  if (!input) {
+    printf("lha temporary input failed: %s\n", entry->name);
+    return 0;
+  }
+  if (entry->compressed_size != 0U &&
+      fwrite(data + entry->data_offset, 1U, entry->compressed_size, input) !=
+      entry->compressed_size) {
+    fclose(input);
+    printf("lha temporary input write failed: %s\n", entry->name);
+    return 0;
+  }
+  if (fseek(input, 0L, SEEK_SET) != 0) {
+    fclose(input);
+    printf("lha temporary input seek failed: %s\n", entry->name);
+    return 0;
+  }
+  ok = zz9k_lha_unix_decode_method(
+      input, output, entry->uncompressed_size, entry->compressed_size,
+      (uint16_t)entry->crc32,
+      (entry->flags & ZZ9K_ARCHIVE_ENTRY_FLAG_CRC32) != 0U,
+      &decoded_crc,
+      (int)entry->method);
+  fclose(input);
+  if (!ok) {
+    if ((entry->flags & ZZ9K_ARCHIVE_ENTRY_FLAG_CRC32) != 0U) {
+      printf("lha lh%lu decode failed: %s crc=0x%04x expected=0x%04lx\n",
+             (unsigned long)entry->method, entry->name,
+             (unsigned int)decoded_crc, (unsigned long)entry->crc32);
+    } else {
+      printf("lha lh%lu decode failed: %s (no stored CRC; size/stream "
+             "check)\n",
+             (unsigned long)entry->method, entry->name);
+    }
+  }
+  return ok;
+}
+
+static int zz9k_archive_lha_decode_method_to_file(
+    ZZ9KContext *ctx,
+    const ZZ9KServiceInfo *service,
+    const uint8_t *data,
+    uint32_t length,
+    const ZZ9KArchiveEntry *entry,
+    FILE *output)
+{
   if (!data || !entry || entry->data_offset > length ||
       entry->compressed_size > length - entry->data_offset ||
       !zz9k_archive_lha_method_supported(entry->method)) {
@@ -4876,42 +4925,8 @@ static int zz9k_archive_lha_decode_method_to_file(
     zz9k_lha_diag_sw_unavailable++;     /* no board/service: software-only */
   }
 
-  input = tmpfile();
-  if (!input) {
-    printf("lha temporary input failed: %s\n", entry->name);
-    return 0;
-  }
-  if (entry->compressed_size != 0U &&
-      fwrite(data + entry->data_offset, 1U, entry->compressed_size, input) !=
-      entry->compressed_size) {
-    fclose(input);
-    printf("lha temporary input write failed: %s\n", entry->name);
-    return 0;
-  }
-  if (fseek(input, 0L, SEEK_SET) != 0) {
-    fclose(input);
-    printf("lha temporary input seek failed: %s\n", entry->name);
-    return 0;
-  }
-  ok = zz9k_lha_unix_decode_method(
-      input, output, entry->uncompressed_size, entry->compressed_size,
-      (uint16_t)entry->crc32,
-      (entry->flags & ZZ9K_ARCHIVE_ENTRY_FLAG_CRC32) != 0U,
-      &decoded_crc,
-      (int)entry->method);
-  fclose(input);
-  if (!ok) {
-    if ((entry->flags & ZZ9K_ARCHIVE_ENTRY_FLAG_CRC32) != 0U) {
-      printf("lha lh%lu decode failed: %s crc=0x%04x expected=0x%04lx\n",
-             (unsigned long)entry->method, entry->name,
-             (unsigned int)decoded_crc, (unsigned long)entry->crc32);
-    } else {
-      printf("lha lh%lu decode failed: %s (no stored CRC; size/stream "
-             "check)\n",
-             (unsigned long)entry->method, entry->name);
-    }
-  }
-  return ok;
+  return zz9k_archive_lha_software_decode_to_file(data, length, entry,
+                                                  output);
 }
 
 static int zz9k_archive_lha_decode_lh5_to_file(ZZ9KContext *ctx,
@@ -4940,6 +4955,31 @@ static int zz9k_archive_extract_lha_lh5(ZZ9KContext *ctx,
   }
   ok = zz9k_archive_lha_decode_method_to_file(ctx, service, data, length,
                                               entry, file);
+  if (fclose(file) != 0) {
+    ok = 0;
+  }
+  if (ok && !zz9k_archive_last_output_skipped &&
+      !zz9k_archive_last_output_dry_run) {
+    printf("x %s\n", entry->name);
+  }
+  return ok;
+}
+
+/* Extract one member via the software decoder only (no offload attempt),
+   preserving the skip/dry-run and "x <name>" semantics of the offload
+   extract path. */
+static int zz9k_archive_extract_lha_software(const uint8_t *data,
+                                             uint32_t length,
+                                             const char *output_dir,
+                                             const ZZ9KArchiveEntry *entry)
+{
+  FILE *file = 0;
+  int ok;
+
+  if (!zz9k_archive_open_output_entry(output_dir, entry, &file)) {
+    return 0;
+  }
+  ok = zz9k_archive_lha_software_decode_to_file(data, length, entry, file);
   if (fclose(file) != 0) {
     ok = 0;
   }
