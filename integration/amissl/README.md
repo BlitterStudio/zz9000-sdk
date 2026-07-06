@@ -101,6 +101,11 @@ the board, so every operation runs in AmiSSL software. It lets you A/B the
 accelerated path against pure software on the same installed library without
 rebuilding — useful for confirming whether a regression is in the offload.
 
+`ENV:ZZ9K_OFFLOAD_TIMEOUT_MS` retunes the provider's unarmed polling timeout
+budget (default 250 ms). Invalid, empty, or non-positive values are ignored.
+This is intended for hardware diagnosis under display/bus contention; normal
+installs should keep the default.
+
 ## Licensing
 
 The ZZ9000 provider sources are GPL-3.0-or-later. AmiSSL and OpenSSL 3.x are

@@ -95,18 +95,15 @@ static ZZ9KOffloadCtx *zz9k_offload_acquire(void *vctx)
   return o;
 }
 
-/* A momentarily busy mailbox or a single timed-out call is worth a bounded
- * retry: the crypto ops are pure functions of their inputs (same
- * scalar/key/nonce/point -> same output), so re-issuing is safe. BUSY/TIMEOUT
- * are rare on the serialized per-task mailbox, so a small fixed attempt count
- * with immediate re-issue suffices — there is no dos.library Delay() to lean
- * on inside amissl.library. Without this, any transient status collapsed to a
- * hard offload failure (and, under offload-or-fail, a failed handshake). */
+/* A momentarily busy mailbox is worth a bounded retry: the crypto ops are pure
+ * functions of their inputs (same scalar/key/nonce/point -> same output), so
+ * re-issuing is safe. A full TIMEOUT is not retried; under bus contention it
+ * would just burn another wall-clock budget before falling back to software. */
 #define ZZ9K_OFFLOAD_MAX_ATTEMPTS 3
 
 static int zz9k_offload_transient(int status)
 {
-  return status == ZZ9K_STATUS_BUSY || status == ZZ9K_STATUS_TIMEOUT;
+  return status == ZZ9K_STATUS_BUSY;
 }
 
 static int zz9k_offload_run_kx(ZZ9KContext *sdk, const ZZ9KCryptoKxDesc *desc,
@@ -177,6 +174,8 @@ void *zz9k_offload_open(unsigned int *service_flags)
   }
   memset(o, 0, sizeof(*o));
   o->sdk = sdk;
+  zz9k_set_offload_timeout_ms(
+      sdk, zz9k_env_u32("ZZ9K_OFFLOAD_TIMEOUT_MS", ZZ9K_OFFLOAD_TIMEOUT_MS));
   if (service_flags != NULL) {
     *service_flags = svc.flags;
   }

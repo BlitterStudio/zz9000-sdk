@@ -23,8 +23,12 @@ struct TestMailbox {
 };
 
 void zz9k_set_idle_hook_for_test(void (*hook)(void));
+void zz9k_set_now_hook_for_test(uint32_t (*hook)(void));
+void zz9k_set_offload_timeout_ms(ZZ9KContext *ctx, uint32_t timeout_ms);
 
 static struct TestMailbox *idle_test_mailbox;
+static uint32_t idle_test_now_ms;
+static uint32_t idle_test_calls;
 
 static void clear_test_env_u32(void)
 {
@@ -144,6 +148,17 @@ static void complete_query_caps_after_stale_reply(void)
                 ZZ9K_CAP_MAILBOX);
   zz9k_put_be32(&idle_test_mailbox->completion_ring[1].payload[12], 48);
   zz9k_put_be32(&idle_test_mailbox->completion_ring[1].payload[16], 32);
+}
+
+static uint32_t idle_test_now_hook(void)
+{
+  return idle_test_now_ms;
+}
+
+static void idle_advance_10ms_without_completion(void)
+{
+  idle_test_now_ms += 10U;
+  idle_test_calls++;
 }
 
 static int test_submit_writes_request_without_doorbell(void)
@@ -2661,6 +2676,58 @@ static int test_sync_call_times_out_without_completion(void)
   return 0;
 }
 
+static int test_sync_call_offload_timeout_uses_wall_clock_budget(void)
+{
+  struct TestMailbox mailbox;
+  ZZ9KContext *ctx;
+  ZZ9KBoard board;
+  ZZ9KRequest request;
+  ZZ9KMailboxEntry reply;
+
+  init_mailbox(&mailbox);
+  memset(&board, 0, sizeof(board));
+  memset(&request, 0, sizeof(request));
+  memset(&reply, 0, sizeof(reply));
+  request.entry.opcode = ZZ9K_OP_PING;
+
+  idle_test_now_ms = 0U;
+  idle_test_calls = 0U;
+  zz9k_set_now_hook_for_test(idle_test_now_hook);
+  zz9k_set_idle_hook_for_test(idle_advance_10ms_without_completion);
+
+  if (zz9k_attach_mailbox(&ctx, &board, &mailbox.descriptor, 0, 0) !=
+      ZZ9K_STATUS_OK) {
+    zz9k_set_now_hook_for_test(0);
+    zz9k_set_idle_hook_for_test(0);
+    return 1;
+  }
+
+  zz9k_set_offload_timeout_ms(ctx, 30U);
+  if (zz9k_call(ctx, &request, &reply, 2) != ZZ9K_STATUS_TIMEOUT) {
+    zz9k_close(ctx);
+    zz9k_set_now_hook_for_test(0);
+    zz9k_set_idle_hook_for_test(0);
+    return 2;
+  }
+  if (idle_test_calls <= 2U || idle_test_now_ms < 30U) {
+    zz9k_close(ctx);
+    zz9k_set_now_hook_for_test(0);
+    zz9k_set_idle_hook_for_test(0);
+    return 3;
+  }
+  if (idle_test_calls > 8U) {
+    zz9k_close(ctx);
+    zz9k_set_now_hook_for_test(0);
+    zz9k_set_idle_hook_for_test(0);
+    return 4;
+  }
+
+  zz9k_close(ctx);
+  zz9k_set_now_hook_for_test(0);
+  zz9k_set_idle_hook_for_test(0);
+  return 0;
+}
+
 static int test_env_u32_reads_positive_decimal_or_fallback(void)
 {
   clear_test_env_u32();
@@ -2823,6 +2890,9 @@ int main(void)
 
   result = test_sync_call_times_out_without_completion();
   if (result) return 355 + result;
+
+  result = test_sync_call_offload_timeout_uses_wall_clock_budget();
+  if (result) return 358 + result;
 
   result = test_env_u32_reads_positive_decimal_or_fallback();
   if (result) return 356 + result;

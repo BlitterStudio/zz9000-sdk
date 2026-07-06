@@ -308,5 +308,9 @@ machine without the board — transparently uses AmiSSL's software.
   provider loads and is preferred but never opens the board, so every operation
   runs in AmiSSL software. A zero-rebuild A/B switch for isolating a regression
   to — or away from — the offload.
+* `ENV:ZZ9K_OFFLOAD_TIMEOUT_MS` retunes the provider's unarmed polling timeout
+  budget (default 250 ms). Invalid, empty, or non-positive values are ignored.
+  This is for hardware diagnosis under display/bus contention; normal installs
+  should leave the default in place.
 * `zz9k_amissl_unregister()` is a no-op when registration never ran, so an
   application's cleanup path is safe even after a failed `InitAmiSSL()`.
