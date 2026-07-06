@@ -310,6 +310,45 @@ static int test_batch_run_no_service_leaves_all_none(void)
   return 0;
 }
 
+static int test_extract_excludes_duplicate_paths(void)
+{
+  ZZ9KArchiveEntry entries[3];
+
+  /* paths_equal_ci: equal, case-differing equal, different, prefix vs
+     longer (not equal even though one is a prefix of the other) */
+  if (!zz9k_archive_lha_paths_equal_ci("dir/file.bin", "dir/file.bin")) {
+    return 1;
+  }
+  if (!zz9k_archive_lha_paths_equal_ci("Dir/File.BIN", "dir/file.bin")) {
+    return 2;
+  }
+  if (zz9k_archive_lha_paths_equal_ci("dir/file.bin", "dir/other.bin")) {
+    return 3;
+  }
+  if (zz9k_archive_lha_paths_equal_ci("dir/file.bin", "dir/file.binx")) {
+    return 4;
+  }
+
+  /* path_collides: two entries sharing the same name collide with each
+     other; a third, uniquely-named entry collides with neither */
+  make_entry(&entries[0], ZZ9K_ARCHIVE_LHA_METHOD_LH0, 100U, 100U);
+  strcpy(entries[0].name, "dup.bin");
+  make_entry(&entries[1], ZZ9K_ARCHIVE_LHA_METHOD_LH5, 100U, 300U);
+  strcpy(entries[1].name, "dup.bin");
+  make_entry(&entries[2], ZZ9K_ARCHIVE_LHA_METHOD_LH5, 100U, 300U);
+  strcpy(entries[2].name, "unique.bin");
+
+  if (!zz9k_archive_lha_batch_path_collides(entries, 3U, 0U)) return 5;
+  if (!zz9k_archive_lha_batch_path_collides(entries, 3U, 1U)) return 6;
+  if (zz9k_archive_lha_batch_path_collides(entries, 3U, 2U)) return 7;
+
+  /* case-differing duplicate still collides */
+  strcpy(entries[2].name, "DUP.BIN");
+  if (!zz9k_archive_lha_batch_path_collides(entries, 3U, 2U)) return 8;
+
+  return 0;
+}
+
 int main(void)
 {
   int rc;
@@ -323,5 +362,6 @@ int main(void)
     return 600 + rc;
   }
   if ((rc = test_offload_fits_predicate()) != 0) return 700 + rc;
+  if ((rc = test_extract_excludes_duplicate_paths()) != 0) return 800 + rc;
   return 0;
 }

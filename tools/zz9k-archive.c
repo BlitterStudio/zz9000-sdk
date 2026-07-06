@@ -7349,6 +7349,44 @@ static int zz9k_archive_lha_batch_drain_member(ZZ9KContext *ctx,
   return ok;
 }
 
+/* Case-insensitive ASCII path compare, approximating Amiga filesystem
+   name matching for collision detection. */
+static int zz9k_archive_lha_paths_equal_ci(const char *a, const char *b)
+{
+  while (*a && *b) {
+    unsigned char ca = (unsigned char)*a++;
+    unsigned char cb = (unsigned char)*b++;
+    if (ca >= 'A' && ca <= 'Z') ca = (unsigned char)(ca - 'A' + 'a');
+    if (cb >= 'A' && cb <= 'Z') cb = (unsigned char)(cb - 'A' + 'a');
+    if (ca != cb) {
+      return 0;
+    }
+  }
+  return *a == *b;
+}
+
+/* Does entry i's output path collide with any OTHER entry's path?
+   Batch-extract drains members out of archive order, so a duplicated
+   path (lha-update-style archives) must stay on the sequential
+   per-entry path to preserve first/last-wins semantics. */
+static int zz9k_archive_lha_batch_path_collides(const ZZ9KArchiveEntry *entries,
+                                                uint32_t count,
+                                                uint32_t index)
+{
+  uint32_t i;
+
+  for (i = 0U; i < count; i++) {
+    if (i == index) {
+      continue;
+    }
+    if (zz9k_archive_lha_paths_equal_ci(entries[i].name,
+                                        entries[index].name)) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
 /* Batched LHA decode driver. Fills state[] with ZZ9K_LHA_BATCH_* per
    entry; entries left at ZZ9K_LHA_BATCH_NONE take the existing per-member
    offload/software path. Fallback chain: batch -> per-member -> software.
@@ -7407,6 +7445,10 @@ static void zz9k_archive_lha_batch_run(ZZ9KContext *ctx,
     algo = zz9k_archive_lha_method_to_compression(entry->method);
     if (algo == 0U || !zz9k_archive_service_supports(service, algo)) {
       continue;
+    }
+    if (mode == ZZ9K_BATCH_MODE_EXTRACT &&
+        zz9k_archive_lha_batch_path_collides(entries, count, i)) {
+      continue; /* duplicated path: keep archive-order semantics */
     }
     members[member_total++] = i;
     if (entry->compressed_size > largest) {
