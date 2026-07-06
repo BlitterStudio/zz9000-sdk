@@ -4774,6 +4774,38 @@ static uint32_t zz9k_archive_lha_method_to_compression(uint32_t method)
   }
 }
 
+/* Diagnostic tally for the LHA decode-offload path.  A whole-partition backup
+   is thousands of small members, and every fall-back to the 68k software
+   decoder is silent -- board alloc failures print, but a firmware CRC/size
+   rejection (else-branch below) re-decodes the whole member on the CPU without
+   a word.  Without this count there is no way to tell an archive that offloaded
+   cleanly (so 98% CPU == transfer/overhead-bound) from one that quietly
+   re-decoded every member on the 68k (so 98% CPU == no offload at all).
+   Printed once per test/extract run. */
+static unsigned long zz9k_lha_diag_offloaded;
+static unsigned long zz9k_lha_diag_sw_crc_miss;
+static unsigned long zz9k_lha_diag_sw_codec_fail;
+static unsigned long zz9k_lha_diag_sw_unavailable;
+static unsigned long zz9k_lha_diag_bytes_in;
+
+static void zz9k_lha_diag_reset(void)
+{
+  zz9k_lha_diag_offloaded = 0UL;
+  zz9k_lha_diag_sw_crc_miss = 0UL;
+  zz9k_lha_diag_sw_codec_fail = 0UL;
+  zz9k_lha_diag_sw_unavailable = 0UL;
+  zz9k_lha_diag_bytes_in = 0UL;
+}
+
+static void zz9k_lha_diag_report(void)
+{
+  printf("lha offload diag: offloaded=%lu sw:crc/size-miss=%lu "
+         "sw:codec-fail=%lu sw:unavailable=%lu bytes-in=%lu\n",
+         zz9k_lha_diag_offloaded, zz9k_lha_diag_sw_crc_miss,
+         zz9k_lha_diag_sw_codec_fail, zz9k_lha_diag_sw_unavailable,
+         zz9k_lha_diag_bytes_in);
+}
+
 static int zz9k_archive_lha_decode_method_to_file(
     ZZ9KContext *ctx,
     const ZZ9KServiceInfo *service,
@@ -4805,6 +4837,7 @@ static int zz9k_archive_lha_decode_method_to_file(
          of the entire uncompressed size over the bus. Extract keeps the
          plaintext so it can be written out. */
       int verify_only = (output == 0);
+      zz9k_lha_diag_bytes_in += (unsigned long)entry->compressed_size;
       if (zz9k_archive_decompress_to_memory_ex(
               ctx, service, algo, data + entry->data_offset,
               entry->compressed_size, entry->uncompressed_size,
@@ -4821,15 +4854,26 @@ static int zz9k_archive_lha_decode_method_to_file(
             wrote_ok = 0;
           }
           free(decoded);   /* NULL in verify-only mode; free(NULL) is safe */
-          if (wrote_ok) return 1;   /* offloaded */
+          if (wrote_ok) {
+            zz9k_lha_diag_offloaded++;
+            return 1;   /* offloaded */
+          }
           printf("lha lh%lu offload write failed: %s\n",
                  (unsigned long)entry->method, entry->name);
           return 0;
         } else {
           free(decoded);      /* CRC/size miss -> fall back to software */
+          zz9k_lha_diag_sw_crc_miss++;
         }
+      } else {
+        /* board alloc / codec error (the helper already printed why) */
+        zz9k_lha_diag_sw_codec_fail++;
       }
+    } else {
+      zz9k_lha_diag_sw_unavailable++;   /* method not advertised by service */
     }
+  } else {
+    zz9k_lha_diag_sw_unavailable++;     /* no board/service: software-only */
   }
 
   input = tmpfile();
@@ -7032,6 +7076,8 @@ static int zz9k_archive_handle_lha(ZZ9KContext *ctx,
     return 0;
   }
 
+  zz9k_lha_diag_reset();
+
   for (i = 0U; i < count; i++) {
     ZZ9KArchiveEntry *entry = &entries[i];
 
@@ -7083,6 +7129,9 @@ static int zz9k_archive_handle_lha(ZZ9KContext *ctx,
   }
   if (strcmp(command, "t") == 0 && ok) {
     printf("lha test ok: %lu entries\n", (unsigned long)count);
+  }
+  if (strcmp(command, "t") == 0 || strcmp(command, "x") == 0) {
+    zz9k_lha_diag_report();
   }
   free(entries);
   return ok;
