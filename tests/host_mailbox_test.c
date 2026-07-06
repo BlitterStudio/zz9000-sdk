@@ -7,6 +7,7 @@
 #include "zz9k/host.h"
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define TEST_SYNC_COOKIE_MASK 0x5aa55aa5UL
@@ -2570,6 +2571,24 @@ static int test_sync_call_times_out_without_completion(void)
   return 0;
 }
 
+static int test_env_u32_reads_positive_decimal_or_fallback(void)
+{
+  unsetenv("ZZ9K_TEST_ENV_U32");
+  if (zz9k_env_u32("ZZ9K_TEST_ENV_U32", 42U) != 42U) return 1;
+
+  setenv("ZZ9K_TEST_ENV_U32", "1536", 1);
+  if (zz9k_env_u32("ZZ9K_TEST_ENV_U32", 42U) != 1536U) return 2;
+
+  setenv("ZZ9K_TEST_ENV_U32", "0", 1);
+  if (zz9k_env_u32("ZZ9K_TEST_ENV_U32", 42U) != 42U) return 3;
+
+  setenv("ZZ9K_TEST_ENV_U32", "junk", 1);
+  if (zz9k_env_u32("ZZ9K_TEST_ENV_U32", 42U) != 42U) return 4;
+
+  unsetenv("ZZ9K_TEST_ENV_U32");
+  return 0;
+}
+
 int main(void)
 {
   int result;
@@ -2708,6 +2727,9 @@ int main(void)
 
   result = test_sync_call_times_out_without_completion();
   if (result) return 355 + result;
+
+  result = test_env_u32_reads_positive_decimal_or_fallback();
+  if (result) return 356 + result;
 
   return 0;
 }

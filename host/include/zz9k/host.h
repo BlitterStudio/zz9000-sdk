@@ -253,6 +253,10 @@ int zz9k_poll_batch(ZZ9KContext *ctx, ZZ9KMailboxEntry *replies,
 int zz9k_call(ZZ9KContext *ctx, ZZ9KRequest *request, ZZ9KMailboxEntry *reply,
               uint32_t timeout_ticks);
 
+/* Read a positive decimal environment variable (AmigaOS: GetVar on ENV:;
+   host: getenv). Returns `fallback` when unset, non-numeric, or <= 0. */
+uint32_t zz9k_env_u32(const char *name, uint32_t fallback);
+
 #ifdef __cplusplus
 }
 #endif

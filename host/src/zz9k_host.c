@@ -277,7 +277,7 @@ static void zz9k_idle_between_polls(void)
 #define ZZ9K_SYNC_WAIT_HEARTBEAT_MICROS 4000UL
 #define ZZ9K_SYNC_WAIT_TIMEOUT_MS_DEFAULT 5000UL
 
-static uint32_t zz9k_sync_wait_timeout_ms(void)
+uint32_t zz9k_env_u32(const char *name, uint32_t fallback)
 {
 #if ZZ9K_HOST_AMIGA
   struct DosLibrary *previous_dos_base;
@@ -287,13 +287,12 @@ static uint32_t zz9k_sync_wait_timeout_ms(void)
 
   dos_base = OpenLibrary((CONST_STRPTR)"dos.library", 0);
   if (!dos_base) {
-    return ZZ9K_SYNC_WAIT_TIMEOUT_MS_DEFAULT;
+    return fallback;
   }
   previous_dos_base = DOSBase;
   DOSBase = (struct DosLibrary *)dos_base;
 
-  len = GetVar((CONST_STRPTR)"ZZ9K_SYNC_WAIT_TIMEOUT_MS", buf,
-               (LONG)sizeof(buf) - 1, 0);
+  len = GetVar((CONST_STRPTR)name, buf, (LONG)sizeof(buf) - 1, 0);
 
   DOSBase = previous_dos_base;
   CloseLibrary(dos_base);
@@ -304,17 +303,23 @@ static uint32_t zz9k_sync_wait_timeout_ms(void)
       return (uint32_t)v;
     }
   }
-  return ZZ9K_SYNC_WAIT_TIMEOUT_MS_DEFAULT;
+  return fallback;
 #else
-  const char *env = getenv("ZZ9K_SYNC_WAIT_TIMEOUT_MS");
+  const char *env = getenv(name);
   if (env && *env) {
     long v = strtol(env, NULL, 10);
     if (v > 0) {
       return (uint32_t)v;
     }
   }
-  return ZZ9K_SYNC_WAIT_TIMEOUT_MS_DEFAULT;
+  return fallback;
 #endif
+}
+
+static uint32_t zz9k_sync_wait_timeout_ms(void)
+{
+  return zz9k_env_u32("ZZ9K_SYNC_WAIT_TIMEOUT_MS",
+                      ZZ9K_SYNC_WAIT_TIMEOUT_MS_DEFAULT);
 }
 
 /* Monotonic-ish millisecond reading; unsigned deltas absorb wrap. */
