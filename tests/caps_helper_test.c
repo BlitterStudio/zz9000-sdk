@@ -256,6 +256,18 @@ static int test_service_flag_names(void)
     return 14;
   }
   if (!expect_name(zz9k_service_flag_name(
+                       ZZ9K_SERVICE_CODEC,
+                       ZZ9K_SERVICE_FLAG_CODEC_LZH),
+                   "lzh")) {
+    return 22;
+  }
+  if (!expect_name(zz9k_service_flag_name(
+                       ZZ9K_SERVICE_CODEC,
+                       ZZ9K_SERVICE_FLAG_CODEC_DECOMPRESS_BATCH),
+                   "decompress-batch")) {
+    return 23;
+  }
+  if (!expect_name(zz9k_service_flag_name(
                        ZZ9K_SERVICE_AUDIO,
                        ZZ9K_SERVICE_FLAG_AUDIO_MP3_DECODE),
                    "mp3-decode")) {
@@ -337,7 +349,7 @@ static int test_service_flag_iteration(void)
   if (zz9k_known_service_flag(ZZ9K_SERVICE_IMAGE, 15) != 0U) {
     return 21;
   }
-  if (zz9k_known_service_flag_count(ZZ9K_SERVICE_CODEC) != 17U) {
+  if (zz9k_known_service_flag_count(ZZ9K_SERVICE_CODEC) != 19U) {
     return 9;
   }
   if (zz9k_known_service_flag(ZZ9K_SERVICE_CODEC, 4) !=
@@ -376,8 +388,16 @@ static int test_service_flag_iteration(void)
       ZZ9K_SERVICE_FLAG_CODEC_LZMA2) {
     return 18;
   }
-  if (zz9k_known_service_flag(ZZ9K_SERVICE_CODEC, 17) != 0U) {
+  if (zz9k_known_service_flag(ZZ9K_SERVICE_CODEC, 17) !=
+      ZZ9K_SERVICE_FLAG_CODEC_LZH) {
     return 19;
+  }
+  if (zz9k_known_service_flag(ZZ9K_SERVICE_CODEC, 18) !=
+      ZZ9K_SERVICE_FLAG_CODEC_DECOMPRESS_BATCH) {
+    return 27;
+  }
+  if (zz9k_known_service_flag(ZZ9K_SERVICE_CODEC, 19) != 0U) {
+    return 28;
   }
   if (zz9k_known_service_flag_count(ZZ9K_SERVICE_AUDIO) != 9U) {
     return 20;

@@ -150,7 +150,7 @@ static inline uint32_t zz9k_known_service_flag_count(uint32_t service_id)
     return 9U;
   }
   if (service_id == ZZ9K_SERVICE_CODEC) {
-    return 17U;
+    return 19U;
   }
   if (service_id == ZZ9K_SERVICE_CRYPTO) {
     return 5U;
@@ -231,6 +231,10 @@ static inline uint32_t zz9k_known_service_flag(uint32_t service_id,
       return ZZ9K_SERVICE_FLAG_CODEC_GZIP_FEED;
     case 16:
       return ZZ9K_SERVICE_FLAG_CODEC_LZMA2;
+    case 17:
+      return ZZ9K_SERVICE_FLAG_CODEC_LZH;
+    case 18:
+      return ZZ9K_SERVICE_FLAG_CODEC_DECOMPRESS_BATCH;
     default:
       return 0U;
     }
@@ -384,6 +388,10 @@ static inline const char *zz9k_service_flag_name(uint32_t service_id,
       return "gzip-feed";
     case ZZ9K_SERVICE_FLAG_CODEC_LZMA2:
       return "lzma2";
+    case ZZ9K_SERVICE_FLAG_CODEC_LZH:
+      return "lzh";
+    case ZZ9K_SERVICE_FLAG_CODEC_DECOMPRESS_BATCH:
+      return "decompress-batch";
     default:
       return 0;
     }
