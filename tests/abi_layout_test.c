@@ -163,6 +163,14 @@ typedef char decompress_stream_result_payload_is_48_bytes[
   (sizeof(ZZ9KDecompressStreamResultPayload) == 48U) ? 1 : -1
 ];
 
+typedef char decompress_batch_payload_is_48_bytes[
+  (sizeof(ZZ9KDecompressBatchPayload) == 48U) ? 1 : -1
+];
+
+typedef char decompress_batch_result_payload_is_48_bytes[
+  (sizeof(ZZ9KDecompressBatchResultPayload) == 48U) ? 1 : -1
+];
+
 int main(void)
 {
   uint8_t data[4];
@@ -189,6 +197,17 @@ int main(void)
   if (ZZ9K_OP_DECOMPRESS_STREAM_FEED != ZZ9K_SERVICE_CODEC + 0x05U) {
     return 23;
   }
+  if (ZZ9K_OP_DECOMPRESS_BATCH != ZZ9K_SERVICE_CODEC + 0x06U) return 60;
+  if (ZZ9K_OP_DECOMPRESS_BATCH != 0x0606U) return 61;
+  if (ZZ9K_SERVICE_FLAG_CODEC_DECOMPRESS_BATCH != (1U << 30)) return 62;
+  if (ZZ9K_BATCH_ARENA_MAGIC != 0x5A424154UL) return 63;
+  if (ZZ9K_BATCH_ARENA_VERSION != 1U) return 64;
+  if (ZZ9K_BATCH_MODE_TEST != 0U || ZZ9K_BATCH_MODE_EXTRACT != 1U) return 65;
+  if (ZZ9K_BATCH_HEADER_SIZE != 48U) return 66;
+  if (ZZ9K_BATCH_DESC_SIZE != 32U) return 67;
+  if (ZZ9K_BATCH_RESULT_SIZE != 16U) return 68;
+  if (ZZ9K_BATCH_MEMBER_LIMIT != 1024U) return 69;
+  if (ZZ9K_BATCH_MEMBER_FLAG_HAVE_CRC != (1U << 0)) return 70;
   if (ZZ9K_OP_DIAG_TIMING != ZZ9K_SERVICE_DIAG + 0x01U) {
     return 24;
   }
