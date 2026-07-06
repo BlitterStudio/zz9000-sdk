@@ -205,6 +205,41 @@ static int test_judge_maps_results_to_states(void)
   return 0;
 }
 
+static int test_batch_run_no_service_leaves_all_none(void)
+{
+  ZZ9KArchiveEntry entries[2];
+  uint8_t data[256];
+  uint8_t state[2] = {9U, 9U};
+  ZZ9KServiceInfo service;
+
+  memset(data, 0, sizeof(data));
+  make_entry(&entries[0], ZZ9K_ARCHIVE_LHA_METHOD_LH5, 100U, 300U);
+  make_entry(&entries[1], ZZ9K_ARCHIVE_LHA_METHOD_LH5, 100U, 300U);
+  memset(&service, 0, sizeof(service));
+
+  /* no context */
+  state[0] = state[1] = 9U;
+  zz9k_archive_lha_batch_run(0, &service, data, sizeof(data), entries, 2U,
+                             "t", 0, state);
+  if (state[0] != 9U || state[1] != 9U) return 1; /* untouched */
+
+  /* context but no batch capability advertised */
+  service.flags = ZZ9K_SERVICE_FLAG_CODEC_LZH;
+  zz9k_archive_lha_batch_run((ZZ9KContext *)&service /* non-NULL dummy */,
+                             &service, data, sizeof(data), entries, 2U, "t",
+                             0, state);
+  if (state[0] != 9U || state[1] != 9U) return 2;
+
+  /* list command never batches */
+  service.flags = ZZ9K_SERVICE_FLAG_CODEC_LZH |
+                  ZZ9K_SERVICE_FLAG_CODEC_DECOMPRESS_BATCH;
+  zz9k_archive_lha_batch_run((ZZ9KContext *)&service, &service, data,
+                             sizeof(data), entries, 2U, "l", 0, state);
+  if (state[0] != 9U || state[1] != 9U) return 3;
+
+  return 0;
+}
+
 int main(void)
 {
   int rc;
@@ -213,5 +248,6 @@ int main(void)
   if ((rc = test_plan_chunk_packs_by_budget_and_cap()) != 0) return 200 + rc;
   if ((rc = test_write_tables_lays_out_descriptors()) != 0) return 300 + rc;
   if ((rc = test_judge_maps_results_to_states()) != 0) return 400 + rc;
+  if ((rc = test_batch_run_no_service_leaves_all_none()) != 0) return 500 + rc;
   return 0;
 }
