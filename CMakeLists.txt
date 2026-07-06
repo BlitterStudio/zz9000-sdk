@@ -768,6 +768,15 @@ target_include_directories(archive_tool_logic_test
 target_link_libraries(archive_tool_logic_test PRIVATE zz9k_host zz9k_lha_unix)
 add_test(NAME archive_tool_logic_test COMMAND archive_tool_logic_test)
 
+add_executable(archive_tool_batch_test tests/archive_tool_batch_test.c)
+target_include_directories(archive_tool_batch_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/host/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/tools/lha-unix
+  ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+target_link_libraries(archive_tool_batch_test PRIVATE zz9k_host zz9k_lha_unix)
+add_test(NAME archive_tool_batch_test COMMAND archive_tool_batch_test)
+
 add_executable(lha_decode_accept_test
   tests/lha_decode_accept_test.c
 )
