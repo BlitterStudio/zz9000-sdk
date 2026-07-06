@@ -9,7 +9,6 @@
 
 #include "zz9k/host.h"
 #include "zz9k/audio.h"
-#include "zz9k/batch.h"
 #include "zz9k/compression.h"
 #include "zz9k/crypto.h"
 #include <string.h>

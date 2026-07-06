@@ -8,7 +8,6 @@
 #define ZZ9K_REPLY_H
 
 #include "zz9k/audio.h"
-#include "zz9k/batch.h"
 #include "zz9k/host.h"
 #include "zz9k/compression.h"
 #include <string.h>
