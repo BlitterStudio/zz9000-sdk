@@ -108,6 +108,42 @@ static int test_plan_chunk_packs_by_budget_and_cap(void)
   return 0;
 }
 
+static int test_plan_chunk_test_mode_uncompressed_cap(void)
+{
+  ZZ9KArchiveEntry entries[4];
+  uint32_t members[4] = {0U, 1U, 2U, 3U};
+  ZZ9KLhaBatchChunk chunk;
+  uint32_t i;
+
+  for (i = 0U; i < 4U; i++) {
+    make_entry(&entries[i], ZZ9K_ARCHIVE_LHA_METHOD_LH5, 100U, 300U);
+  }
+
+  /* cap fits 2.5 members' uncompressed output -> chunk of 2 */
+  if (zz9k_archive_lha_batch_plan_chunk(entries, members, 4U, 0U,
+                                        ZZ9K_BATCH_MODE_TEST, 64U, 10000U,
+                                        750U, &chunk) != 2U) {
+    return 1;
+  }
+  if (chunk.output_length != 600U) return 2;
+
+  /* 0 = unbounded (existing TEST behavior preserved) */
+  if (zz9k_archive_lha_batch_plan_chunk(entries, members, 4U, 0U,
+                                        ZZ9K_BATCH_MODE_TEST, 64U, 10000U,
+                                        0U, &chunk) != 4U) {
+    return 3;
+  }
+
+  /* an oversize member alone packs nothing (caller advances) */
+  entries[0].uncompressed_size = 999U;
+  if (zz9k_archive_lha_batch_plan_chunk(entries, members, 4U, 0U,
+                                        ZZ9K_BATCH_MODE_TEST, 64U, 10000U,
+                                        750U, &chunk) != 0U) {
+    return 4;
+  }
+  return 0;
+}
+
 static int test_write_tables_lays_out_descriptors(void)
 {
   ZZ9KArchiveEntry entries[2];
@@ -249,5 +285,8 @@ int main(void)
   if ((rc = test_write_tables_lays_out_descriptors()) != 0) return 300 + rc;
   if ((rc = test_judge_maps_results_to_states()) != 0) return 400 + rc;
   if ((rc = test_batch_run_no_service_leaves_all_none()) != 0) return 500 + rc;
+  if ((rc = test_plan_chunk_test_mode_uncompressed_cap()) != 0) {
+    return 600 + rc;
+  }
   return 0;
 }

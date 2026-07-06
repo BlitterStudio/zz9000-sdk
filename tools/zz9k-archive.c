@@ -7115,6 +7115,7 @@ typedef struct ZZ9KLhaBatchChunk {
 #define ZZ9K_BATCH_OUTPUT_BUDGET_DEFAULT_KB 2048U
 #define ZZ9K_BATCH_MAX_MEMBERS_DEFAULT 64U
 #define ZZ9K_BATCH_MAX_MEMBERS_CAP 256U
+#define ZZ9K_BATCH_TEST_UNCOMP_BUDGET_DEFAULT_KB 8192U
 
 static int zz9k_archive_lha_batch_member_eligible(
     const ZZ9KArchiveEntry *entry, uint32_t length)
@@ -7130,7 +7131,14 @@ static int zz9k_archive_lha_batch_member_eligible(
 
 /* Greedily pack members[first..] into one chunk. Returns the number of
    members packed; 0 means members[first] alone exceeds a budget (the
-   caller must advance past it). */
+   caller must advance past it).
+
+   `output_capacity` is a cumulative-uncompressed-size cap applied whenever
+   it is nonzero, in ANY mode: EXTRACT passes its output-region capacity
+   (the chunk's decoded bytes must fit the arena's output region); TEST
+   passes a decode-time budget (output is discarded on the board, but each
+   chunk is still one synchronous mailbox op, so cumulative uncompressed
+   size bounds firmware decode time per op). 0 means unbounded. */
 static uint32_t zz9k_archive_lha_batch_plan_chunk(
     const ZZ9KArchiveEntry *entries, const uint32_t *members,
     uint32_t member_total, uint32_t first, uint32_t mode,
@@ -7141,6 +7149,7 @@ static uint32_t zz9k_archive_lha_batch_plan_chunk(
   uint32_t out = 0U;
   uint32_t n = 0U;
 
+  (void)mode;
   chunk->first = first;
   chunk->count = 0U;
   chunk->blob_length = 0U;
@@ -7152,7 +7161,7 @@ static uint32_t zz9k_archive_lha_batch_plan_chunk(
     if (entry->compressed_size > blob_capacity - blob) {
       break;
     }
-    if (mode == ZZ9K_BATCH_MODE_EXTRACT &&
+    if (output_capacity != 0U &&
         entry->uncompressed_size > output_capacity - out) {
       break;
     }
@@ -7308,10 +7317,12 @@ static void zz9k_archive_lha_batch_run(ZZ9KContext *ctx,
   uint8_t *results = 0;
   uint32_t member_total = 0U;
   uint32_t largest = 0U;
+  uint32_t largest_uncomp = 0U;
   uint32_t mode;
   uint32_t member_cap;
   uint32_t blob_capacity;
   uint32_t output_capacity;
+  uint32_t chunk_uncomp_cap = 0U;
   uint32_t first;
   uint32_t i;
 
@@ -7348,6 +7359,9 @@ static void zz9k_archive_lha_batch_run(ZZ9KContext *ctx,
     if (entry->compressed_size > largest) {
       largest = entry->compressed_size;
     }
+    if (entry->uncompressed_size > largest_uncomp) {
+      largest_uncomp = entry->uncompressed_size;
+    }
   }
   if (member_total == 0U) {
     free(members);
@@ -7366,6 +7380,18 @@ static void zz9k_archive_lha_batch_run(ZZ9KContext *ctx,
           ? zz9k_env_u32("ZZ9K_BATCH_OUTPUT_KB",
                          ZZ9K_BATCH_OUTPUT_BUDGET_DEFAULT_KB) * 1024U
           : 0U;
+
+  if (mode == ZZ9K_BATCH_MODE_TEST) {
+    chunk_uncomp_cap = zz9k_env_u32("ZZ9K_BATCH_TEST_UNCOMP_KB",
+                                    ZZ9K_BATCH_TEST_UNCOMP_BUDGET_DEFAULT_KB) *
+                       1024U;
+    /* Never cap below the largest member: a multi-MB member must still fit
+       a (single-member) chunk -- bounding per-op decode time must not push
+       big members back to the software path. */
+    if (chunk_uncomp_cap < largest_uncomp) {
+      chunk_uncomp_cap = largest_uncomp;
+    }
+  }
 
   /* `test` streams-and-discards on the board, so a member's only arena
      footprint is its compressed bytes: try to grow the blob region to fit
@@ -7411,10 +7437,11 @@ static void zz9k_archive_lha_batch_run(ZZ9KContext *ctx,
     unsigned long chunk_bytes_in;
     int status;
 
-    if (zz9k_archive_lha_batch_plan_chunk(entries, members, member_total,
-                                          first, mode, member_cap,
-                                          blob_capacity, output_capacity,
-                                          &chunk) == 0U) {
+    if (zz9k_archive_lha_batch_plan_chunk(
+            entries, members, member_total, first, mode, member_cap,
+            blob_capacity,
+            mode == ZZ9K_BATCH_MODE_TEST ? chunk_uncomp_cap : output_capacity,
+            &chunk) == 0U) {
       first++; /* member fits no chunk -> per-member path */
       continue;
     }
