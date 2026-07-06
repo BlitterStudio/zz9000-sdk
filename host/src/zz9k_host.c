@@ -81,6 +81,7 @@ struct ZZ9KContext {
   uint32_t completion_ring_entries;
   uint32_t next_request_id;
   uint32_t sync_cookie_mask;
+  uint32_t offload_timeout_ms;
   unsigned char irq_armed;
 #if ZZ9K_HOST_AMIGA
   struct Interrupt irq;
@@ -93,6 +94,11 @@ struct ZZ9KContext {
   int timer_open;
 #endif
 };
+
+#if ZZ9K_HOST_AMIGA
+static int zz9k_timer_open(ZZ9KContext *ctx);
+static void zz9k_timer_close(ZZ9KContext *ctx);
+#endif
 
 static void *zz9k_alloc_host(size_t size)
 {
@@ -818,8 +824,21 @@ int zz9k_attach_mailbox(ZZ9KContext **ctx, const ZZ9KBoard *board,
 
 void zz9k_close(ZZ9KContext *ctx)
 {
+  if (!ctx) {
+    return;
+  }
   zz9k_disarm_completion_irq(ctx);
+#if ZZ9K_HOST_AMIGA
+  zz9k_timer_close(ctx);
+#endif
   zz9k_free_host(ctx);
+}
+
+void zz9k_set_offload_timeout_ms(ZZ9KContext *ctx, uint32_t timeout_ms)
+{
+  if (ctx) {
+    ctx->offload_timeout_ms = timeout_ms;
+  }
 }
 
 int zz9k_completion_irq_supported(ZZ9KContext *ctx)
@@ -913,6 +932,9 @@ static uint32_t zz9k_sdk_isr(ZZ9KContext *ctx asm("a1"))
 
 static int zz9k_timer_open(ZZ9KContext *ctx)
 {
+  if (ctx->timer_open) {
+    return ZZ9K_STATUS_OK;
+  }
   ctx->timer_port = CreateMsgPort();
   if (!ctx->timer_port) {
     return ZZ9K_STATUS_NO_MEMORY;
@@ -2662,6 +2684,8 @@ int zz9k_call(ZZ9KContext *ctx, ZZ9KRequest *request, ZZ9KMailboxEntry *reply,
   uint32_t request_id;
   uint32_t sync_cookie;
   uint32_t ticks;
+  uint32_t start_ms = 0U;
+  int use_wall_clock = 0;
   int lock_status;
   int status;
 
@@ -2692,8 +2716,26 @@ int zz9k_call(ZZ9KContext *ctx, ZZ9KRequest *request, ZZ9KMailboxEntry *reply,
     goto done;
   }
 
+#if ZZ9K_HOST_AMIGA
+  if (ctx->offload_timeout_ms != 0U &&
+      zz9k_timer_open(ctx) == ZZ9K_STATUS_OK) {
+    use_wall_clock = 1;
+    start_ms = zz9k_now_ms(ctx);
+  }
+#else
+  if (ctx->offload_timeout_ms != 0U && zz9k_now_hook_for_test) {
+    use_wall_clock = 1;
+    start_ms = zz9k_now_ms(ctx);
+  }
+#endif
+
   zz9k_idle_between_polls();
-  for (ticks = 0; ticks < timeout_ticks; ticks++) {
+  if (!use_wall_clock && timeout_ticks == 0U) {
+    status = ZZ9K_STATUS_TIMEOUT;
+    goto done;
+  }
+
+  for (ticks = 0;; ticks++) {
     status = zz9k_consume_next_completion_locked(ctx, reply);
     if (status == ZZ9K_STATUS_OK) {
       if (reply->request_id == request_id &&
@@ -2702,16 +2744,23 @@ int zz9k_call(ZZ9KContext *ctx, ZZ9KRequest *request, ZZ9KMailboxEntry *reply,
         status = reply->status;
         goto done;
       }
-      zz9k_idle_between_polls();
-      continue;
+      /* Stale/non-matching completion: discard and keep waiting for ours. */
+    } else if (status != ZZ9K_STATUS_BUSY) {
+      goto done;
     }
-    if (status != ZZ9K_STATUS_BUSY) {
+
+    if (use_wall_clock) {
+      if ((uint32_t)(zz9k_now_ms(ctx) - start_ms) >= ctx->offload_timeout_ms ||
+          ticks >= (uint32_t)ZZ9K_OFFLOAD_ITER_BACKSTOP) {
+        status = ZZ9K_STATUS_TIMEOUT;
+        goto done;
+      }
+    } else if (ticks + 1U >= timeout_ticks) {
+      status = ZZ9K_STATUS_TIMEOUT;
       goto done;
     }
     zz9k_idle_between_polls();
   }
-
-  status = ZZ9K_STATUS_TIMEOUT;
 
 done:
   zz9k_mailbox_unlock(ctx);

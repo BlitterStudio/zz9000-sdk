@@ -224,6 +224,19 @@ target_include_directories(crypto_soft_test
 
 add_test(NAME crypto_soft_test COMMAND crypto_soft_test)
 
+add_executable(offload_retry_policy_test
+  tests/offload_retry_policy_test.c
+)
+
+target_include_directories(offload_retry_policy_test
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/host/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/amiga/provider
+)
+
+add_test(NAME offload_retry_policy_test COMMAND offload_retry_policy_test)
+
 # OpenSSL 3 provider unit test (Phase 4). Optional: built only when an OpenSSL 3
 # development install is found, since the host suite is otherwise dependency
 # free. On the Amiga the same provider source builds against AmiSSL 5.x.

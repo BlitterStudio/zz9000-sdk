@@ -99,6 +99,8 @@ typedef struct ZZ9KServiceInfo {
 } ZZ9KServiceInfo;
 
 #define ZZ9K_DEFAULT_TIMEOUT_TICKS 250UL
+#define ZZ9K_OFFLOAD_TIMEOUT_MS 250UL
+#define ZZ9K_OFFLOAD_ITER_BACKSTOP 1000000UL
 #define ZZ9K_CRYPTO_BATCH_MAX_IN_FLIGHT 16U
 
 const char *zz9k_status_name(int status);
@@ -113,6 +115,9 @@ int zz9k_attach_mailbox(ZZ9KContext **ctx, const ZZ9KBoard *board,
                         volatile uint16_t *doorbell,
                         volatile uint16_t *irq_ack);
 void zz9k_close(ZZ9KContext *ctx);
+/* Enable a real-time timeout budget for unarmed polling calls on this context.
+   0 disables the wall-clock budget and restores the legacy tick bound. */
+void zz9k_set_offload_timeout_ms(ZZ9KContext *ctx, uint32_t timeout_ms);
 int zz9k_query_caps(ZZ9KContext *ctx, ZZ9KCaps *caps);
 int zz9k_query_service(ZZ9KContext *ctx, uint32_t service_id,
                        ZZ9KServiceInfo *service);
