@@ -23,6 +23,10 @@ static inline int zz9k_compression_algorithm_known(uint32_t algorithm)
   case ZZ9K_COMPRESSION_LZ4_BLOCK:
   case ZZ9K_COMPRESSION_LZMA_ALONE:
   case ZZ9K_COMPRESSION_LZMA2:
+  case ZZ9K_COMPRESSION_LH1:
+  case ZZ9K_COMPRESSION_LH5:
+  case ZZ9K_COMPRESSION_LH6:
+  case ZZ9K_COMPRESSION_LH7:
     return 1;
   default:
     return 0;
@@ -45,6 +49,11 @@ static inline uint32_t zz9k_compression_required_service_flags(
     return ZZ9K_SERVICE_FLAG_CODEC_LZMA_ALONE;
   case ZZ9K_COMPRESSION_LZMA2:
     return ZZ9K_SERVICE_FLAG_CODEC_LZMA2;
+  case ZZ9K_COMPRESSION_LH1:
+  case ZZ9K_COMPRESSION_LH5:
+  case ZZ9K_COMPRESSION_LH6:
+  case ZZ9K_COMPRESSION_LH7:
+    return ZZ9K_SERVICE_FLAG_CODEC_LZH;
   default:
     return 0U;
   }

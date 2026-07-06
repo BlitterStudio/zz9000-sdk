@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "archive_7z_real_fixtures.h"
+#include "lha_header_parse_fixtures.h"
 
 #define ZZ9K_ARCHIVE_TEST_7Z_SPLIT_SUBSTREAM_FLAG 0x40000000UL
 
@@ -338,7 +339,9 @@ static int make_lha_lh5_level1_ext_name(uint8_t *lha, uint32_t *length)
   lha[pos++] = header_size;
   lha[pos++] = 0U;
   memcpy(lha + pos, "-lh5-", 5U); pos += 5U;
-  put_le32(lha + pos, data_len); pos += 4U;
+  /* Level-1 "compressed size" spans the extended headers AND the compressed
+     data (matches real LHA archivers; the parser subtracts ext_total). */
+  put_le32(lha + pos, data_len + dir_ext_size + name_ext_size); pos += 4U;
   put_le32(lha + pos, 20U); pos += 4U;
   put_le32(lha + pos, 0U); pos += 4U;
   lha[pos++] = 0x20U;
@@ -387,7 +390,9 @@ static uint32_t append_lha_level1_header(uint8_t *lha, uint32_t pos,
   lha[pos++] = header_size;
   lha[pos++] = 0U;
   memcpy(lha + pos, method, 5U); pos += 5U;
-  put_le32(lha + pos, data_len); pos += 4U;
+  /* Level-1 "compressed size" spans the extended headers AND the compressed
+     data (matches real LHA archivers; the parser subtracts ext_total). */
+  put_le32(lha + pos, data_len + dir_ext_size + name_ext_size); pos += 4U;
   put_le32(lha + pos, unpacked_size); pos += 4U;
   put_le32(lha + pos, 0U); pos += 4U;
   lha[pos++] = 0x20U;
@@ -4409,6 +4414,112 @@ static int test_lha_level1_extension_name_and_dir_are_used(void)
   return 0;
 }
 
+/*
+ * Regression: multi-member level-1 archive with extended headers. The level-1
+ * "compressed size" field spans BOTH the extended headers and the compressed
+ * data, so the second member is located only if ext_total is subtracted from
+ * every level-1 entry (not just when the size would overrun EOF). UndElEtE_AFS
+ * member 1 declares 1169 with 19 bytes of extended headers -> 1150 of data.
+ * Before the fix the parser over-skipped by 19 and rejected the archive.
+ */
+static int test_lha_level1_multimember_ext_headers(void)
+{
+  ZZ9KArchiveEntry entries[4];
+  uint32_t count = 0U;
+
+  memset(entries, 0, sizeof(entries));
+  if (!zz9k_archive_lha_list(zz9k_lha_undelete, zz9k_lha_undelete_len,
+                             entries, 4U, &count)) {
+    return 1;
+  }
+  if (count != 2U) return 2;
+  if (strcmp(entries[0].name, "UndElEtE") != 0) return 3;
+  if (entries[0].method != ZZ9K_ARCHIVE_LHA_METHOD_LH5) return 4;
+  if (entries[0].compressed_size != 1150U) return 5;   /* 1169 - 19 ext_total */
+  if (entries[0].uncompressed_size != 1884U) return 6;
+  if (strcmp(entries[1].name, "UndElEtE.e") != 0) return 7;
+  if (entries[1].method != ZZ9K_ARCHIVE_LHA_METHOD_LH5) return 8;
+  if (entries[1].compressed_size != 844U) return 9;
+  return 0;
+}
+
+/*
+ * Regression: an archive whose members consume the file exactly, with no
+ * trailing zero header-size terminator. MoveLow.lha's two -lh5- members end
+ * precisely at EOF; the parse loop must accept end-of-data as success rather
+ * than falling through to a hard failure.
+ */
+static int test_lha_ends_at_eof_without_terminator(void)
+{
+  ZZ9KArchiveEntry entries[4];
+  uint32_t count = 0U;
+
+  memset(entries, 0, sizeof(entries));
+  if (!zz9k_archive_lha_list(zz9k_lha_movelow, zz9k_lha_movelow_len,
+                             entries, 4U, &count)) {
+    return 1;
+  }
+  if (count != 2U) return 2;
+  if (strcmp(entries[0].name, "MoveLow") != 0) return 3;
+  if (entries[0].method != ZZ9K_ARCHIVE_LHA_METHOD_LH5) return 4;
+  if (entries[0].compressed_size != 305U) return 5;
+  if (strcmp(entries[1].name, "MoveLow.readme") != 0) return 6;
+  if (entries[1].uncompressed_size != 4742U) return 7;
+  return 0;
+}
+
+/*
+ * Regression: a sub-header remnant after the final member (e.g. a stray
+ * "0\0\0" instead of a single 0x00 terminator) must be treated as
+ * end-of-archive, not a hard failure that discards every parsed member.
+ *
+ * MoveLow ends exactly at EOF with NO 0x00 terminator byte, so a trailing
+ * remnant drives the parser through the short-tail end-of-archive guard
+ * (Fix B). (Undelete ends in a real 0x00 terminator and would exit via the
+ * explicit-terminator branch before ever reaching Fix B, so it cannot test
+ * this path.)
+ */
+static int test_lha_trailing_junk_after_last_member(void)
+{
+  uint8_t buf[3000];
+  ZZ9KArchiveEntry entries[4];
+  uint32_t count = 0U;
+
+  /* Case 1: a stray 3-byte "0\0\0" remnant after the final member. The
+     non-zero header-size byte skips the terminator branch; only 3 bytes
+     remain, so the short-tail guard must rescue the two parsed members. */
+  {
+    uint32_t total = zz9k_lha_movelow_len + 3U;
+    if (total > sizeof(buf)) return 1;
+    memcpy(buf, zz9k_lha_movelow, zz9k_lha_movelow_len);
+    buf[zz9k_lha_movelow_len + 0U] = 0x30U; /* '0' -- not a 0x00 terminator */
+    buf[zz9k_lha_movelow_len + 1U] = 0x00U;
+    buf[zz9k_lha_movelow_len + 2U] = 0x00U;
+    memset(entries, 0, sizeof(entries));
+    if (!zz9k_archive_lha_list(buf, total, entries, 4U, &count)) return 2;
+    if (count != 2U) return 3;
+    if (strcmp(entries[1].name, "MoveLow.readme") != 0) return 4;
+  }
+
+  /* Case 2: a 22-byte non-zero remnant -- shorter than the 24-byte minimum
+     header. The short-tail guard (>= 24 bytes) must catch it. The earlier
+     21-byte guard let a 21-23 byte tail fall into the checksum validator,
+     which floors at 24 bytes and hard-failed the entire archive. */
+  {
+    uint32_t total = zz9k_lha_movelow_len + 22U;
+    if (total > sizeof(buf)) return 5;
+    memcpy(buf, zz9k_lha_movelow, zz9k_lha_movelow_len);
+    memset(buf + zz9k_lha_movelow_len, 0, 22U);
+    buf[zz9k_lha_movelow_len] = 0x30U; /* non-zero header-size byte */
+    count = 0U;
+    memset(entries, 0, sizeof(entries));
+    if (!zz9k_archive_lha_list(buf, total, entries, 4U, &count)) return 6;
+    if (count != 2U) return 7;
+  }
+
+  return 0;
+}
+
 static int test_lha_level1_lhd_and_lh0_extract(void)
 {
   const char *output_dir = "archive_tool_lha_l1_out";
@@ -4433,7 +4544,7 @@ static int test_lha_level1_lhd_and_lh0_extract(void)
   if (strcmp(entries[1].name, "dir/stored.txt") != 0) return 5;
   if (entries[1].method != ZZ9K_ARCHIVE_LHA_METHOD_LH0) return 6;
   if (entries[1].is_dir) return 7;
-  if (!zz9k_archive_handle_lha(lha, lha_len, "x", output_dir)) {
+  if (!zz9k_archive_handle_lha(0, 0, lha, lha_len, "x", output_dir)) {
     rc = 8;
     goto out;
   }
@@ -4471,7 +4582,7 @@ static int test_lha_extract_match_filter_skips_unmatched(void)
   remove(output_dir);
   make_lha_level1_lhd_and_lh0(lha, &lha_len);
   zz9k_archive_match_filter = "stored";
-  if (!zz9k_archive_handle_lha(lha, lha_len, "x", output_dir)) {
+  if (!zz9k_archive_handle_lha(0, 0, lha, lha_len, "x", output_dir)) {
     rc = 1;
     goto out;
   }
@@ -4550,7 +4661,7 @@ static int test_lha_lh5_docker_fixture_extracts(void)
   if (entries[0].uncompressed_size != 58000U) return 6;
   if (entries[0].crc32 != 0x14e1U) return 7;
   if (!zz9k_archive_handle_lha(
-          lha_lh5_docker_fixture,
+          0, 0, lha_lh5_docker_fixture,
           (uint32_t)sizeof(lha_lh5_docker_fixture), "x", output_dir)) {
     return 8;
   }
@@ -4626,7 +4737,7 @@ static int test_lha_lh6_lh7_docker_fixtures_extract(void)
       return 4 + pass * 20;
     }
     if (!zz9k_archive_handle_lha(
-            fixture, (uint32_t)sizeof(fixture), "x", output_dir)) {
+            0, 0, fixture, (uint32_t)sizeof(fixture), "x", output_dir)) {
       return 5 + pass * 20;
     }
     file = fopen(output_path, "rb");
@@ -4683,7 +4794,7 @@ static int test_lha_lh1_docker_fixture_extracts(void)
   if (entries[0].uncompressed_size != 1360U) return 5;
   if (entries[0].crc32 != 0x6355U) return 6;
   if (!zz9k_archive_handle_lha(
-          lha_lh1_docker_fixture,
+          0, 0, lha_lh1_docker_fixture,
           (uint32_t)sizeof(lha_lh1_docker_fixture), "x", output_dir)) {
     return 7;
   }
@@ -4717,7 +4828,7 @@ static int test_lha_lh0_extract(void)
   remove("archive_tool_lha_out/dir");
   remove(output_dir);
   make_lha_lh0(lha, &lha_len);
-  if (!zz9k_archive_handle_lha(lha, lha_len, "x", output_dir)) {
+  if (!zz9k_archive_handle_lha(0, 0, lha, lha_len, "x", output_dir)) {
     rc = 1;
     goto out;
   }
@@ -6210,6 +6321,32 @@ static int test_tar_rejects_bad_header_checksum(void)
   return 0;
 }
 
+static int test_lha_method_to_compression_mapper(void)
+{
+  if (zz9k_archive_lha_method_to_compression(ZZ9K_ARCHIVE_LHA_METHOD_LH1) !=
+      ZZ9K_COMPRESSION_LH1) {
+    return 1;
+  }
+  if (zz9k_archive_lha_method_to_compression(ZZ9K_ARCHIVE_LHA_METHOD_LH5) !=
+      ZZ9K_COMPRESSION_LH5) {
+    return 2;
+  }
+  if (zz9k_archive_lha_method_to_compression(ZZ9K_ARCHIVE_LHA_METHOD_LH6) !=
+      ZZ9K_COMPRESSION_LH6) {
+    return 3;
+  }
+  if (zz9k_archive_lha_method_to_compression(ZZ9K_ARCHIVE_LHA_METHOD_LH7) !=
+      ZZ9K_COMPRESSION_LH7) {
+    return 4;
+  }
+  /* Unsupported / lh0-stored methods must not map to a codec algorithm. */
+  if (zz9k_archive_lha_method_to_compression(ZZ9K_ARCHIVE_LHA_METHOD_LH0) !=
+      0U) {
+    return 5;
+  }
+  return 0;
+}
+
 int main(void)
 {
   int rc;
@@ -6523,6 +6660,21 @@ int main(void)
     printf("test_lha_lh0_extract failed: %d\n", rc);
     return 47 + rc;
   }
+  rc = test_lha_level1_multimember_ext_headers();
+  if (rc) {
+    printf("test_lha_level1_multimember_ext_headers failed: %d\n", rc);
+    return 400 + rc;
+  }
+  rc = test_lha_ends_at_eof_without_terminator();
+  if (rc) {
+    printf("test_lha_ends_at_eof_without_terminator failed: %d\n", rc);
+    return 410 + rc;
+  }
+  rc = test_lha_trailing_junk_after_last_member();
+  if (rc) {
+    printf("test_lha_trailing_junk_after_last_member failed: %d\n", rc);
+    return 420 + rc;
+  }
   rc = test_zip_backslash_names_are_normalized();
   if (rc) {
     printf("test_zip_backslash_names_are_normalized failed: %d\n", rc);
@@ -6721,6 +6873,11 @@ int main(void)
     printf("test_7z_split_writer_handles_zero_length_substreams failed: %d\n",
            rc);
     return 420 + rc;
+  }
+  rc = test_lha_method_to_compression_mapper();
+  if (rc) {
+    printf("test_lha_method_to_compression_mapper failed: %d\n", rc);
+    return 430 + rc;
   }
   return 0;
 }

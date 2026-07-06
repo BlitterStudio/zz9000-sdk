@@ -4,9 +4,14 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200112L
+#endif
+
 #include "zz9k/host.h"
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define TEST_SYNC_COOKIE_MASK 0x5aa55aa5UL
@@ -20,6 +25,24 @@ struct TestMailbox {
 void zz9k_set_idle_hook_for_test(void (*hook)(void));
 
 static struct TestMailbox *idle_test_mailbox;
+
+static void clear_test_env_u32(void)
+{
+#ifdef _WIN32
+  _putenv_s("ZZ9K_TEST_ENV_U32", "");
+#else
+  unsetenv("ZZ9K_TEST_ENV_U32");
+#endif
+}
+
+static void set_test_env_u32(const char *value)
+{
+#ifdef _WIN32
+  _putenv_s("ZZ9K_TEST_ENV_U32", value);
+#else
+  setenv("ZZ9K_TEST_ENV_U32", value, 1);
+#endif
+}
 
 static void init_mailbox(struct TestMailbox *mailbox)
 {
@@ -2074,6 +2097,74 @@ static int test_decompress_builds_request_and_maps_result(void)
   return 0;
 }
 
+static int test_decompress_batch_maps_result(void)
+{
+  struct TestMailbox mailbox;
+  ZZ9KContext *ctx;
+  ZZ9KBoard board;
+  ZZ9KDecompressBatchDesc desc;
+  ZZ9KDecompressBatchResult result;
+
+  init_mailbox(&mailbox);
+  memset(&board, 0, sizeof(board));
+  memset(&desc, 0, sizeof(desc));
+  desc.arena_handle = 0x77U;
+  desc.arena_offset = 0U;
+  desc.arena_length = 0x1000U;
+
+  prepare_completion(&mailbox, 1, ZZ9K_OP_DECOMPRESS_BATCH, ZZ9K_STATUS_OK,
+                     sizeof(ZZ9KDecompressBatchResultPayload));
+  zz9k_put_be32(&mailbox.completion_ring[0].payload[0], 3U);
+  zz9k_put_be32(&mailbox.completion_ring[0].payload[4], 2U);
+  zz9k_put_be32(&mailbox.completion_ring[0].payload[8], 1U);
+  zz9k_put_be32(&mailbox.completion_ring[0].payload[12], 0U);
+
+  if (zz9k_attach_mailbox(&ctx, &board, &mailbox.descriptor, 0, 0) !=
+      ZZ9K_STATUS_OK) {
+    return 1;
+  }
+
+  memset(&result, 0, sizeof(result));
+  if (zz9k_decompress_batch(ctx, &desc, &result) != ZZ9K_STATUS_OK) {
+    zz9k_close(ctx);
+    return 2;
+  }
+  if (zz9k_get_be16(mailbox.request_ring[0].opcode) !=
+      ZZ9K_OP_DECOMPRESS_BATCH) {
+    zz9k_close(ctx);
+    return 3;
+  }
+  if (zz9k_get_be32(&mailbox.request_ring[0].payload[0]) != 0x77U) {
+    zz9k_close(ctx);
+    return 4;
+  }
+  if (zz9k_get_be32(&mailbox.request_ring[0].payload[8]) != 0x1000U) {
+    zz9k_close(ctx);
+    return 5;
+  }
+  if (result.members_total != 3U || result.members_ok != 2U ||
+      result.members_failed != 1U) {
+    zz9k_close(ctx);
+    return 6;
+  }
+
+  if (zz9k_decompress_batch(0, &desc, &result) != ZZ9K_STATUS_BAD_REQUEST) {
+    zz9k_close(ctx);
+    return 7;
+  }
+  if (zz9k_decompress_batch(ctx, 0, &result) != ZZ9K_STATUS_BAD_REQUEST) {
+    zz9k_close(ctx);
+    return 8;
+  }
+  if (zz9k_decompress_batch(ctx, &desc, 0) != ZZ9K_STATUS_BAD_REQUEST) {
+    zz9k_close(ctx);
+    return 9;
+  }
+
+  zz9k_close(ctx);
+  return 0;
+}
+
 static int test_decompress_stream_helpers_roundtrip_results(void)
 {
   struct TestMailbox mailbox;
@@ -2570,6 +2661,30 @@ static int test_sync_call_times_out_without_completion(void)
   return 0;
 }
 
+static int test_env_u32_reads_positive_decimal_or_fallback(void)
+{
+  clear_test_env_u32();
+  if (zz9k_env_u32("ZZ9K_TEST_ENV_U32", 42U) != 42U) return 1;
+
+  set_test_env_u32("1536");
+  if (zz9k_env_u32("ZZ9K_TEST_ENV_U32", 42U) != 1536U) return 2;
+
+  set_test_env_u32("0");
+  if (zz9k_env_u32("ZZ9K_TEST_ENV_U32", 42U) != 42U) return 3;
+
+  set_test_env_u32("junk");
+  if (zz9k_env_u32("ZZ9K_TEST_ENV_U32", 42U) != 42U) return 4;
+
+  set_test_env_u32("1m");
+  if (zz9k_env_u32("ZZ9K_TEST_ENV_U32", 42U) != 42U) return 5;
+
+  set_test_env_u32("1536 ");
+  if (zz9k_env_u32("ZZ9K_TEST_ENV_U32", 42U) != 42U) return 6;
+
+  clear_test_env_u32();
+  return 0;
+}
+
 int main(void)
 {
   int result;
@@ -2708,6 +2823,12 @@ int main(void)
 
   result = test_sync_call_times_out_without_completion();
   if (result) return 355 + result;
+
+  result = test_env_u32_reads_positive_decimal_or_fallback();
+  if (result) return 356 + result;
+
+  result = test_decompress_batch_maps_result();
+  if (result) return 365 + result;
 
   return 0;
 }

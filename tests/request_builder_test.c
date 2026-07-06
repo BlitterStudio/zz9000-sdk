@@ -1192,6 +1192,48 @@ static int test_crypto_verify_builder_encodes_descriptor(void)
   return 0;
 }
 
+static int test_decompress_batch_builder_encodes_arena(void)
+{
+  ZZ9KRequest request;
+  const ZZ9KDecompressBatchPayload *payload;
+  ZZ9KDecompressBatchDesc desc;
+
+  desc.arena_handle = 0x1234U;
+  desc.arena_offset = 0x10U;
+  desc.arena_length = 0x20000U;
+
+  memset(&request, 0xff, sizeof(request));
+  if (zz9k_request_decompress_batch(&request, &desc) != ZZ9K_STATUS_OK) {
+    return 1;
+  }
+  if (request.entry.opcode != ZZ9K_OP_DECOMPRESS_BATCH) return 2;
+  if (request.entry.flags != ZZ9K_ENTRY_INLINE_PAYLOAD) return 3;
+  if (request.entry.payload_len != sizeof(ZZ9KDecompressBatchPayload)) {
+    return 4;
+  }
+  payload =
+      (const ZZ9KDecompressBatchPayload *)request.entry.payload.inline_data;
+  if (zz9k_get_be32(payload->arena_handle) != 0x1234U) return 5;
+  if (zz9k_get_be32(payload->arena_offset) != 0x10U) return 6;
+  if (zz9k_get_be32(payload->arena_length) != 0x20000U) return 7;
+
+  if (zz9k_request_decompress_batch(&request, 0) != ZZ9K_STATUS_BAD_REQUEST) {
+    return 8;
+  }
+  desc.arena_handle = ZZ9K_INVALID_HANDLE;
+  if (zz9k_request_decompress_batch(&request, &desc) !=
+      ZZ9K_STATUS_BAD_REQUEST) {
+    return 9;
+  }
+  desc.arena_handle = 0x1234U;
+  desc.arena_length = ZZ9K_BATCH_HEADER_SIZE - 1U;
+  if (zz9k_request_decompress_batch(&request, &desc) !=
+      ZZ9K_STATUS_BAD_REQUEST) {
+    return 10;
+  }
+  return 0;
+}
+
 int main(void)
 {
   int result;
@@ -1243,6 +1285,9 @@ int main(void)
 
   result = test_crypto_aes_gcm_builder_encodes_descriptor();
   if (result) return 240 + result;
+
+  result = test_decompress_batch_builder_encodes_arena();
+  if (result) return 270 + result;
 
   return 0;
 }

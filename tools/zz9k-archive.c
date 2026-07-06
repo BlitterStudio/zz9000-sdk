@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#include "zz9k/batch.h"
 #include "zz9k/caps.h"
 #include "zz9k/compression.h"
 #include "zz9k/host.h"
@@ -1294,9 +1295,20 @@ static int zz9k_archive_lha_list(const uint8_t *data,
       *count = entries_used;
       return 1;
     }
-    if (pos + 21U > length ||
-        !zz9k_archive_lha_header_checksum_valid(data + pos,
-                                                length - pos) ||
+    if (pos + 24U > length) {
+      /* Fewer bytes remain than a minimal LHA header (24 = the smallest
+         valid header: 2 size/checksum bytes + a 22-byte level-0 base). This
+         is trailing padding or junk after the final member: some archivers
+         omit or malform the terminating zero header-size byte (e.g. a stray
+         "0\0\0" instead of a single 0x00). Treat it as end-of-archive and
+         keep the members parsed so far -- matching lha/7-Zip -- rather than
+         discarding the whole archive. (The checksum validator below also
+         floors at 24 bytes, so a 21-23 byte tail would otherwise hard-fail
+         the whole archive here.) */
+      *count = entries_used;
+      return 1;
+    }
+    if (!zz9k_archive_lha_header_checksum_valid(data + pos, length - pos) ||
         data[pos + 20U] > 2U) {
       return 0;
     }
@@ -1384,9 +1396,17 @@ static int zz9k_archive_lha_list(const uint8_t *data,
       }
       data_offset = ext_pos;
     }
-    if (level == 1U && ext_total != 0U &&
-        data_offset <= length &&
-        compressed_size > length - data_offset) {
+    if (level == 1U && ext_total != 0U) {
+      /* In an LHA level-1 header the "compressed size" field (offset 7)
+         spans BOTH the extended headers and the compressed data. The data
+         begins after the extended headers (data_offset == ext_pos), so the
+         real compressed-data size is the field minus the total
+         extended-header bytes. This correction must apply to every level-1
+         entry that carries extended headers -- not only when the
+         uncorrected size would overrun end-of-file. Otherwise multi-member
+         archives, and any leading -lhd- directory entry (whose data size is
+         zero, so the field equals ext_total exactly), over-skip by
+         ext_total and mis-locate the next header. */
       if (compressed_size < ext_total) {
         return 0;
       }
@@ -1461,7 +1481,13 @@ static int zz9k_archive_lha_list(const uint8_t *data,
     entries_used++;
     pos = data_offset + compressed_size;
   }
-  return 0;
+  /* Loop exited because pos reached the end of the data (each entry's size
+     was bounds-checked, so pos == length here). The archive's members were
+     all consumed without encountering a zero terminator header -- common for
+     archives that simply end at the final member's data. That is a complete,
+     successful parse, not a failure. */
+  *count = entries_used;
+  return 1;
 }
 
 static int zz9k_archive_lzma_output_capacity(
@@ -4308,14 +4334,15 @@ static void zz9k_archive_print_shared_diag(ZZ9KContext *ctx,
          (unsigned long)diag.shared_heap_largest_free);
 }
 
-static int zz9k_archive_decompress_to_memory(ZZ9KContext *ctx,
-                                             const ZZ9KServiceInfo *service,
-                                             uint32_t algorithm,
-                                             const uint8_t *compressed,
-                                             uint32_t compressed_length,
-                                             uint32_t output_capacity,
-                                             uint8_t **output,
-                                             ZZ9KDecompressResult *result)
+static int zz9k_archive_decompress_to_memory_ex(ZZ9KContext *ctx,
+                                                const ZZ9KServiceInfo *service,
+                                                uint32_t algorithm,
+                                                const uint8_t *compressed,
+                                                uint32_t compressed_length,
+                                                uint32_t output_capacity,
+                                                uint8_t **output,
+                                                ZZ9KDecompressResult *result,
+                                                int verify_only)
 {
   ZZ9KSharedBuffer input;
   ZZ9KSharedBuffer decoded;
@@ -4337,10 +4364,13 @@ static int zz9k_archive_decompress_to_memory(ZZ9KContext *ctx,
     printf("unsupported empty codec job\n");
     return 0;
   }
-  bytes = (uint8_t *)malloc((size_t)output_capacity);
-  if (!bytes) {
-    printf("output allocation failed\n");
-    return 0;
+  bytes = 0;
+  if (!verify_only) {
+    bytes = (uint8_t *)malloc((size_t)output_capacity);
+    if (!bytes) {
+      printf("output allocation failed\n");
+      return 0;
+    }
   }
 
   status = zz9k_alloc_shared(ctx, compressed_length, 16U, 0U, &input);
@@ -4384,14 +4414,23 @@ static int zz9k_archive_decompress_to_memory(ZZ9KContext *ctx,
                                    output_capacity);
     goto out;
   }
-  if (result->bytes_written > output_capacity ||
-      !zz9k_shared_copy_from(bytes, &decoded, 0U, result->bytes_written)) {
-    printf("decoded copy failed\n");
-    goto out;
+  if (verify_only) {
+    /* "test": the board has already decoded and checksummed the member, so
+       the caller only needs result->checksum / result->bytes_written. Skip
+       copying the decoded plaintext back across Zorro -- on a large archive
+       that removes a full pass of the uncompressed size over the bus, which
+       is the entire point of the verify path. */
+    ok = 1;
+  } else {
+    if (result->bytes_written > output_capacity ||
+        !zz9k_shared_copy_from(bytes, &decoded, 0U, result->bytes_written)) {
+      printf("decoded copy failed\n");
+      goto out;
+    }
+    *output = bytes;
+    bytes = 0;
+    ok = 1;
   }
-  *output = bytes;
-  bytes = 0;
-  ok = 1;
 
 out:
   if (decoded.handle != 0U && decoded.handle != ZZ9K_INVALID_HANDLE) {
@@ -4402,6 +4441,20 @@ out:
   }
   free(bytes);
   return ok;
+}
+
+static int zz9k_archive_decompress_to_memory(ZZ9KContext *ctx,
+                                             const ZZ9KServiceInfo *service,
+                                             uint32_t algorithm,
+                                             const uint8_t *compressed,
+                                             uint32_t compressed_length,
+                                             uint32_t output_capacity,
+                                             uint8_t **output,
+                                             ZZ9KDecompressResult *result)
+{
+  return zz9k_archive_decompress_to_memory_ex(
+      ctx, service, algorithm, compressed, compressed_length, output_capacity,
+      output, result, 0);
 }
 
 static void zz9k_archive_print_entry(const ZZ9KArchiveEntry *entry)
@@ -4711,7 +4764,70 @@ static int zz9k_archive_lha_method_supported(uint32_t method)
          method == ZZ9K_ARCHIVE_LHA_METHOD_LH7;
 }
 
-static int zz9k_archive_lha_decode_method_to_file(
+static uint32_t zz9k_archive_lha_method_to_compression(uint32_t method)
+{
+  switch (method) {
+  case ZZ9K_ARCHIVE_LHA_METHOD_LH1: return ZZ9K_COMPRESSION_LH1;
+  case ZZ9K_ARCHIVE_LHA_METHOD_LH5: return ZZ9K_COMPRESSION_LH5;
+  case ZZ9K_ARCHIVE_LHA_METHOD_LH6: return ZZ9K_COMPRESSION_LH6;
+  case ZZ9K_ARCHIVE_LHA_METHOD_LH7: return ZZ9K_COMPRESSION_LH7;
+  default: return 0U;
+  }
+}
+
+/* Diagnostic tally for the LHA decode-offload path.  A whole-partition backup
+   is thousands of small members, and every fall-back to the 68k software
+   decoder is silent -- board alloc failures print, but a firmware CRC/size
+   rejection (else-branch below) re-decodes the whole member on the CPU without
+   a word.  Without this count there is no way to tell an archive that offloaded
+   cleanly (so 98% CPU == transfer/overhead-bound) from one that quietly
+   re-decoded every member on the 68k (so 98% CPU == no offload at all).
+   Printed once per test/extract run. */
+static unsigned long zz9k_lha_diag_offloaded;
+static unsigned long zz9k_lha_diag_batched;
+static unsigned long zz9k_lha_diag_chunks;
+static unsigned long zz9k_lha_diag_sw_crc_miss;
+static unsigned long zz9k_lha_diag_sw_codec_fail;
+static unsigned long zz9k_lha_diag_sw_unavailable;
+static unsigned long zz9k_lha_diag_bytes_in;
+
+/* Lazily-fetched, once-per-run snapshot of the board's shared-heap state,
+   consulted before a per-member offload attempt so members that cannot
+   possibly fit are skipped straight to software instead of paying for a
+   doomed board allocation (and its diagnostic printout) every time.
+   0 = not yet queried, 1 = queried OK, -1 = query failed (behave as before
+   and just try the board). */
+static ZZ9KDiagInfo zz9k_lha_board_diag;
+static int zz9k_lha_board_diag_valid;
+
+static void zz9k_lha_diag_reset(void)
+{
+  zz9k_lha_diag_offloaded = 0UL;
+  zz9k_lha_diag_batched = 0UL;
+  zz9k_lha_diag_chunks = 0UL;
+  zz9k_lha_diag_sw_crc_miss = 0UL;
+  zz9k_lha_diag_sw_codec_fail = 0UL;
+  zz9k_lha_diag_sw_unavailable = 0UL;
+  zz9k_lha_diag_bytes_in = 0UL;
+  zz9k_lha_board_diag_valid = 0;
+}
+
+static void zz9k_lha_diag_report(void)
+{
+  printf("lha offload diag: offloaded=%lu batched=%lu chunks=%lu "
+         "sw:crc/size-miss=%lu sw:codec-fail=%lu sw:unavailable=%lu "
+         "bytes-in=%lu\n",
+         zz9k_lha_diag_offloaded, zz9k_lha_diag_batched,
+         zz9k_lha_diag_chunks, zz9k_lha_diag_sw_crc_miss,
+         zz9k_lha_diag_sw_codec_fail, zz9k_lha_diag_sw_unavailable,
+         zz9k_lha_diag_bytes_in);
+}
+
+/* Pure-software LHA member decode (the 68k fallback). output == NULL means
+   verify-only. Kept separate from the offload path so batch fallbacks can
+   decode in software WITHOUT re-attempting the offload that already
+   produced a bad result for the member. */
+static int zz9k_archive_lha_software_decode_to_file(
     const uint8_t *data,
     uint32_t length,
     const ZZ9KArchiveEntry *entry,
@@ -4721,11 +4837,7 @@ static int zz9k_archive_lha_decode_method_to_file(
   uint16_t decoded_crc = 0U;
   int ok;
 
-  if (!data || !entry || entry->data_offset > length ||
-      entry->compressed_size > length - entry->data_offset ||
-      !zz9k_archive_lha_method_supported(entry->method)) {
-    return 0;
-  }
+  (void)length;
   input = tmpfile();
   if (!input) {
     printf("lha temporary input failed: %s\n", entry->name);
@@ -4751,22 +4863,146 @@ static int zz9k_archive_lha_decode_method_to_file(
       (int)entry->method);
   fclose(input);
   if (!ok) {
-    printf("lha lh%lu decode failed: %s crc=0x%04x expected=0x%04lx\n",
-           (unsigned long)entry->method, entry->name,
-           (unsigned int)decoded_crc, (unsigned long)entry->crc32);
+    if ((entry->flags & ZZ9K_ARCHIVE_ENTRY_FLAG_CRC32) != 0U) {
+      printf("lha lh%lu decode failed: %s crc=0x%04x expected=0x%04lx\n",
+             (unsigned long)entry->method, entry->name,
+             (unsigned int)decoded_crc, (unsigned long)entry->crc32);
+    } else {
+      printf("lha lh%lu decode failed: %s (no stored CRC; size/stream "
+             "check)\n",
+             (unsigned long)entry->method, entry->name);
+    }
   }
   return ok;
 }
 
-static int zz9k_archive_lha_decode_lh5_to_file(const uint8_t *data,
+/* Can this member's per-member offload possibly get its board buffers?
+   Needs one block for the compressed input and one for the decoded output
+   (verify-only still allocates the output on the board). Conservative:
+   both must fit the largest free block, and their sum (plus alignment
+   slack) must fit the total free space. Computed in 64-bit so oversize
+   archive-reported sizes cannot wrap the check. */
+static int zz9k_archive_lha_offload_fits(const ZZ9KDiagInfo *diag,
+                                         const ZZ9KArchiveEntry *entry)
+{
+  uint64_t needed;
+  uint32_t slack = 64U;
+
+  if (!diag) {
+    return 1; /* no diag info: try the board as before */
+  }
+  if (entry->compressed_size > diag->shared_heap_largest_free ||
+      entry->uncompressed_size > diag->shared_heap_largest_free) {
+    return 0;
+  }
+  needed = (uint64_t)entry->compressed_size +
+           (uint64_t)entry->uncompressed_size + (uint64_t)slack;
+  if (needed > (uint64_t)diag->shared_heap_free) {
+    return 0;
+  }
+  return 1;
+}
+
+static int zz9k_archive_lha_decode_method_to_file(
+    ZZ9KContext *ctx,
+    const ZZ9KServiceInfo *service,
+    const uint8_t *data,
+    uint32_t length,
+    const ZZ9KArchiveEntry *entry,
+    FILE *output)
+{
+  if (!data || !entry || entry->data_offset > length ||
+      entry->compressed_size > length - entry->data_offset ||
+      !zz9k_archive_lha_method_supported(entry->method)) {
+    return 0;
+  }
+
+  if (ctx && service &&
+      zz9k_archive_lha_method_supported(entry->method)) {
+    uint32_t algo = zz9k_archive_lha_method_to_compression(entry->method);
+    if (algo != 0U && zz9k_archive_service_supports(service, algo)) {
+      uint8_t *decoded = 0;
+      ZZ9KDecompressResult res;
+      int try_offload = 1;
+
+      if (zz9k_lha_board_diag_valid == 0) {
+        int status = zz9k_read_diag(ctx, &zz9k_lha_board_diag);
+        zz9k_lha_board_diag_valid = (status == ZZ9K_STATUS_OK) ? 1 : -1;
+      }
+      if (zz9k_lha_board_diag_valid == 1 &&
+          !zz9k_archive_lha_offload_fits(&zz9k_lha_board_diag, entry)) {
+        printf("lha lh%lu too large for board heap, software decode: %s\n",
+               (unsigned long)entry->method, entry->name);
+        zz9k_lha_diag_sw_codec_fail++;
+        try_offload = 0;
+      }
+
+      /* "test" passes output == NULL: we only need the ARM-computed CRC, so
+         run the codec in verify-only mode. The board still decodes and
+         checksums the member, but the decoded plaintext is never copied back
+         across Zorro -- on a whole-partition backup that spares a second pass
+         of the entire uncompressed size over the bus. Extract keeps the
+         plaintext so it can be written out. */
+      if (try_offload) {
+        int verify_only = (output == 0);
+        zz9k_lha_diag_bytes_in += (unsigned long)entry->compressed_size;
+        if (zz9k_archive_decompress_to_memory_ex(
+                ctx, service, algo, data + entry->data_offset,
+                entry->compressed_size, entry->uncompressed_size,
+                &decoded, &res, verify_only)) {
+          int crc_ok = 1;
+          if ((entry->flags & ZZ9K_ARCHIVE_ENTRY_FLAG_CRC32) != 0U) {
+            crc_ok = ((uint16_t)res.checksum == (uint16_t)entry->crc32);
+          }
+          if (crc_ok && res.bytes_written == entry->uncompressed_size) {
+            int wrote_ok = 1;
+            if (output && entry->uncompressed_size != 0U &&
+                fwrite(decoded, 1U, entry->uncompressed_size, output) !=
+                    entry->uncompressed_size) {
+              wrote_ok = 0;
+            }
+            free(decoded); /* NULL in verify-only mode; free(NULL) is safe */
+            if (wrote_ok) {
+              zz9k_lha_diag_offloaded++;
+              return 1;   /* offloaded */
+            }
+            printf("lha lh%lu offload write failed: %s\n",
+                   (unsigned long)entry->method, entry->name);
+            return 0;
+          } else {
+            free(decoded);    /* CRC/size miss -> fall back to software */
+            zz9k_lha_diag_sw_crc_miss++;
+          }
+        } else {
+          /* board alloc / codec error (the helper already printed why) */
+          zz9k_lha_diag_sw_codec_fail++;
+        }
+      }
+    } else {
+      zz9k_lha_diag_sw_unavailable++;   /* method not advertised by service */
+    }
+  } else {
+    zz9k_lha_diag_sw_unavailable++;     /* no board/service: software-only */
+  }
+
+  return zz9k_archive_lha_software_decode_to_file(data, length, entry,
+                                                  output);
+}
+
+static int zz9k_archive_lha_decode_lh5_to_file(ZZ9KContext *ctx,
+                                               const ZZ9KServiceInfo *service,
+                                               const uint8_t *data,
                                                uint32_t length,
                                                const ZZ9KArchiveEntry *entry,
                                                FILE *output)
 {
-  return zz9k_archive_lha_decode_method_to_file(data, length, entry, output);
+  return zz9k_archive_lha_decode_method_to_file(ctx, service, data, length,
+                                                entry, output);
 }
 
-static int zz9k_archive_extract_lha_lh5(const uint8_t *data,
+static int zz9k_archive_extract_lha_lh5(ZZ9KContext *ctx,
+                                        const ZZ9KServiceInfo *service,
+                                        const uint8_t *data,
                                         uint32_t length,
                                         const char *output_dir,
                                         const ZZ9KArchiveEntry *entry)
@@ -4777,7 +5013,33 @@ static int zz9k_archive_extract_lha_lh5(const uint8_t *data,
   if (!zz9k_archive_open_output_entry(output_dir, entry, &file)) {
     return 0;
   }
-  ok = zz9k_archive_lha_decode_method_to_file(data, length, entry, file);
+  ok = zz9k_archive_lha_decode_method_to_file(ctx, service, data, length,
+                                              entry, file);
+  if (fclose(file) != 0) {
+    ok = 0;
+  }
+  if (ok && !zz9k_archive_last_output_skipped &&
+      !zz9k_archive_last_output_dry_run) {
+    printf("x %s\n", entry->name);
+  }
+  return ok;
+}
+
+/* Extract one member via the software decoder only (no offload attempt),
+   preserving the skip/dry-run and "x <name>" semantics of the offload
+   extract path. */
+static int zz9k_archive_extract_lha_software(const uint8_t *data,
+                                             uint32_t length,
+                                             const char *output_dir,
+                                             const ZZ9KArchiveEntry *entry)
+{
+  FILE *file = 0;
+  int ok;
+
+  if (!zz9k_archive_open_output_entry(output_dir, entry, &file)) {
+    return 0;
+  }
+  ok = zz9k_archive_lha_software_decode_to_file(data, length, entry, file);
   if (fclose(file) != 0) {
     ok = 0;
   }
@@ -6885,12 +7147,669 @@ static int zz9k_archive_handle_zip(ZZ9KContext *ctx,
   return ok;
 }
 
-static int zz9k_archive_handle_lha(const uint8_t *data,
+/* ---- LHA batch decode-offload driver (ZZ9K_OP_DECOMPRESS_BATCH) ---- */
+
+/* Per-entry batch outcome, consumed by the zz9k_archive_handle_lha loop. */
+enum {
+  ZZ9K_LHA_BATCH_NONE = 0,  /* not batched: existing per-member path */
+  ZZ9K_LHA_BATCH_DONE = 1,  /* offloaded + verified (extract: written) */
+  ZZ9K_LHA_BATCH_SW = 2,    /* board produced a bad result: software only */
+  ZZ9K_LHA_BATCH_FAILED = 3 /* extract drain write failure (reported) */
+};
+
+typedef struct ZZ9KLhaBatchChunk {
+  uint32_t first;         /* index into the member-index list */
+  uint32_t count;
+  uint32_t blob_length;
+  uint32_t output_length; /* extract only */
+} ZZ9KLhaBatchChunk;
+
+#define ZZ9K_BATCH_INPUT_BUDGET_DEFAULT_KB 1024U
+#define ZZ9K_BATCH_OUTPUT_BUDGET_DEFAULT_KB 2048U
+#define ZZ9K_BATCH_MAX_MEMBERS_DEFAULT 64U
+#define ZZ9K_BATCH_MAX_MEMBERS_CAP 256U
+#define ZZ9K_BATCH_TEST_UNCOMP_BUDGET_DEFAULT_KB 8192U
+
+static int zz9k_archive_lha_batch_member_eligible(
+    const ZZ9KArchiveEntry *entry, uint32_t length)
+{
+  return !entry->is_dir &&
+         zz9k_archive_lha_method_supported(entry->method) &&
+         entry->compressed_size != 0U && entry->uncompressed_size != 0U &&
+         entry->data_offset <= length &&
+         entry->compressed_size <= length - entry->data_offset &&
+         zz9k_archive_entry_matches_filter(entry) &&
+         zz9k_archive_path_is_safe(entry->name);
+}
+
+/* Greedily pack members[first..] into one chunk. Returns the number of
+   members packed; 0 means members[first] alone exceeds a budget (the
+   caller must advance past it).
+
+   `output_capacity` is a cumulative-uncompressed-size cap applied whenever
+   it is nonzero, in ANY mode: EXTRACT passes its output-region capacity
+   (the chunk's decoded bytes must fit the arena's output region); TEST
+   passes a decode-time budget (output is discarded on the board, but each
+   chunk is still one synchronous mailbox op, so cumulative uncompressed
+   size bounds firmware decode time per op). 0 means unbounded. */
+static uint32_t zz9k_archive_lha_batch_plan_chunk(
+    const ZZ9KArchiveEntry *entries, const uint32_t *members,
+    uint32_t member_total, uint32_t first, uint32_t mode,
+    uint32_t member_cap, uint32_t blob_capacity, uint32_t output_capacity,
+    ZZ9KLhaBatchChunk *chunk)
+{
+  uint32_t blob = 0U;
+  uint32_t out = 0U;
+  uint32_t n = 0U;
+
+  (void)mode;
+  chunk->first = first;
+  chunk->count = 0U;
+  chunk->blob_length = 0U;
+  chunk->output_length = 0U;
+
+  while (first + n < member_total && n < member_cap) {
+    const ZZ9KArchiveEntry *entry = &entries[members[first + n]];
+
+    if (entry->compressed_size > blob_capacity - blob) {
+      break;
+    }
+    if (output_capacity != 0U &&
+        entry->uncompressed_size > output_capacity - out) {
+      break;
+    }
+    blob += entry->compressed_size;
+    out += entry->uncompressed_size;
+    n++;
+  }
+  chunk->count = n;
+  chunk->blob_length = blob;
+  chunk->output_length = out;
+  return n;
+}
+
+/* Serialize the header + descriptor table for one chunk into `image`
+   (ZZ9K_BATCH_HEADER_SIZE + chunk->count * ZZ9K_BATCH_DESC_SIZE bytes).
+   Blob/output offsets are assigned in packing order and must be mirrored
+   by the caller when copying compressed bytes / draining output. */
+static void zz9k_archive_lha_batch_write_tables(
+    const ZZ9KArchiveEntry *entries, const uint32_t *members,
+    const ZZ9KLhaBatchChunk *chunk, const ZZ9KBatchLayout *layout,
+    uint8_t *image)
+{
+  uint32_t blob = 0U;
+  uint32_t out = 0U;
+  uint32_t i;
+
+  zz9k_batch_write_header(image, layout, chunk->count, chunk->blob_length);
+  for (i = 0U; i < chunk->count; i++) {
+    const ZZ9KArchiveEntry *entry = &entries[members[chunk->first + i]];
+    ZZ9KBatchMemberDesc desc;
+
+    desc.algorithm = zz9k_archive_lha_method_to_compression(entry->method);
+    desc.src_offset = blob;
+    desc.src_length = entry->compressed_size;
+    desc.dst_offset = out;
+    desc.uncompressed_size = entry->uncompressed_size;
+    desc.expected_crc = entry->crc32 & 0xffffUL;
+    desc.flags = ((entry->flags & ZZ9K_ARCHIVE_ENTRY_FLAG_CRC32) != 0U)
+                     ? ZZ9K_BATCH_MEMBER_FLAG_HAVE_CRC
+                     : 0U;
+    zz9k_batch_write_desc(
+        image + ZZ9K_BATCH_HEADER_SIZE + i * ZZ9K_BATCH_DESC_SIZE, &desc);
+    blob += entry->compressed_size;
+    out += entry->uncompressed_size;
+  }
+}
+
+/* Judge one member's batch result: DONE when the board's size and (when
+   stored) CRC-16 match; otherwise SW so the member is re-decoded on the
+   68k WITHOUT retrying the offload. Updates the offload diagnostics. */
+static int zz9k_archive_lha_batch_judge(const ZZ9KArchiveEntry *entry,
+                                        const ZZ9KBatchMemberResult *result)
+{
+  if (result->status != ZZ9K_STATUS_OK) {
+    zz9k_lha_diag_sw_codec_fail++;
+    return ZZ9K_LHA_BATCH_SW;
+  }
+  if (result->bytes_written != entry->uncompressed_size ||
+      (((entry->flags & ZZ9K_ARCHIVE_ENTRY_FLAG_CRC32) != 0U) &&
+       (uint16_t)result->checksum != (uint16_t)entry->crc32)) {
+    zz9k_lha_diag_sw_crc_miss++;
+    return ZZ9K_LHA_BATCH_SW;
+  }
+  zz9k_lha_diag_batched++;
+  return ZZ9K_LHA_BATCH_DONE;
+}
+
+/* Drain one batch-extracted member from the arena to the filesystem,
+   preserving skip/dry-run semantics. Skipped/dry-run members do not pay
+   the Zorro copy-back.
+
+   A malloc or copy_from failure means NOTHING has been written to `file`
+   yet, so it is recoverable: decode the member in software directly into
+   the same still-open file rather than hard-failing the whole archive.
+   Do NOT re-open the output for the retry -- that would trip the "output
+   exists" check on the file this drain already created. An fwrite failure
+   is different: bytes may already be partially written, and falling back
+   to software there would interleave two decodes into the same file (a
+   bug class fixed once before in this codebase), so that stays a hard
+   failure with no retry. */
+static int zz9k_archive_lha_batch_drain_member(ZZ9KContext *ctx,
+                                               const ZZ9KSharedBuffer *arena,
+                                               const ZZ9KBatchLayout *layout,
+                                               uint32_t dst_offset,
+                                               const char *output_dir,
+                                               const uint8_t *data,
+                                               uint32_t length,
+                                               const ZZ9KArchiveEntry *entry)
+{
+  FILE *file = 0;
+  uint8_t *bytes;
+  int ok = 1;
+  int hard_fail = 0;
+
+  (void)ctx;
+  if (!zz9k_archive_open_output_entry(output_dir, entry, &file)) {
+    return 0;
+  }
+  if (!zz9k_archive_last_output_skipped &&
+      !zz9k_archive_last_output_dry_run && entry->uncompressed_size != 0U) {
+    bytes = (uint8_t *)malloc((size_t)entry->uncompressed_size);
+    if (!bytes) {
+      ok = zz9k_archive_lha_software_decode_to_file(data, length, entry,
+                                                    file);
+    } else if (!zz9k_shared_copy_from(bytes, arena,
+                                      layout->output_offset + dst_offset,
+                                      entry->uncompressed_size)) {
+      free(bytes);
+      ok = zz9k_archive_lha_software_decode_to_file(data, length, entry,
+                                                    file);
+    } else {
+      if (fwrite(bytes, 1U, entry->uncompressed_size, file) !=
+          entry->uncompressed_size) {
+        ok = 0;
+        hard_fail = 1;
+      }
+      free(bytes);
+    }
+  }
+  if (fclose(file) != 0) {
+    ok = 0;
+    hard_fail = 1;
+  }
+  if (ok && !zz9k_archive_last_output_skipped &&
+      !zz9k_archive_last_output_dry_run) {
+    printf("x %s\n", entry->name);
+  }
+  if (!ok && hard_fail) {
+    printf("lha lh%lu offload write failed: %s\n",
+           (unsigned long)entry->method, entry->name);
+  }
+  return ok;
+}
+
+typedef struct ZZ9KLhaBatchHashSlot {
+  uint32_t hash;
+  uint32_t index;
+  uint32_t is_dir;
+  char name[ZZ9K_ARCHIVE_MAX_NAME];
+} ZZ9KLhaBatchHashSlot;
+
+static unsigned char zz9k_archive_lha_ascii_lower(unsigned char c)
+{
+  return (c >= 'A' && c <= 'Z') ? (unsigned char)(c - 'A' + 'a') : c;
+}
+
+static uint32_t zz9k_archive_lha_name_hash(const char *name)
+{
+  uint32_t hash = 2166136261UL;
+  const char *p;
+
+  for (p = name; *p != '\0'; p++) {
+    hash ^= (uint32_t)zz9k_archive_lha_ascii_lower((unsigned char)*p);
+    hash *= 16777619UL;
+  }
+  return hash == 0U ? 1U : hash;
+}
+
+static int zz9k_archive_lha_batch_hash_slot_init(
+    const ZZ9KArchiveEntry *entry, uint32_t index,
+    ZZ9KLhaBatchHashSlot *slot)
+{
+  ZZ9KArchiveEntry output_entry;
+  size_t length;
+
+  memset(slot, 0, sizeof(*slot));
+  slot->index = index;
+  if (!zz9k_archive_output_entry(entry, &output_entry)) {
+    return 0;
+  }
+  strcpy(slot->name, output_entry.name);
+  slot->is_dir = output_entry.is_dir;
+  length = strlen(slot->name);
+  while (length > 0U && slot->name[length - 1U] == '/') {
+    slot->name[--length] = '\0';
+  }
+  if (slot->name[0] == '\0') {
+    return 0;
+  }
+  slot->hash = zz9k_archive_lha_name_hash(slot->name);
+  return 1;
+}
+
+/* Case-folded FNV-1a over the entry's POST-TRANSFORM output name (from
+   zz9k_archive_output_entry, not the raw archive name: --strip-components
+   can make distinct raw names, e.g. a/foo and b/foo, resolve to the same
+   output file). Trailing slashes are canonicalized away so file-vs-directory
+   conflicts (a vs a/) share the same hash. Returns 0 for entries that produce
+   no output at all -- 0 is reserved and never participates in a collision
+   run. */
+static uint32_t zz9k_archive_lha_output_name_hash(
+    const ZZ9KArchiveEntry *entry)
+{
+  ZZ9KLhaBatchHashSlot slot;
+
+  return zz9k_archive_lha_batch_hash_slot_init(entry, 0U, &slot)
+             ? slot.hash
+             : 0U;
+}
+
+static int zz9k_archive_lha_batch_hash_slot_cmp(const void *a, const void *b)
+{
+  const ZZ9KLhaBatchHashSlot *sa = (const ZZ9KLhaBatchHashSlot *)a;
+  const ZZ9KLhaBatchHashSlot *sb = (const ZZ9KLhaBatchHashSlot *)b;
+
+  if (sa->hash < sb->hash) return -1;
+  if (sa->hash > sb->hash) return 1;
+  return 0;
+}
+
+static int zz9k_archive_lha_batch_name_slot_cmp(const void *a, const void *b)
+{
+  const ZZ9KLhaBatchHashSlot *sa = (const ZZ9KLhaBatchHashSlot *)a;
+  const ZZ9KLhaBatchHashSlot *sb = (const ZZ9KLhaBatchHashSlot *)b;
+  const unsigned char *pa = (const unsigned char *)sa->name;
+  const unsigned char *pb = (const unsigned char *)sb->name;
+
+  while (*pa != '\0' && *pb != '\0') {
+    unsigned char ca = zz9k_archive_lha_ascii_lower(*pa);
+    unsigned char cb = zz9k_archive_lha_ascii_lower(*pb);
+
+    if (ca < cb) return -1;
+    if (ca > cb) return 1;
+    pa++;
+    pb++;
+  }
+  if (*pa == '\0' && *pb != '\0') return -1;
+  if (*pa != '\0' && *pb == '\0') return 1;
+  if (sa->index < sb->index) return -1;
+  if (sa->index > sb->index) return 1;
+  return 0;
+}
+
+static int zz9k_archive_lha_output_name_is_parent_of(const char *parent,
+                                                     const char *child)
+{
+  size_t i;
+
+  if (!parent || !child || parent[0] == '\0') {
+    return 0;
+  }
+  for (i = 0U; parent[i] != '\0'; i++) {
+    if (zz9k_archive_lha_ascii_lower((unsigned char)parent[i]) !=
+        zz9k_archive_lha_ascii_lower((unsigned char)child[i])) {
+      return 0;
+    }
+  }
+  return child[i] == '/';
+}
+
+static int zz9k_archive_lha_output_name_has_prefix(const char *prefix,
+                                                   const char *name)
+{
+  size_t i;
+
+  if (!prefix || !name || prefix[0] == '\0') {
+    return 0;
+  }
+  for (i = 0U; prefix[i] != '\0'; i++) {
+    if (zz9k_archive_lha_ascii_lower((unsigned char)prefix[i]) !=
+        zz9k_archive_lha_ascii_lower((unsigned char)name[i])) {
+      return 0;
+    }
+  }
+  return 1;
+}
+
+/* Sort-based replacement for the old O(n^2) path_collides scan: compute every
+   entry's post-transform output name exactly once, sort by hash to mark exact
+   duplicates, then sort by name to mark file-parent/child conflicts. Batch-
+   extract drains members before non-batched entries, so any conflicting output
+   path (lha-update-style archives or file/directory conflicts) must stay on
+   the sequential per-entry path to preserve archive-order semantics.
+
+   Hash equality is trusted WITHOUT re-checking the strings: this is
+   deliberate. A false-positive collision (two different names hashing the
+   same) only routes an innocent member to the safe, ordered per-entry path
+   instead of the batch path -- it can never cause a real collision to be
+   missed. Returns 1 on success, 0 on malloc failure (the caller must treat
+   that as "collision info unavailable" and skip batching rather than
+   guess). */
+static int zz9k_archive_lha_batch_mark_collisions(
+    const ZZ9KArchiveEntry *entries, uint32_t count, uint8_t *collides)
+{
+  ZZ9KLhaBatchHashSlot *slots;
+  uint32_t i;
+
+  slots = (ZZ9KLhaBatchHashSlot *)malloc((size_t)count * sizeof(*slots));
+  if (!slots) {
+    return 0;
+  }
+  for (i = 0U; i < count; i++) {
+    zz9k_archive_lha_batch_hash_slot_init(&entries[i], i, &slots[i]);
+  }
+  qsort(slots, count, sizeof(*slots), zz9k_archive_lha_batch_hash_slot_cmp);
+  i = 0U;
+  while (i < count) {
+    uint32_t run_end = i + 1U;
+
+    while (run_end < count && slots[run_end].hash == slots[i].hash) {
+      run_end++;
+    }
+    if (slots[i].hash != 0U && run_end - i >= 2U) {
+      uint32_t j;
+      for (j = i; j < run_end; j++) {
+        collides[slots[j].index] = 1U;
+      }
+    }
+    i = run_end;
+  }
+  qsort(slots, count, sizeof(*slots), zz9k_archive_lha_batch_name_slot_cmp);
+  for (i = 0U; i < count; i++) {
+    uint32_t j;
+
+    if (slots[i].hash == 0U || slots[i].is_dir) {
+      continue;
+    }
+    for (j = i + 1U; j < count &&
+                       zz9k_archive_lha_output_name_has_prefix(
+                           slots[i].name, slots[j].name);
+         j++) {
+      if (zz9k_archive_lha_output_name_is_parent_of(slots[i].name,
+                                                    slots[j].name)) {
+        collides[slots[i].index] = 1U;
+        collides[slots[j].index] = 1U;
+      }
+    }
+  }
+  free(slots);
+  return 1;
+}
+
+/* Batched LHA decode driver. Fills state[] with ZZ9K_LHA_BATCH_* per
+   entry; entries left at ZZ9K_LHA_BATCH_NONE take the existing per-member
+   offload/software path. Fallback chain: batch -> per-member -> software.
+   Never worse than today: any refusal or failure leaves states at NONE. */
+static void zz9k_archive_lha_batch_run(ZZ9KContext *ctx,
+                                       const ZZ9KServiceInfo *service,
+                                       const uint8_t *data,
+                                       uint32_t length,
+                                       const ZZ9KArchiveEntry *entries,
+                                       uint32_t count,
+                                       const char *command,
+                                       const char *output_dir,
+                                       uint8_t *state)
+{
+  ZZ9KBatchLayout layout;
+  ZZ9KSharedBuffer arena;
+  uint32_t *members = 0;
+  uint8_t *tables = 0;
+  uint8_t *results = 0;
+  uint8_t *collides = 0;
+  uint32_t member_total = 0U;
+  uint32_t largest = 0U;
+  uint32_t largest_uncomp = 0U;
+  uint32_t mode;
+  uint32_t member_cap;
+  uint32_t blob_capacity;
+  uint32_t output_capacity;
+  uint32_t chunk_uncomp_cap = 0U;
+  uint32_t first;
+  uint32_t i;
+
+  memset(&arena, 0, sizeof(arena));
+
+  if (!ctx || !service ||
+      (service->flags & ZZ9K_SERVICE_FLAG_CODEC_DECOMPRESS_BATCH) == 0U) {
+    return;
+  }
+  if (strcmp(command, "t") == 0) {
+    mode = ZZ9K_BATCH_MODE_TEST;
+  } else if (strcmp(command, "x") == 0) {
+    mode = ZZ9K_BATCH_MODE_EXTRACT;
+  } else {
+    return;
+  }
+
+  members = (uint32_t *)malloc((size_t)count * sizeof(*members));
+  if (!members) {
+    return;
+  }
+  if (mode == ZZ9K_BATCH_MODE_EXTRACT) {
+    /* Precompute the whole collision mask in one pass (see
+       zz9k_archive_lha_batch_mark_collisions) instead of the old per-member
+       O(n) rescan. If we can't get collision info, never guess: skip
+       batching entirely rather than risk draining a duplicated output path
+       out of archive order. */
+    collides = (uint8_t *)calloc(count, 1U);
+    if (!collides ||
+        !zz9k_archive_lha_batch_mark_collisions(entries, count, collides)) {
+      free(collides);
+      free(members);
+      return;
+    }
+  }
+  for (i = 0U; i < count; i++) {
+    const ZZ9KArchiveEntry *entry = &entries[i];
+    uint32_t algo;
+
+    if (!zz9k_archive_lha_batch_member_eligible(entry, length)) {
+      continue;
+    }
+    algo = zz9k_archive_lha_method_to_compression(entry->method);
+    if (algo == 0U || !zz9k_archive_service_supports(service, algo)) {
+      continue;
+    }
+    if (mode == ZZ9K_BATCH_MODE_TEST &&
+        entry->uncompressed_size > ZZ9K_BATCH_TEST_MAX_EXPECTED) {
+      /* The firmware rejects TEST rows whose expected size exceeds this
+         cap (decode-and-discard has no arena region to bound it). Take
+         the per-member/software path instead of offloading a row the
+         board will refuse. */
+      continue;
+    }
+    if (mode == ZZ9K_BATCH_MODE_EXTRACT && collides[i]) {
+      continue; /* duplicated path: keep archive-order semantics */
+    }
+    members[member_total++] = i;
+    if (entry->compressed_size > largest) {
+      largest = entry->compressed_size;
+    }
+    if (entry->uncompressed_size > largest_uncomp) {
+      largest_uncomp = entry->uncompressed_size;
+    }
+  }
+  if (member_total == 0U) {
+    free(collides);
+    free(members);
+    return;
+  }
+
+  member_cap = zz9k_env_u32("ZZ9K_BATCH_MAX_MEMBERS",
+                            ZZ9K_BATCH_MAX_MEMBERS_DEFAULT);
+  if (member_cap > ZZ9K_BATCH_MAX_MEMBERS_CAP) {
+    member_cap = ZZ9K_BATCH_MAX_MEMBERS_CAP;
+  }
+  blob_capacity = zz9k_env_u32("ZZ9K_BATCH_INPUT_KB",
+                               ZZ9K_BATCH_INPUT_BUDGET_DEFAULT_KB) * 1024U;
+  output_capacity =
+      (mode == ZZ9K_BATCH_MODE_EXTRACT)
+          ? zz9k_env_u32("ZZ9K_BATCH_OUTPUT_KB",
+                         ZZ9K_BATCH_OUTPUT_BUDGET_DEFAULT_KB) * 1024U
+          : 0U;
+
+  if (mode == ZZ9K_BATCH_MODE_TEST) {
+    chunk_uncomp_cap = zz9k_env_u32("ZZ9K_BATCH_TEST_UNCOMP_KB",
+                                    ZZ9K_BATCH_TEST_UNCOMP_BUDGET_DEFAULT_KB) *
+                       1024U;
+    /* Never cap below the largest member: a multi-MB member must still fit
+       a (single-member) chunk -- bounding per-op decode time must not push
+       big members back to the software path. */
+    if (chunk_uncomp_cap < largest_uncomp) {
+      chunk_uncomp_cap = largest_uncomp;
+    }
+  }
+
+  /* `test` streams-and-discards on the board, so a member's only arena
+     footprint is its compressed bytes: try to grow the blob region to fit
+     the largest member (this is what lets multi-MB members offload at
+     all). If that arena does not fit the shared heap, fall back to the
+     configured budget and leave oversize members to the per-member path. */
+  if (mode == ZZ9K_BATCH_MODE_TEST && largest > blob_capacity) {
+    if (zz9k_batch_layout_init(&layout, mode, member_cap, largest, 0U) &&
+        zz9k_alloc_shared(ctx, layout.total_size, 16U, 0U, &arena) ==
+            ZZ9K_STATUS_OK) {
+      blob_capacity = largest;
+    } else {
+      memset(&arena, 0, sizeof(arena));
+    }
+  }
+  if (arena.handle == 0U || arena.handle == ZZ9K_INVALID_HANDLE) {
+    if (!zz9k_batch_layout_init(&layout, mode, member_cap, blob_capacity,
+                                output_capacity) ||
+        zz9k_alloc_shared(ctx, layout.total_size, 16U, 0U, &arena) !=
+            ZZ9K_STATUS_OK) {
+      free(collides);
+      free(members);
+      return;
+    }
+  }
+
+  tables = (uint8_t *)malloc((size_t)ZZ9K_BATCH_HEADER_SIZE +
+                             (size_t)member_cap * ZZ9K_BATCH_DESC_SIZE);
+  results =
+      (uint8_t *)malloc((size_t)member_cap * ZZ9K_BATCH_RESULT_SIZE);
+  if (!tables || !results) {
+    goto out;
+  }
+
+  first = 0U;
+  while (first < member_total) {
+    ZZ9KLhaBatchChunk chunk;
+    ZZ9KDecompressBatchDesc desc;
+    /* Aggregate counts are advisory; the per-member result table is
+       authoritative (firmware does not CRC-check). */
+    ZZ9KDecompressBatchResult batch_result;
+    uint32_t blob;
+    uint32_t out_cursor;
+    unsigned long chunk_bytes_in;
+    int status;
+
+    if (zz9k_archive_lha_batch_plan_chunk(
+            entries, members, member_total, first, mode, member_cap,
+            blob_capacity,
+            mode == ZZ9K_BATCH_MODE_TEST ? chunk_uncomp_cap : output_capacity,
+            &chunk) == 0U) {
+      first++; /* member fits no chunk -> per-member path */
+      continue;
+    }
+
+    zz9k_archive_lha_batch_write_tables(entries, members, &chunk, &layout,
+                                        tables);
+    if (!zz9k_shared_copy_to(&arena, 0U, tables,
+                             ZZ9K_BATCH_HEADER_SIZE +
+                                 chunk.count * ZZ9K_BATCH_DESC_SIZE)) {
+      break;
+    }
+    blob = 0U;
+    chunk_bytes_in = 0UL;
+    for (i = 0U; i < chunk.count; i++) {
+      const ZZ9KArchiveEntry *entry = &entries[members[chunk.first + i]];
+
+      if (!zz9k_shared_copy_to(&arena, layout.blob_offset + blob,
+                               data + entry->data_offset,
+                               entry->compressed_size)) {
+        goto out; /* Zorro copy failure -> per-member for the remainder */
+      }
+      blob += entry->compressed_size;
+      chunk_bytes_in += (unsigned long)entry->compressed_size;
+    }
+
+    desc.arena_handle = arena.handle;
+    desc.arena_offset = 0U;
+    desc.arena_length = layout.total_size;
+    status = zz9k_decompress_batch(ctx, &desc, &batch_result);
+    if (status != ZZ9K_STATUS_OK) {
+      /* Old firmware (UNSUPPORTED) or a transport/validation failure:
+         everything not yet judged stays NONE -> per-member fallback. Do not
+         count these bytes: they will be retried (and counted) on the
+         per-member path. */
+      printf("lha batch decode failed: %s (%d)\n", zz9k_status_name(status),
+             status);
+      break;
+    }
+    zz9k_lha_diag_chunks++;
+    zz9k_lha_diag_bytes_in += chunk_bytes_in;
+
+    if (!zz9k_shared_copy_from(results, &arena, layout.result_offset,
+                               chunk.count * ZZ9K_BATCH_RESULT_SIZE)) {
+      break;
+    }
+    out_cursor = 0U;
+    for (i = 0U; i < chunk.count; i++) {
+      uint32_t entry_index = members[chunk.first + i];
+      const ZZ9KArchiveEntry *entry = &entries[entry_index];
+      ZZ9KBatchMemberResult member_result;
+      int member_state;
+
+      zz9k_batch_read_result(results + i * ZZ9K_BATCH_RESULT_SIZE,
+                             &member_result);
+      member_state = zz9k_archive_lha_batch_judge(entry, &member_result);
+      if (member_state == ZZ9K_LHA_BATCH_DONE &&
+          mode == ZZ9K_BATCH_MODE_EXTRACT) {
+        if (!zz9k_archive_lha_batch_drain_member(ctx, &arena, &layout,
+                                                 out_cursor, output_dir,
+                                                 data, length, entry)) {
+          member_state = ZZ9K_LHA_BATCH_FAILED;
+        }
+      }
+      state[entry_index] = (uint8_t)member_state;
+      out_cursor += entry->uncompressed_size;
+    }
+
+    first += chunk.count;
+  }
+
+out:
+  free(results);
+  free(tables);
+  free(members);
+  free(collides);
+  if (arena.handle != 0U && arena.handle != ZZ9K_INVALID_HANDLE) {
+    zz9k_free_shared(ctx, arena.handle);
+  }
+}
+
+static int zz9k_archive_handle_lha(ZZ9KContext *ctx,
+                                   const ZZ9KServiceInfo *service,
+                                   const uint8_t *data,
                                    uint32_t length,
                                    const char *command,
                                    const char *output_dir)
 {
   ZZ9KArchiveEntry *entries = 0;
+  uint8_t *batch_state = 0;
   uint32_t count = 0U;
   uint32_t i;
   int ok = 1;
@@ -6910,6 +7829,17 @@ static int zz9k_archive_handle_lha(const uint8_t *data,
     printf("lha parse failed\n");
     free(entries);
     return 0;
+  }
+
+  zz9k_lha_diag_reset();
+
+  if (count != 0U && ctx && service &&
+      (strcmp(command, "t") == 0 || strcmp(command, "x") == 0)) {
+    batch_state = (uint8_t *)calloc(count, 1U);
+    if (batch_state) {
+      zz9k_archive_lha_batch_run(ctx, service, data, length, entries, count,
+                                 command, output_dir, batch_state);
+    }
   }
 
   for (i = 0U; i < count; i++) {
@@ -6935,10 +7865,31 @@ static int zz9k_archive_handle_lha(const uint8_t *data,
       continue;
     }
     if (zz9k_archive_lha_method_supported(entry->method)) {
+      if (batch_state && batch_state[i] == ZZ9K_LHA_BATCH_DONE) {
+        continue; /* decoded + verified (extract: written) by the batch */
+      }
+      if (batch_state && batch_state[i] == ZZ9K_LHA_BATCH_FAILED) {
+        ok = 0; /* extract drain already reported the failure */
+        continue;
+      }
+      if (batch_state && batch_state[i] == ZZ9K_LHA_BATCH_SW) {
+        /* The board already produced a bad result for this member: decode
+           in software directly, never retry the offload. */
+        if (strcmp(command, "t") == 0) {
+          ok &= zz9k_archive_lha_software_decode_to_file(data, length,
+                                                         entry, 0);
+        } else {
+          ok &= zz9k_archive_extract_lha_software(data, length, output_dir,
+                                                  entry);
+        }
+        continue;
+      }
       if (strcmp(command, "t") == 0) {
-        ok &= zz9k_archive_lha_decode_method_to_file(data, length, entry, 0);
+        ok &= zz9k_archive_lha_decode_method_to_file(ctx, service, data,
+                                                     length, entry, 0);
       } else if (strcmp(command, "x") == 0) {
-        ok &= zz9k_archive_extract_lha_lh5(data, length, output_dir, entry);
+        ok &= zz9k_archive_extract_lha_lh5(ctx, service, data, length,
+                                           output_dir, entry);
       }
       continue;
     }
@@ -6962,6 +7913,10 @@ static int zz9k_archive_handle_lha(const uint8_t *data,
   if (strcmp(command, "t") == 0 && ok) {
     printf("lha test ok: %lu entries\n", (unsigned long)count);
   }
+  if (strcmp(command, "t") == 0 || strcmp(command, "x") == 0) {
+    zz9k_lha_diag_report();
+  }
+  free(batch_state);
   free(entries);
   return ok;
 }
@@ -9187,17 +10142,28 @@ static int zz9k_archive_run(const char *command, const char *archive_path,
                (strcmp(command, "l") != 0 &&
                  format == ZZ9K_ARCHIVE_FORMAT_LZMA_ALONE) ||
                 (strcmp(command, "l") != 0 &&
-                 format == ZZ9K_ARCHIVE_FORMAT_ZIP);
+                 format == ZZ9K_ARCHIVE_FORMAT_ZIP) ||
+                (strcmp(command, "l") != 0 &&
+                 format == ZZ9K_ARCHIVE_FORMAT_LHA);
   if (need_codec && !codec_ready) {
+    int lha_soft = (format == ZZ9K_ARCHIVE_FORMAT_LHA);
+
     status = zz9k_open(&ctx);
     if (status != ZZ9K_STATUS_OK) {
-      printf("open failed: %s (%d)\n", zz9k_status_name(status), status);
-      goto out;
+      if (!lha_soft) {
+        printf("open failed: %s (%d)\n", zz9k_status_name(status), status);
+        goto out;
+      }
+      ctx = 0;                    /* LHA: no board -> software decode */
+    } else if (!zz9k_archive_require_codec_service(ctx, &service)) {
+      if (!lha_soft) {
+        goto out;
+      }
+      zz9k_close(ctx);
+      ctx = 0;                    /* LHA: no codec service -> software */
+    } else {
+      codec_ready = 1;
     }
-    if (!zz9k_archive_require_codec_service(ctx, &service)) {
-      goto out;
-    }
-    codec_ready = 1;
   }
 
   if (format == ZZ9K_ARCHIVE_FORMAT_GZIP) {
@@ -9210,7 +10176,8 @@ static int zz9k_archive_run(const char *command, const char *archive_path,
     ok = zz9k_archive_handle_tar(ctx, &service, data, length,
                                  command, output_dir);
   } else if (format == ZZ9K_ARCHIVE_FORMAT_LHA) {
-    ok = zz9k_archive_handle_lha(data, length, command, output_dir);
+    ok = zz9k_archive_handle_lha(ctx, codec_ready ? &service : 0,
+                                 data, length, command, output_dir);
   } else if (format == ZZ9K_ARCHIVE_FORMAT_LZMA_ALONE) {
     ok = zz9k_archive_handle_lzma(ctx, need_codec ? &service : 0,
                                   data, length, command, output_dir,

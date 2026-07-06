@@ -768,6 +768,15 @@ target_include_directories(archive_tool_logic_test
 target_link_libraries(archive_tool_logic_test PRIVATE zz9k_host zz9k_lha_unix)
 add_test(NAME archive_tool_logic_test COMMAND archive_tool_logic_test)
 
+add_executable(archive_tool_batch_test tests/archive_tool_batch_test.c)
+target_include_directories(archive_tool_batch_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/host/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/tools/lha-unix
+  ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+target_link_libraries(archive_tool_batch_test PRIVATE zz9k_host zz9k_lha_unix)
+add_test(NAME archive_tool_batch_test COMMAND archive_tool_batch_test)
+
 add_executable(lha_decode_accept_test
   tests/lha_decode_accept_test.c
 )
@@ -779,6 +788,37 @@ target_include_directories(lha_decode_accept_test
 
 target_link_libraries(lha_decode_accept_test PRIVATE zz9k_lha_unix)
 add_test(NAME lha_decode_accept_test COMMAND lha_decode_accept_test)
+
+add_executable(lha_real_decode_test
+  tests/lha_real_decode_test.c
+)
+
+target_include_directories(lha_real_decode_test
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools/lha-unix
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests
+)
+
+target_link_libraries(lha_real_decode_test PRIVATE zz9k_lha_unix)
+add_test(NAME lha_real_decode_test COMMAND lha_real_decode_test)
+
+add_executable(compression_lzh_helper_test tests/compression_lzh_helper_test.c)
+target_include_directories(compression_lzh_helper_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME compression_lzh_helper_test COMMAND compression_lzh_helper_test)
+
+add_executable(batch_arena_test tests/batch_arena_test.c)
+target_include_directories(batch_arena_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME batch_arena_test COMMAND batch_arena_test)
+
+add_executable(lha_batch_reference_test tests/lha_batch_reference_test.c)
+target_include_directories(lha_batch_reference_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/tools/lha-unix
+  ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+target_link_libraries(lha_batch_reference_test PRIVATE zz9k_lha_unix)
+add_test(NAME lha_batch_reference_test COMMAND lha_batch_reference_test)
 
 add_executable(libdecode_tool_source_test
   tests/libdecode_tool_source_test.c

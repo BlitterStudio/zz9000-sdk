@@ -8,6 +8,7 @@
 #include "zz9k/caps.h"
 #include "zz9k/reply.h"
 #include "zz9k/request.h"
+#include <errno.h>
 #include <string.h>
 
 #if defined(__amigaos__) || defined(__amiga__) || defined(__AMIGA__) || \
@@ -277,44 +278,67 @@ static void zz9k_idle_between_polls(void)
 #define ZZ9K_SYNC_WAIT_HEARTBEAT_MICROS 4000UL
 #define ZZ9K_SYNC_WAIT_TIMEOUT_MS_DEFAULT 5000UL
 
-static uint32_t zz9k_sync_wait_timeout_ms(void)
+static int zz9k_parse_env_u32(const char *text, uint32_t *value)
+{
+  char *end;
+  long parsed;
+
+  if (!text || !*text || !value) {
+    return 0;
+  }
+  errno = 0;
+  parsed = strtol(text, &end, 10);
+  if (errno != 0 || end == text || *end != '\0' || parsed <= 0 ||
+      (unsigned long)parsed > 0xffffffffUL) {
+    return 0;
+  }
+  *value = (uint32_t)parsed;
+  return 1;
+}
+
+uint32_t zz9k_env_u32(const char *name, uint32_t fallback)
 {
 #if ZZ9K_HOST_AMIGA
   struct DosLibrary *previous_dos_base;
   struct Library *dos_base;
   UBYTE buf[16];
   LONG len;
+  uint32_t value;
 
   dos_base = OpenLibrary((CONST_STRPTR)"dos.library", 0);
   if (!dos_base) {
-    return ZZ9K_SYNC_WAIT_TIMEOUT_MS_DEFAULT;
+    return fallback;
   }
   previous_dos_base = DOSBase;
   DOSBase = (struct DosLibrary *)dos_base;
 
-  len = GetVar((CONST_STRPTR)"ZZ9K_SYNC_WAIT_TIMEOUT_MS", buf,
-               (LONG)sizeof(buf) - 1, 0);
+  len = GetVar((CONST_STRPTR)name, buf, (LONG)sizeof(buf) - 1, 0);
 
   DOSBase = previous_dos_base;
   CloseLibrary(dos_base);
 
-  if (len > 0) {
-    long v = strtol((const char *)buf, NULL, 10);
-    if (v > 0) {
-      return (uint32_t)v;
+  if (len > 0 && len < (LONG)sizeof(buf)) {
+    buf[len] = '\0';
+    if (zz9k_parse_env_u32((const char *)buf, &value)) {
+      return value;
     }
   }
-  return ZZ9K_SYNC_WAIT_TIMEOUT_MS_DEFAULT;
+  return fallback;
 #else
-  const char *env = getenv("ZZ9K_SYNC_WAIT_TIMEOUT_MS");
-  if (env && *env) {
-    long v = strtol(env, NULL, 10);
-    if (v > 0) {
-      return (uint32_t)v;
-    }
+  const char *env = getenv(name);
+  uint32_t value;
+
+  if (zz9k_parse_env_u32(env, &value)) {
+    return value;
   }
-  return ZZ9K_SYNC_WAIT_TIMEOUT_MS_DEFAULT;
+  return fallback;
 #endif
+}
+
+static uint32_t zz9k_sync_wait_timeout_ms(void)
+{
+  return zz9k_env_u32("ZZ9K_SYNC_WAIT_TIMEOUT_MS",
+                      ZZ9K_SYNC_WAIT_TIMEOUT_MS_DEFAULT);
 }
 
 /* Monotonic-ish millisecond reading; unsigned deltas absorb wrap. */
@@ -1824,6 +1848,33 @@ int zz9k_decompress(ZZ9KContext *ctx, const ZZ9KDecompressDesc *desc,
   }
 
   return zz9k_reply_decompress_result(&reply, result);
+}
+
+int zz9k_decompress_batch(ZZ9KContext *ctx,
+                          const ZZ9KDecompressBatchDesc *desc,
+                          ZZ9KDecompressBatchResult *result)
+{
+  ZZ9KRequest request;
+  ZZ9KMailboxEntry reply;
+  int status;
+
+  if (!ctx || !desc || !result) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  memset(result, 0, sizeof(*result));
+  memset(&reply, 0, sizeof(reply));
+  status = zz9k_request_decompress_batch(&request, desc);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  status = zz9k_call(ctx, &request, &reply, ZZ9K_DEFAULT_TIMEOUT_TICKS);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  return zz9k_reply_decompress_batch_result(&reply, result);
 }
 
 int zz9k_decompress_test(ZZ9KContext *ctx,

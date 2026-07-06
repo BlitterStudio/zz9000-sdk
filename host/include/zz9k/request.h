@@ -945,6 +945,25 @@ static inline int zz9k_request_decompress_stream_close(
   return ZZ9K_STATUS_OK;
 }
 
+static inline int zz9k_request_decompress_batch(
+    ZZ9KRequest *request, const ZZ9KDecompressBatchDesc *desc)
+{
+  ZZ9KDecompressBatchPayload *payload;
+
+  if (!request || !desc || desc->arena_handle == ZZ9K_INVALID_HANDLE ||
+      desc->arena_length < ZZ9K_BATCH_HEADER_SIZE) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  zz9k_request_init(request, ZZ9K_OP_DECOMPRESS_BATCH);
+  request->entry.payload_len = sizeof(ZZ9KDecompressBatchPayload);
+  payload = (ZZ9KDecompressBatchPayload *)request->entry.payload.inline_data;
+  zz9k_put_be32(payload->arena_handle, desc->arena_handle);
+  zz9k_put_be32(payload->arena_offset, desc->arena_offset);
+  zz9k_put_be32(payload->arena_length, desc->arena_length);
+  return ZZ9K_STATUS_OK;
+}
+
 static inline int zz9k_request_diag_read(ZZ9KRequest *request)
 {
   if (!request) {

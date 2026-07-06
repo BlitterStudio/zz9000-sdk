@@ -50,6 +50,17 @@ int main(void)
   check(zz9k_lha_unix_decode_accept(0, 98u, 100u, 0, 0u, 0u) == 0,
         "no-crc short read_size is rejected");
 
+  /* Bug #39: when no CRC is in play, an "actual" value that happens to equal
+   * "expected" (e.g. both zero, or a coincidental match) must NOT be treated
+   * as a CRC pass -- the read-size mismatch alone must reject the decode.
+   * This pins the accept() semantics that the caller's failure message
+   * (zz9k_archive_lha_decode_method_to_file) relies on to avoid printing a
+   * misleading "crc matched" style line when CRC checking was never in
+   * effect. */
+  check(zz9k_lha_unix_decode_accept(0, 10u, 20u, 0, 0x1234u, 0x1234u) == 0,
+        "equal crc values with check_crc off and short read is rejected "
+        "(#39)");
+
   if (failures) {
     printf("lha_decode_accept_test: %d failure(s)\n", failures);
     return 1;

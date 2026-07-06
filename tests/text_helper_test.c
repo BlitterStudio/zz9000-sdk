@@ -58,6 +58,14 @@ static int test_compression_algorithm_text(void)
                    "gzip")) return 2;
   if (!expect_text(zz9k_compression_algorithm_text(ZZ9K_COMPRESSION_LZMA2),
                    "lzma2")) return 3;
+  if (!expect_text(zz9k_compression_algorithm_text(ZZ9K_COMPRESSION_LH1),
+                   "lh1")) return 5;
+  if (!expect_text(zz9k_compression_algorithm_text(ZZ9K_COMPRESSION_LH5),
+                   "lh5")) return 6;
+  if (!expect_text(zz9k_compression_algorithm_text(ZZ9K_COMPRESSION_LH6),
+                   "lh6")) return 7;
+  if (!expect_text(zz9k_compression_algorithm_text(ZZ9K_COMPRESSION_LH7),
+                   "lh7")) return 8;
   if (!expect_text(zz9k_compression_algorithm_text(0xffffffffUL),
                    "unknown")) return 4;
   return 0;

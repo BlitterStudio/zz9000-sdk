@@ -99,6 +99,14 @@ static inline const char *zz9k_compression_algorithm_text(uint32_t algorithm)
     return "lzma-alone";
   case ZZ9K_COMPRESSION_LZMA2:
     return "lzma2";
+  case ZZ9K_COMPRESSION_LH1:
+    return "lh1";
+  case ZZ9K_COMPRESSION_LH5:
+    return "lh5";
+  case ZZ9K_COMPRESSION_LH6:
+    return "lh6";
+  case ZZ9K_COMPRESSION_LH7:
+    return "lh7";
   default:
     return "unknown";
   }

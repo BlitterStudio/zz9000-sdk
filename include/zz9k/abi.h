@@ -158,6 +158,7 @@ enum ZZ9KOpcode {
   ZZ9K_OP_DECOMPRESS_STREAM_READ = ZZ9K_SERVICE_CODEC + 0x03,
   ZZ9K_OP_DECOMPRESS_STREAM_CLOSE = ZZ9K_SERVICE_CODEC + 0x04,
   ZZ9K_OP_DECOMPRESS_STREAM_FEED = ZZ9K_SERVICE_CODEC + 0x05,
+  ZZ9K_OP_DECOMPRESS_BATCH = ZZ9K_SERVICE_CODEC + 0x06,
 
   ZZ9K_OP_CRYPTO_HASH = ZZ9K_SERVICE_CRYPTO + 0x00,
   ZZ9K_OP_CRYPTO_STREAM = ZZ9K_SERVICE_CRYPTO + 0x01,
@@ -228,6 +229,8 @@ enum ZZ9KServiceFlags {
   ZZ9K_SERVICE_FLAG_CODEC_ZLIB_FEED = 1U << 26,
   ZZ9K_SERVICE_FLAG_CODEC_GZIP_FEED = 1U << 27,
   ZZ9K_SERVICE_FLAG_CODEC_LZMA2 = 1U << 28,
+  ZZ9K_SERVICE_FLAG_CODEC_LZH = 1U << 29,
+  ZZ9K_SERVICE_FLAG_CODEC_DECOMPRESS_BATCH = 1U << 30,
 
   ZZ9K_SERVICE_FLAG_CRYPTO_X25519     = 1U << 16,
   ZZ9K_SERVICE_FLAG_CRYPTO_P256       = 1U << 17,
@@ -750,6 +753,26 @@ typedef struct ZZ9KDecompressStreamResultPayload {
   uint8_t reserved[24];
 } ZZ9KDecompressStreamResultPayload;
 
+/* Batched LZH decode: the 48-byte inline payload only references the
+   self-describing arena (one shared buffer); everything else -- the
+   member table, compressed blob, optional output region, and per-member
+   results -- lives inside the arena itself (see the ZZ9K_BATCH_* layout
+   constants). */
+typedef struct ZZ9KDecompressBatchPayload {
+  uint8_t arena_handle[4];
+  uint8_t arena_offset[4];
+  uint8_t arena_length[4];
+  uint8_t reserved[36];
+} ZZ9KDecompressBatchPayload;
+
+typedef struct ZZ9KDecompressBatchResultPayload {
+  uint8_t members_total[4];
+  uint8_t members_ok[4];
+  uint8_t members_failed[4];
+  uint8_t flags[4];
+  uint8_t reserved[32];
+} ZZ9KDecompressBatchResultPayload;
+
 typedef char ZZ9KAllocSharedPayload_must_be_48_bytes[
   (sizeof(ZZ9KAllocSharedPayload) == 48U) ? 1 : -1
 ];
@@ -861,6 +884,10 @@ typedef char ZZ9KDecompressStreamClosePayload_must_be_48_bytes[
 typedef char ZZ9KDecompressStreamResultPayload_must_be_48_bytes[
   (sizeof(ZZ9KDecompressStreamResultPayload) == 48U) ? 1 : -1
 ];
+typedef char ZZ9KDecompressBatchPayload_must_be_48_bytes[
+    (sizeof(ZZ9KDecompressBatchPayload) == 48U) ? 1 : -1];
+typedef char ZZ9KDecompressBatchResultPayload_must_be_48_bytes[
+    (sizeof(ZZ9KDecompressBatchResultPayload) == 48U) ? 1 : -1];
 
 typedef union ZZ9KEntryPayload {
   uint8_t inline_data[48];
@@ -1277,6 +1304,91 @@ typedef struct ZZ9KDecompressStreamResult {
   uint32_t flags;
 } ZZ9KDecompressStreamResult;
 
+/* Batch arena wire format (all fields big-endian, offsets relative to the
+   arena base = arena_handle's buffer + arena_offset):
+     [0, 48)                          header
+     [desc_offset, +N*32)             member descriptors
+     [blob_offset, +blob_length)      concatenated compressed members
+     [output_offset, +output_capacity) decoded output (EXTRACT mode only)
+     [result_offset, +N*16)           per-member results (firmware-written)
+ */
+#define ZZ9K_BATCH_ARENA_MAGIC 0x5A424154UL /* 'ZBAT' */
+#define ZZ9K_BATCH_ARENA_VERSION 1U
+#define ZZ9K_BATCH_MODE_TEST 0U    /* decode-and-discard, CRC only */
+#define ZZ9K_BATCH_MODE_EXTRACT 1U /* decode into the output region */
+#define ZZ9K_BATCH_HEADER_SIZE 48U
+#define ZZ9K_BATCH_DESC_SIZE 32U
+#define ZZ9K_BATCH_RESULT_SIZE 16U
+#define ZZ9K_BATCH_MEMBER_LIMIT 1024U
+#define ZZ9K_BATCH_MEMBER_FLAG_HAVE_CRC (1U << 0)
+
+/* TEST-mode members decode-and-discard, so uncompressed_size is not
+   bounded by any arena region. Cap it so a corrupt descriptor cannot pin
+   the firmware worker for minutes producing discarded output. Mirrored as
+   SDK_BATCH_TEST_MAX_EXPECTED in the firmware. */
+#define ZZ9K_BATCH_TEST_MAX_EXPECTED 0x04000000UL /* 64 MB */
+
+/* Header field byte offsets. */
+#define ZZ9K_BATCH_HDR_MAGIC 0U
+#define ZZ9K_BATCH_HDR_VERSION 4U /* u16 */
+#define ZZ9K_BATCH_HDR_MODE 6U    /* u16 */
+#define ZZ9K_BATCH_HDR_MEMBER_COUNT 8U
+#define ZZ9K_BATCH_HDR_DESC_OFFSET 12U
+#define ZZ9K_BATCH_HDR_BLOB_OFFSET 16U
+#define ZZ9K_BATCH_HDR_BLOB_LENGTH 20U
+#define ZZ9K_BATCH_HDR_OUTPUT_OFFSET 24U
+#define ZZ9K_BATCH_HDR_OUTPUT_CAPACITY 28U
+#define ZZ9K_BATCH_HDR_RESULT_OFFSET 32U
+
+/* Member descriptor field byte offsets (relative to each 32-byte entry).
+   src_offset is relative to blob_offset; dst_offset (EXTRACT only) is
+   relative to output_offset. */
+#define ZZ9K_BATCH_DESC_ALGORITHM 0U
+#define ZZ9K_BATCH_DESC_SRC_OFFSET 4U
+#define ZZ9K_BATCH_DESC_SRC_LENGTH 8U
+#define ZZ9K_BATCH_DESC_DST_OFFSET 12U
+#define ZZ9K_BATCH_DESC_UNCOMPRESSED_SIZE 16U
+#define ZZ9K_BATCH_DESC_EXPECTED_CRC 20U
+#define ZZ9K_BATCH_DESC_FLAGS 24U
+
+/* Member result field byte offsets (relative to each 16-byte entry). */
+#define ZZ9K_BATCH_RESULT_STATUS 0U
+#define ZZ9K_BATCH_RESULT_BYTES_WRITTEN 4U
+#define ZZ9K_BATCH_RESULT_CHECKSUM 8U
+
+typedef struct ZZ9KBatchMemberDesc {
+  uint32_t algorithm; /* ZZ9K_COMPRESSION_LH1/LH5/LH6/LH7 */
+  uint32_t src_offset;
+  uint32_t src_length;
+  uint32_t dst_offset;
+  uint32_t uncompressed_size; /* exact expected decoded size */
+  uint32_t expected_crc;      /* LHA CRC-16 in the low 16 bits. ADVISORY in
+                                 arena v1: the firmware does NOT compare it;
+                                 verify the result row's checksum yourself
+                                 (members_ok reflects decode completion
+                                 only, not CRC correctness). */
+  uint32_t flags;             /* ZZ9K_BATCH_MEMBER_FLAG_* */
+} ZZ9KBatchMemberDesc;
+
+typedef struct ZZ9KBatchMemberResult {
+  uint32_t status; /* ZZ9K_STATUS_* for this member */
+  uint32_t bytes_written;
+  uint32_t checksum; /* computed CRC-16 in the low 16 bits */
+} ZZ9KBatchMemberResult;
+
+typedef struct ZZ9KDecompressBatchDesc {
+  uint32_t arena_handle;
+  uint32_t arena_offset;
+  uint32_t arena_length;
+} ZZ9KDecompressBatchDesc;
+
+typedef struct ZZ9KDecompressBatchResult {
+  uint32_t members_total;
+  uint32_t members_ok;
+  uint32_t members_failed;
+  uint32_t flags;
+} ZZ9KDecompressBatchResult;
+
 enum ZZ9KSurfaceFormat {
   ZZ9K_SURFACE_FORMAT_UNKNOWN = 0,
   ZZ9K_SURFACE_FORMAT_RGB565 = 1,
@@ -1445,7 +1557,11 @@ enum ZZ9KCompressionAlgorithm {
   ZZ9K_COMPRESSION_GZIP = 3,
   ZZ9K_COMPRESSION_LZ4_BLOCK = 4,
   ZZ9K_COMPRESSION_LZMA_ALONE = 5,
-  ZZ9K_COMPRESSION_LZMA2 = 6
+  ZZ9K_COMPRESSION_LZMA2 = 6,
+  ZZ9K_COMPRESSION_LH1 = 7,
+  ZZ9K_COMPRESSION_LH5 = 8,
+  ZZ9K_COMPRESSION_LH6 = 9,
+  ZZ9K_COMPRESSION_LH7 = 10
 };
 
 enum ZZ9KDecompressFlags {
