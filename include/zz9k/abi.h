@@ -1356,7 +1356,11 @@ typedef struct ZZ9KBatchMemberDesc {
   uint32_t src_length;
   uint32_t dst_offset;
   uint32_t uncompressed_size; /* exact expected decoded size */
-  uint32_t expected_crc;      /* LHA CRC-16 in the low 16 bits */
+  uint32_t expected_crc;      /* LHA CRC-16 in the low 16 bits. ADVISORY in
+                                 arena v1: the firmware does NOT compare it;
+                                 verify the result row's checksum yourself
+                                 (members_ok reflects decode completion
+                                 only, not CRC correctness). */
   uint32_t flags;             /* ZZ9K_BATCH_MEMBER_FLAG_* */
 } ZZ9KBatchMemberDesc;
 
