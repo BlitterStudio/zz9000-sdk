@@ -397,6 +397,59 @@ static int test_extract_excludes_duplicate_paths(void)
   }
   zz9k_archive_strip_components = 0U;
 
+  /* Parent-file/child conflicts must also stay ordered. A batched child
+     would create the parent directory before an earlier non-batched file
+     parent is processed. */
+  make_entry(&entries[0], ZZ9K_ARCHIVE_LHA_METHOD_LH0, 100U, 100U);
+  strcpy(entries[0].name, "a");
+  make_entry(&entries[1], ZZ9K_ARCHIVE_LHA_METHOD_LH5, 100U, 300U);
+  strcpy(entries[1].name, "a/b");
+  make_entry(&entries[2], ZZ9K_ARCHIVE_LHA_METHOD_LH5, 100U, 300U);
+  strcpy(entries[2].name, "ab/c");
+  memset(collides, 0, sizeof(collides));
+  if (!zz9k_archive_lha_batch_mark_collisions(entries, 3U, collides)) {
+    return 15;
+  }
+  if (!collides[0] || !collides[1] || collides[2]) return 16;
+
+  {
+    ZZ9KArchiveEntry prefix_entries[4];
+    uint8_t prefix_collides[4];
+
+    make_entry(&prefix_entries[0], ZZ9K_ARCHIVE_LHA_METHOD_LH0, 100U, 100U);
+    strcpy(prefix_entries[0].name, "a");
+    make_entry(&prefix_entries[1], ZZ9K_ARCHIVE_LHA_METHOD_LH5, 100U, 300U);
+    strcpy(prefix_entries[1].name, "a-irrelevant");
+    make_entry(&prefix_entries[2], ZZ9K_ARCHIVE_LHA_METHOD_LH5, 100U, 300U);
+    strcpy(prefix_entries[2].name, "a/b");
+    make_entry(&prefix_entries[3], ZZ9K_ARCHIVE_LHA_METHOD_LH5, 100U, 300U);
+    strcpy(prefix_entries[3].name, "z");
+    memset(prefix_collides, 0, sizeof(prefix_collides));
+    if (!zz9k_archive_lha_batch_mark_collisions(
+            prefix_entries, 4U, prefix_collides)) {
+      return 19;
+    }
+    if (!prefix_collides[0] || prefix_collides[1] ||
+        !prefix_collides[2] || prefix_collides[3]) {
+      return 20;
+    }
+  }
+
+  /* File-vs-directory conflicts differ only by a trailing slash after
+     output-name normalization and must be excluded too. */
+  make_entry(&entries[0], ZZ9K_ARCHIVE_LHA_METHOD_LH0, 0U, 0U);
+  strcpy(entries[0].name, "dir/");
+  entries[0].is_dir = 1U;
+  make_entry(&entries[1], ZZ9K_ARCHIVE_LHA_METHOD_LH5, 100U, 300U);
+  strcpy(entries[1].name, "dir");
+  make_entry(&entries[2], ZZ9K_ARCHIVE_LHA_METHOD_LH5, 100U, 300U);
+  strcpy(entries[2].name, "dir2");
+  memset(collides, 0, sizeof(collides));
+  if (!zz9k_archive_lha_batch_mark_collisions(entries, 3U, collides)) {
+    return 17;
+  }
+  if (!collides[0] || !collides[1] || collides[2]) return 18;
+
   return 0;
 }
 

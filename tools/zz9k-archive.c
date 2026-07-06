@@ -7349,36 +7349,71 @@ static int zz9k_archive_lha_batch_drain_member(ZZ9KContext *ctx,
   return ok;
 }
 
-/* Case-folded FNV-1a over the entry's POST-TRANSFORM output name (from
-   zz9k_archive_output_entry, not the raw archive name: --strip-components
-   can make distinct raw names, e.g. a/foo and b/foo, resolve to the same
-   output file). Returns 0 for entries that produce no output at all --
-   0 is reserved and never participates in a collision run. */
-static uint32_t zz9k_archive_lha_output_name_hash(
-    const ZZ9KArchiveEntry *entry)
+typedef struct ZZ9KLhaBatchHashSlot {
+  uint32_t hash;
+  uint32_t index;
+  uint32_t is_dir;
+  char name[ZZ9K_ARCHIVE_MAX_NAME];
+} ZZ9KLhaBatchHashSlot;
+
+static unsigned char zz9k_archive_lha_ascii_lower(unsigned char c)
 {
-  ZZ9KArchiveEntry output_entry;
+  return (c >= 'A' && c <= 'Z') ? (unsigned char)(c - 'A' + 'a') : c;
+}
+
+static uint32_t zz9k_archive_lha_name_hash(const char *name)
+{
   uint32_t hash = 2166136261UL;
   const char *p;
 
-  if (!zz9k_archive_output_entry(entry, &output_entry)) {
-    return 0U;
-  }
-  for (p = output_entry.name; *p != '\0'; p++) {
-    unsigned char c = (unsigned char)*p;
-    if (c >= 'A' && c <= 'Z') {
-      c = (unsigned char)(c - 'A' + 'a');
-    }
-    hash ^= (uint32_t)c;
+  for (p = name; *p != '\0'; p++) {
+    hash ^= (uint32_t)zz9k_archive_lha_ascii_lower((unsigned char)*p);
     hash *= 16777619UL;
   }
   return hash == 0U ? 1U : hash;
 }
 
-typedef struct ZZ9KLhaBatchHashSlot {
-  uint32_t hash;
-  uint32_t index;
-} ZZ9KLhaBatchHashSlot;
+static int zz9k_archive_lha_batch_hash_slot_init(
+    const ZZ9KArchiveEntry *entry, uint32_t index,
+    ZZ9KLhaBatchHashSlot *slot)
+{
+  ZZ9KArchiveEntry output_entry;
+  size_t length;
+
+  memset(slot, 0, sizeof(*slot));
+  slot->index = index;
+  if (!zz9k_archive_output_entry(entry, &output_entry)) {
+    return 0;
+  }
+  strcpy(slot->name, output_entry.name);
+  slot->is_dir = output_entry.is_dir;
+  length = strlen(slot->name);
+  while (length > 0U && slot->name[length - 1U] == '/') {
+    slot->name[--length] = '\0';
+  }
+  if (slot->name[0] == '\0') {
+    return 0;
+  }
+  slot->hash = zz9k_archive_lha_name_hash(slot->name);
+  return 1;
+}
+
+/* Case-folded FNV-1a over the entry's POST-TRANSFORM output name (from
+   zz9k_archive_output_entry, not the raw archive name: --strip-components
+   can make distinct raw names, e.g. a/foo and b/foo, resolve to the same
+   output file). Trailing slashes are canonicalized away so file-vs-directory
+   conflicts (a vs a/) share the same hash. Returns 0 for entries that produce
+   no output at all -- 0 is reserved and never participates in a collision
+   run. */
+static uint32_t zz9k_archive_lha_output_name_hash(
+    const ZZ9KArchiveEntry *entry)
+{
+  ZZ9KLhaBatchHashSlot slot;
+
+  return zz9k_archive_lha_batch_hash_slot_init(entry, 0U, &slot)
+             ? slot.hash
+             : 0U;
+}
 
 static int zz9k_archive_lha_batch_hash_slot_cmp(const void *a, const void *b)
 {
@@ -7390,12 +7425,69 @@ static int zz9k_archive_lha_batch_hash_slot_cmp(const void *a, const void *b)
   return 0;
 }
 
-/* One-pass replacement for the old O(n^2) path_collides scan: hash every
-   entry's post-transform output name exactly once, sort by hash, and mark
-   every member of any run of length >= 2 sharing a nonzero hash. Batch-
-   extract drains members out of archive order, so a duplicated output path
-   (lha-update-style archives) must stay on the sequential per-entry path to
-   preserve first/last-wins semantics.
+static int zz9k_archive_lha_batch_name_slot_cmp(const void *a, const void *b)
+{
+  const ZZ9KLhaBatchHashSlot *sa = (const ZZ9KLhaBatchHashSlot *)a;
+  const ZZ9KLhaBatchHashSlot *sb = (const ZZ9KLhaBatchHashSlot *)b;
+  const unsigned char *pa = (const unsigned char *)sa->name;
+  const unsigned char *pb = (const unsigned char *)sb->name;
+
+  while (*pa != '\0' && *pb != '\0') {
+    unsigned char ca = zz9k_archive_lha_ascii_lower(*pa);
+    unsigned char cb = zz9k_archive_lha_ascii_lower(*pb);
+
+    if (ca < cb) return -1;
+    if (ca > cb) return 1;
+    pa++;
+    pb++;
+  }
+  if (*pa == '\0' && *pb != '\0') return -1;
+  if (*pa != '\0' && *pb == '\0') return 1;
+  if (sa->index < sb->index) return -1;
+  if (sa->index > sb->index) return 1;
+  return 0;
+}
+
+static int zz9k_archive_lha_output_name_is_parent_of(const char *parent,
+                                                     const char *child)
+{
+  size_t i;
+
+  if (!parent || !child || parent[0] == '\0') {
+    return 0;
+  }
+  for (i = 0U; parent[i] != '\0'; i++) {
+    if (zz9k_archive_lha_ascii_lower((unsigned char)parent[i]) !=
+        zz9k_archive_lha_ascii_lower((unsigned char)child[i])) {
+      return 0;
+    }
+  }
+  return child[i] == '/';
+}
+
+static int zz9k_archive_lha_output_name_has_prefix(const char *prefix,
+                                                   const char *name)
+{
+  size_t i;
+
+  if (!prefix || !name || prefix[0] == '\0') {
+    return 0;
+  }
+  for (i = 0U; prefix[i] != '\0'; i++) {
+    if (zz9k_archive_lha_ascii_lower((unsigned char)prefix[i]) !=
+        zz9k_archive_lha_ascii_lower((unsigned char)name[i])) {
+      return 0;
+    }
+  }
+  return 1;
+}
+
+/* Sort-based replacement for the old O(n^2) path_collides scan: compute every
+   entry's post-transform output name exactly once, sort by hash to mark exact
+   duplicates, then sort by name to mark file-parent/child conflicts. Batch-
+   extract drains members before non-batched entries, so any conflicting output
+   path (lha-update-style archives or file/directory conflicts) must stay on
+   the sequential per-entry path to preserve archive-order semantics.
 
    Hash equality is trusted WITHOUT re-checking the strings: this is
    deliberate. A false-positive collision (two different names hashing the
@@ -7415,8 +7507,7 @@ static int zz9k_archive_lha_batch_mark_collisions(
     return 0;
   }
   for (i = 0U; i < count; i++) {
-    slots[i].hash = zz9k_archive_lha_output_name_hash(&entries[i]);
-    slots[i].index = i;
+    zz9k_archive_lha_batch_hash_slot_init(&entries[i], i, &slots[i]);
   }
   qsort(slots, count, sizeof(*slots), zz9k_archive_lha_batch_hash_slot_cmp);
   i = 0U;
@@ -7433,6 +7524,24 @@ static int zz9k_archive_lha_batch_mark_collisions(
       }
     }
     i = run_end;
+  }
+  qsort(slots, count, sizeof(*slots), zz9k_archive_lha_batch_name_slot_cmp);
+  for (i = 0U; i < count; i++) {
+    uint32_t j;
+
+    if (slots[i].hash == 0U || slots[i].is_dir) {
+      continue;
+    }
+    for (j = i + 1U; j < count &&
+                       zz9k_archive_lha_output_name_has_prefix(
+                           slots[i].name, slots[j].name);
+         j++) {
+      if (zz9k_archive_lha_output_name_is_parent_of(slots[i].name,
+                                                    slots[j].name)) {
+        collides[slots[i].index] = 1U;
+        collides[slots[j].index] = 1U;
+      }
+    }
   }
   free(slots);
   return 1;
