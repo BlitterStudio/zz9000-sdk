@@ -208,6 +208,7 @@ int main(void)
   if (ZZ9K_BATCH_RESULT_SIZE != 16U) return 68;
   if (ZZ9K_BATCH_MEMBER_LIMIT != 1024U) return 69;
   if (ZZ9K_BATCH_MEMBER_FLAG_HAVE_CRC != (1U << 0)) return 70;
+  if (ZZ9K_BATCH_TEST_MAX_EXPECTED != 0x04000000UL) return 94;
   if (ZZ9K_OP_DIAG_TIMING != ZZ9K_SERVICE_DIAG + 0x01U) {
     return 24;
   }

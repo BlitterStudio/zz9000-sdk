@@ -50,6 +50,18 @@ static int reference_batch_decode(uint8_t *arena, uint32_t arena_length)
     zz9k_batch_read_desc(arena + h.desc_offset + i * ZZ9K_BATCH_DESC_SIZE,
                          &desc);
     memset(&result, 0, sizeof(result));
+
+    if (h.mode == ZZ9K_BATCH_MODE_TEST &&
+        desc.uncompressed_size > ZZ9K_BATCH_TEST_MAX_EXPECTED) {
+      /* Mirrors the firmware: TEST-mode decode-and-discard has no arena
+         region to bound uncompressed_size, so a row claiming more than the
+         cap is rejected outright rather than attempted. */
+      result.status = ZZ9K_STATUS_BAD_REQUEST;
+      zz9k_batch_write_result(
+          arena + h.result_offset + i * ZZ9K_BATCH_RESULT_SIZE, &result);
+      continue;
+    }
+
     method = method_from_algorithm(desc.algorithm);
 
     if (method > 0 && desc.src_length != 0U &&
@@ -250,6 +262,44 @@ static int test_corrupt_member_fails_alone(void)
   return rc;
 }
 
+static int test_test_mode_oversize_expected_rejected(void)
+{
+  ZZ9KBatchLayout layout;
+  uint8_t *arena = build_fixture_arena(ZZ9K_BATCH_MODE_TEST, &layout);
+  ZZ9KBatchMemberDesc desc;
+  uint32_t i;
+  int rc = 0;
+
+  if (!arena) {
+    return 1;
+  }
+  /* Claim an expected size just over the TEST-mode cap for member 1; the
+     cap has no bearing on the other members. */
+  zz9k_batch_read_desc(arena + layout.desc_offset + 1U * ZZ9K_BATCH_DESC_SIZE,
+                       &desc);
+  desc.uncompressed_size = ZZ9K_BATCH_TEST_MAX_EXPECTED + 1U;
+  zz9k_batch_write_desc(
+      arena + layout.desc_offset + 1U * ZZ9K_BATCH_DESC_SIZE, &desc);
+
+  if (!reference_batch_decode(arena, layout.total_size)) {
+    rc = 2;
+  }
+  for (i = 0U; rc == 0 && i < ZZ9K_LHA_FIXTURE_COUNT; i++) {
+    ZZ9KBatchMemberResult result;
+
+    zz9k_batch_read_result(
+        arena + layout.result_offset + i * ZZ9K_BATCH_RESULT_SIZE, &result);
+    if (i == 1U) {
+      if (result.status != ZZ9K_STATUS_BAD_REQUEST) rc = 10;
+    } else if (result.status != ZZ9K_STATUS_OK ||
+               (uint16_t)result.checksum != zz9k_lha_fixtures[i].crc16) {
+      rc = 20 + (int)i; /* neighbors must be untouched */
+    }
+  }
+  free(arena);
+  return rc;
+}
+
 int main(void)
 {
   int rc;
@@ -257,5 +307,6 @@ int main(void)
   if ((rc = test_batch_test_mode_all_members_verify()) != 0) return 100 + rc;
   if ((rc = test_batch_extract_mode_is_byte_correct()) != 0) return 200 + rc;
   if ((rc = test_corrupt_member_fails_alone()) != 0) return 300 + rc;
+  if ((rc = test_test_mode_oversize_expected_rejected()) != 0) return 400 + rc;
   return 0;
 }

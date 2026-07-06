@@ -52,6 +52,23 @@ static inline int zz9k_batch_range_ok(uint32_t total, uint32_t offset,
   return offset <= total && length <= total - offset;
 }
 
+/* True iff [a_off, a_off+a_len) and [b_off, b_off+b_len) overlap. The two
+   regions being compared have each already passed zz9k_batch_range_ok
+   against arena_length, but their *sum* (offset+length) can still reach up
+   to 2 * arena_length -- which would wrap a 32-bit accumulator if
+   arena_length exceeds 2^31 (zz9k_batch_layout_init caps its own budgets
+   well below that, but this parser also validates arenas built by a
+   foreign/untrusted producer, so it cannot rely on that cap). Compute the
+   end-of-range sums in 64 bits to stay exact regardless. */
+static inline int zz9k_batch_ranges_overlap(uint32_t a_off, uint32_t a_len,
+                                            uint32_t b_off, uint32_t b_len)
+{
+  uint64_t a_end = (uint64_t)a_off + (uint64_t)a_len;
+  uint64_t b_end = (uint64_t)b_off + (uint64_t)b_len;
+
+  return !(a_end <= (uint64_t)b_off || b_end <= (uint64_t)a_off);
+}
+
 /* Compute the arena layout for a mode and budgets. Returns 1 on success,
    0 on invalid arguments. Budgets are capped at 256 MB each so the
    offset arithmetic cannot wrap 32 bits. */
@@ -203,6 +220,39 @@ static inline int zz9k_batch_parse_header(const uint8_t *arena,
       !zz9k_batch_range_ok(arena_length, h->output_offset,
                            h->output_capacity)) {
     return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  /* Every arena region must be pairwise disjoint: overlapping regions would
+     let, e.g., writing a decode result corrupt the descriptor table or the
+     decoded output of another member. Mirrors the firmware's parser. */
+  {
+    uint32_t desc_len = h->member_count * ZZ9K_BATCH_DESC_SIZE;
+    uint32_t result_len = h->member_count * ZZ9K_BATCH_RESULT_SIZE;
+    int has_output = (h->mode == ZZ9K_BATCH_MODE_EXTRACT);
+
+    if (zz9k_batch_ranges_overlap(0U, ZZ9K_BATCH_HEADER_SIZE, h->desc_offset,
+                                  desc_len) ||
+        zz9k_batch_ranges_overlap(0U, ZZ9K_BATCH_HEADER_SIZE, h->blob_offset,
+                                  h->blob_length) ||
+        zz9k_batch_ranges_overlap(0U, ZZ9K_BATCH_HEADER_SIZE,
+                                  h->result_offset, result_len) ||
+        zz9k_batch_ranges_overlap(h->desc_offset, desc_len, h->blob_offset,
+                                  h->blob_length) ||
+        zz9k_batch_ranges_overlap(h->desc_offset, desc_len, h->result_offset,
+                                  result_len) ||
+        zz9k_batch_ranges_overlap(h->blob_offset, h->blob_length,
+                                  h->result_offset, result_len) ||
+        (has_output &&
+         (zz9k_batch_ranges_overlap(0U, ZZ9K_BATCH_HEADER_SIZE,
+                                    h->output_offset, h->output_capacity) ||
+          zz9k_batch_ranges_overlap(h->desc_offset, desc_len,
+                                    h->output_offset, h->output_capacity) ||
+          zz9k_batch_ranges_overlap(h->blob_offset, h->blob_length,
+                                    h->output_offset, h->output_capacity) ||
+          zz9k_batch_ranges_overlap(h->result_offset, result_len,
+                                    h->output_offset, h->output_capacity)))) {
+      return ZZ9K_STATUS_BAD_REQUEST;
+    }
   }
   return ZZ9K_STATUS_OK;
 }

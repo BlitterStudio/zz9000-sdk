@@ -159,6 +159,19 @@ static int test_parse_rejects_malformed(void)
       ZZ9K_STATUS_OK) {
     return 7;
   }
+
+  /* overlapping regions: point result_offset INTO the blob region -- each
+     region individually still fits the arena, but they now alias. */
+  zz9k_put_be32(arena + ZZ9K_BATCH_HDR_RESULT_OFFSET, layout.blob_offset);
+  if (zz9k_batch_parse_header(arena, layout.total_size, &parsed) ==
+      ZZ9K_STATUS_OK) {
+    return 8;
+  }
+  zz9k_put_be32(arena + ZZ9K_BATCH_HDR_RESULT_OFFSET, layout.result_offset);
+  if (zz9k_batch_parse_header(arena, layout.total_size, &parsed) !=
+      ZZ9K_STATUS_OK) {
+    return 9;
+  }
   return 0;
 }
 

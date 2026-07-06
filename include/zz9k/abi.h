@@ -1322,6 +1322,12 @@ typedef struct ZZ9KDecompressStreamResult {
 #define ZZ9K_BATCH_MEMBER_LIMIT 1024U
 #define ZZ9K_BATCH_MEMBER_FLAG_HAVE_CRC (1U << 0)
 
+/* TEST-mode members decode-and-discard, so uncompressed_size is not
+   bounded by any arena region. Cap it so a corrupt descriptor cannot pin
+   the firmware worker for minutes producing discarded output. Mirrored as
+   SDK_BATCH_TEST_MAX_EXPECTED in the firmware. */
+#define ZZ9K_BATCH_TEST_MAX_EXPECTED 0x04000000UL /* 64 MB */
+
 /* Header field byte offsets. */
 #define ZZ9K_BATCH_HDR_MAGIC 0U
 #define ZZ9K_BATCH_HDR_VERSION 4U /* u16 */

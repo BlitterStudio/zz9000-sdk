@@ -7349,54 +7349,93 @@ static int zz9k_archive_lha_batch_drain_member(ZZ9KContext *ctx,
   return ok;
 }
 
-/* Case-insensitive ASCII path compare, approximating Amiga filesystem
-   name matching for collision detection. */
-static int zz9k_archive_lha_paths_equal_ci(const char *a, const char *b)
+/* Case-folded FNV-1a over the entry's POST-TRANSFORM output name (from
+   zz9k_archive_output_entry, not the raw archive name: --strip-components
+   can make distinct raw names, e.g. a/foo and b/foo, resolve to the same
+   output file). Returns 0 for entries that produce no output at all --
+   0 is reserved and never participates in a collision run. */
+static uint32_t zz9k_archive_lha_output_name_hash(
+    const ZZ9KArchiveEntry *entry)
 {
-  while (*a && *b) {
-    unsigned char ca = (unsigned char)*a++;
-    unsigned char cb = (unsigned char)*b++;
-    if (ca >= 'A' && ca <= 'Z') ca = (unsigned char)(ca - 'A' + 'a');
-    if (cb >= 'A' && cb <= 'Z') cb = (unsigned char)(cb - 'A' + 'a');
-    if (ca != cb) {
-      return 0;
-    }
+  ZZ9KArchiveEntry output_entry;
+  uint32_t hash = 2166136261UL;
+  const char *p;
+
+  if (!zz9k_archive_output_entry(entry, &output_entry)) {
+    return 0U;
   }
-  return *a == *b;
+  for (p = output_entry.name; *p != '\0'; p++) {
+    unsigned char c = (unsigned char)*p;
+    if (c >= 'A' && c <= 'Z') {
+      c = (unsigned char)(c - 'A' + 'a');
+    }
+    hash ^= (uint32_t)c;
+    hash *= 16777619UL;
+  }
+  return hash == 0U ? 1U : hash;
 }
 
-/* Does entry i's OUTPUT path collide with any OTHER entry's output path?
-   Batch-extract drains members out of archive order, so a duplicated
-   path (lha-update-style archives) must stay on the sequential
-   per-entry path to preserve first/last-wins semantics. Compare the
-   POST-TRANSFORM names from zz9k_archive_output_entry, not the raw
-   archive names: --strip-components can make distinct raw names (a/foo,
-   b/foo) resolve to the same output file. Entries that produce no output
-   at all cannot collide. */
-static int zz9k_archive_lha_batch_path_collides(const ZZ9KArchiveEntry *entries,
-                                                uint32_t count,
-                                                uint32_t index)
+typedef struct ZZ9KLhaBatchHashSlot {
+  uint32_t hash;
+  uint32_t index;
+} ZZ9KLhaBatchHashSlot;
+
+static int zz9k_archive_lha_batch_hash_slot_cmp(const void *a, const void *b)
 {
-  ZZ9KArchiveEntry mine;
+  const ZZ9KLhaBatchHashSlot *sa = (const ZZ9KLhaBatchHashSlot *)a;
+  const ZZ9KLhaBatchHashSlot *sb = (const ZZ9KLhaBatchHashSlot *)b;
+
+  if (sa->hash < sb->hash) return -1;
+  if (sa->hash > sb->hash) return 1;
+  return 0;
+}
+
+/* One-pass replacement for the old O(n^2) path_collides scan: hash every
+   entry's post-transform output name exactly once, sort by hash, and mark
+   every member of any run of length >= 2 sharing a nonzero hash. Batch-
+   extract drains members out of archive order, so a duplicated output path
+   (lha-update-style archives) must stay on the sequential per-entry path to
+   preserve first/last-wins semantics.
+
+   Hash equality is trusted WITHOUT re-checking the strings: this is
+   deliberate. A false-positive collision (two different names hashing the
+   same) only routes an innocent member to the safe, ordered per-entry path
+   instead of the batch path -- it can never cause a real collision to be
+   missed. Returns 1 on success, 0 on malloc failure (the caller must treat
+   that as "collision info unavailable" and skip batching rather than
+   guess). */
+static int zz9k_archive_lha_batch_mark_collisions(
+    const ZZ9KArchiveEntry *entries, uint32_t count, uint8_t *collides)
+{
+  ZZ9KLhaBatchHashSlot *slots;
   uint32_t i;
 
-  if (!zz9k_archive_output_entry(&entries[index], &mine)) {
+  slots = (ZZ9KLhaBatchHashSlot *)malloc((size_t)count * sizeof(*slots));
+  if (!slots) {
     return 0;
   }
   for (i = 0U; i < count; i++) {
-    ZZ9KArchiveEntry other;
-
-    if (i == index) {
-      continue;
-    }
-    if (!zz9k_archive_output_entry(&entries[i], &other)) {
-      continue;
-    }
-    if (zz9k_archive_lha_paths_equal_ci(other.name, mine.name)) {
-      return 1;
-    }
+    slots[i].hash = zz9k_archive_lha_output_name_hash(&entries[i]);
+    slots[i].index = i;
   }
-  return 0;
+  qsort(slots, count, sizeof(*slots), zz9k_archive_lha_batch_hash_slot_cmp);
+  i = 0U;
+  while (i < count) {
+    uint32_t run_end = i + 1U;
+
+    while (run_end < count && slots[run_end].hash == slots[i].hash) {
+      run_end++;
+    }
+    if (slots[i].hash != 0U && run_end - i >= 2U) {
+      uint32_t j;
+      for (j = i; j < run_end; j++) {
+        collides[slots[j].index] = 1U;
+      }
+    }
+    i = run_end;
+  }
+  free(slots);
+  return 1;
 }
 
 /* Batched LHA decode driver. Fills state[] with ZZ9K_LHA_BATCH_* per
@@ -7418,6 +7457,7 @@ static void zz9k_archive_lha_batch_run(ZZ9KContext *ctx,
   uint32_t *members = 0;
   uint8_t *tables = 0;
   uint8_t *results = 0;
+  uint8_t *collides = 0;
   uint32_t member_total = 0U;
   uint32_t largest = 0U;
   uint32_t largest_uncomp = 0U;
@@ -7447,6 +7487,20 @@ static void zz9k_archive_lha_batch_run(ZZ9KContext *ctx,
   if (!members) {
     return;
   }
+  if (mode == ZZ9K_BATCH_MODE_EXTRACT) {
+    /* Precompute the whole collision mask in one pass (see
+       zz9k_archive_lha_batch_mark_collisions) instead of the old per-member
+       O(n) rescan. If we can't get collision info, never guess: skip
+       batching entirely rather than risk draining a duplicated output path
+       out of archive order. */
+    collides = (uint8_t *)calloc(count, 1U);
+    if (!collides ||
+        !zz9k_archive_lha_batch_mark_collisions(entries, count, collides)) {
+      free(collides);
+      free(members);
+      return;
+    }
+  }
   for (i = 0U; i < count; i++) {
     const ZZ9KArchiveEntry *entry = &entries[i];
     uint32_t algo;
@@ -7458,8 +7512,15 @@ static void zz9k_archive_lha_batch_run(ZZ9KContext *ctx,
     if (algo == 0U || !zz9k_archive_service_supports(service, algo)) {
       continue;
     }
-    if (mode == ZZ9K_BATCH_MODE_EXTRACT &&
-        zz9k_archive_lha_batch_path_collides(entries, count, i)) {
+    if (mode == ZZ9K_BATCH_MODE_TEST &&
+        entry->uncompressed_size > ZZ9K_BATCH_TEST_MAX_EXPECTED) {
+      /* The firmware rejects TEST rows whose expected size exceeds this
+         cap (decode-and-discard has no arena region to bound it). Take
+         the per-member/software path instead of offloading a row the
+         board will refuse. */
+      continue;
+    }
+    if (mode == ZZ9K_BATCH_MODE_EXTRACT && collides[i]) {
       continue; /* duplicated path: keep archive-order semantics */
     }
     members[member_total++] = i;
@@ -7471,6 +7532,7 @@ static void zz9k_archive_lha_batch_run(ZZ9KContext *ctx,
     }
   }
   if (member_total == 0U) {
+    free(collides);
     free(members);
     return;
   }
@@ -7519,6 +7581,7 @@ static void zz9k_archive_lha_batch_run(ZZ9KContext *ctx,
                                 output_capacity) ||
         zz9k_alloc_shared(ctx, layout.total_size, 16U, 0U, &arena) !=
             ZZ9K_STATUS_OK) {
+      free(collides);
       free(members);
       return;
     }
@@ -7623,6 +7686,7 @@ out:
   free(results);
   free(tables);
   free(members);
+  free(collides);
   if (arena.handle != 0U && arena.handle != ZZ9K_INVALID_HANDLE) {
     zz9k_free_shared(ctx, arena.handle);
   }

@@ -313,24 +313,12 @@ static int test_batch_run_no_service_leaves_all_none(void)
 static int test_extract_excludes_duplicate_paths(void)
 {
   ZZ9KArchiveEntry entries[3];
+  uint8_t collides[3];
+  uint32_t hash0, hash1, hash2;
 
-  /* paths_equal_ci: equal, case-differing equal, different, prefix vs
-     longer (not equal even though one is a prefix of the other) */
-  if (!zz9k_archive_lha_paths_equal_ci("dir/file.bin", "dir/file.bin")) {
-    return 1;
-  }
-  if (!zz9k_archive_lha_paths_equal_ci("Dir/File.BIN", "dir/file.bin")) {
-    return 2;
-  }
-  if (zz9k_archive_lha_paths_equal_ci("dir/file.bin", "dir/other.bin")) {
-    return 3;
-  }
-  if (zz9k_archive_lha_paths_equal_ci("dir/file.bin", "dir/file.binx")) {
-    return 4;
-  }
-
-  /* path_collides: two entries sharing the same name collide with each
-     other; a third, uniquely-named entry collides with neither */
+  /* two entries sharing the same output name hash identically and both
+     get marked; a third, uniquely-named entry hashes differently and is
+     marked in neither run. */
   make_entry(&entries[0], ZZ9K_ARCHIVE_LHA_METHOD_LH0, 100U, 100U);
   strcpy(entries[0].name, "dup.bin");
   make_entry(&entries[1], ZZ9K_ARCHIVE_LHA_METHOD_LH5, 100U, 300U);
@@ -338,37 +326,76 @@ static int test_extract_excludes_duplicate_paths(void)
   make_entry(&entries[2], ZZ9K_ARCHIVE_LHA_METHOD_LH5, 100U, 300U);
   strcpy(entries[2].name, "unique.bin");
 
-  if (!zz9k_archive_lha_batch_path_collides(entries, 3U, 0U)) return 5;
-  if (!zz9k_archive_lha_batch_path_collides(entries, 3U, 1U)) return 6;
-  if (zz9k_archive_lha_batch_path_collides(entries, 3U, 2U)) return 7;
+  hash0 = zz9k_archive_lha_output_name_hash(&entries[0]);
+  hash1 = zz9k_archive_lha_output_name_hash(&entries[1]);
+  hash2 = zz9k_archive_lha_output_name_hash(&entries[2]);
+  if (hash0 == 0U || hash0 != hash1) return 1;
+  if (hash2 == 0U || hash2 == hash0) return 2;
 
-  /* case-differing duplicate still collides */
+  memset(collides, 0, sizeof(collides));
+  if (!zz9k_archive_lha_batch_mark_collisions(entries, 3U, collides)) {
+    return 3;
+  }
+  if (!collides[0] || !collides[1] || collides[2]) return 4;
+
+  /* case-differing duplicate hashes the same (ASCII fold) and still
+     collides */
   strcpy(entries[2].name, "DUP.BIN");
-  if (!zz9k_archive_lha_batch_path_collides(entries, 3U, 2U)) return 8;
+  if (zz9k_archive_lha_output_name_hash(&entries[2]) != hash0) return 5;
+  memset(collides, 0, sizeof(collides));
+  if (!zz9k_archive_lha_batch_mark_collisions(entries, 3U, collides)) {
+    return 6;
+  }
+  if (!collides[0] || !collides[1] || !collides[2]) return 7;
 
   /* --strip-components: distinct raw names that resolve to the same
      OUTPUT name must collide (a/foo vs b/foo with 1 component stripped);
-     distinct post-strip names must not. Restore the global afterwards. */
+     distinct post-strip names (b/bar) must not. Restore the global
+     afterwards. */
   strcpy(entries[0].name, "a/foo");
   strcpy(entries[1].name, "b/foo");
   strcpy(entries[2].name, "b/bar");
   zz9k_archive_strip_components = 1U;
-  if (!zz9k_archive_lha_batch_path_collides(entries, 3U, 0U)) {
+  memset(collides, 0, sizeof(collides));
+  if (!zz9k_archive_lha_batch_mark_collisions(entries, 3U, collides)) {
+    zz9k_archive_strip_components = 0U;
+    return 8;
+  }
+  if (!collides[0] || !collides[1] || collides[2]) {
     zz9k_archive_strip_components = 0U;
     return 9;
   }
-  if (!zz9k_archive_lha_batch_path_collides(entries, 3U, 1U)) {
-    zz9k_archive_strip_components = 0U;
-    return 10;
-  }
-  if (zz9k_archive_lha_batch_path_collides(entries, 3U, 2U)) {
-    zz9k_archive_strip_components = 0U;
-    return 11;
-  }
   zz9k_archive_strip_components = 0U;
 
-  /* without stripping the same raw names never collided */
-  if (zz9k_archive_lha_batch_path_collides(entries, 3U, 0U)) return 12;
+  /* without stripping, the same raw names (a/foo vs b/foo) never collide */
+  memset(collides, 0, sizeof(collides));
+  if (!zz9k_archive_lha_batch_mark_collisions(entries, 3U, collides)) {
+    return 10;
+  }
+  if (collides[0] || collides[1] || collides[2]) return 11;
+
+  /* Entries that produce no output at all never collide, even with each
+     other: over-stripping a single-path-component name yields "" from
+     zz9k_archive_strip_entry_name, so zz9k_archive_output_entry fails and
+     the hash is 0 (verified against the real transform, not assumed). */
+  strcpy(entries[0].name, "top.bin");
+  strcpy(entries[1].name, "top.bin"); /* same raw name, also over-stripped */
+  strcpy(entries[2].name, "unique.bin");
+  zz9k_archive_strip_components = 2U;
+  if (zz9k_archive_lha_output_name_hash(&entries[0]) != 0U) {
+    zz9k_archive_strip_components = 0U;
+    return 12;
+  }
+  memset(collides, 0, sizeof(collides));
+  if (!zz9k_archive_lha_batch_mark_collisions(entries, 3U, collides)) {
+    zz9k_archive_strip_components = 0U;
+    return 13;
+  }
+  if (collides[0] || collides[1] || collides[2]) {
+    zz9k_archive_strip_components = 0U;
+    return 14;
+  }
+  zz9k_archive_strip_components = 0U;
 
   return 0;
 }
