@@ -1453,6 +1453,17 @@ RSA-PKCS1-2048 signatures over a SHA-256 digest. Gate these on
 `ZZ9K_LIBRARY_MIN_REVISION_CRYPTO_VERIFY` and the
 `ZZ9K_SERVICE_FLAG_CRYPTO_P256`, `ZZ9K_SERVICE_FLAG_CRYPTO_ECDSA_P256`, and
 `ZZ9K_SERVICE_FLAG_CRYPTO_RSA_2048` service flags.
+
+Library revision 25 added `ZZ9KAudioStreamPlay()` and `ZZ9KAudioStreamStop()`,
+which bind an MP3 streaming session to the ZZ9000AX output so the firmware
+pumps decoded PCM straight to the audio hardware (stop pauses playback and
+keeps the session; close or a mailbox reset unbinds it implicitly). Both take
+the same `(session, flags, result)` arguments as `ZZ9KAudioStreamClose()` and
+return the standard audio-stream result. Gate on
+`ZZ9K_LIBRARY_MIN_REVISION_AUDIO_PLAYBACK` and the `ZZ9K_CAP_AUDIO_PLAYBACK`
+capability bit from `ZZ9KQueryCaps()`; the ops return
+`ZZ9K_STATUS_UNSUPPORTED` on firmware that does not implement them.
+
 `ZZ9KAudioStreamBeginDesc.low_water_bytes` is reserved for input-ring refill
 policy. `high_water_bytes` caps the amount of PCM firmware should produce in a
 single mailbox call; pass zero for the firmware default, or a value below the

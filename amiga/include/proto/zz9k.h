@@ -825,6 +825,42 @@ static __inline int __ZZ9KCryptoVerifyInline(
 #define ZZ9KCryptoVerify(desc, valid) \
   __ZZ9KCryptoVerifyInline((desc), (valid))
 
+static __inline int __ZZ9KAudioStreamPlayInline(
+    uint32_t session,
+    uint32_t flags,
+    ZZ9KAudioStreamResult *result)
+{
+  register uint32_t zz9k_d0 __asm("d0") = session;
+  register uint32_t zz9k_d1 __asm("d1") = flags;
+  register struct Library *zz9k_a6 __asm("a6") = ZZ9KBase;
+  register ZZ9KAudioStreamResult *zz9k_a0 __asm("a0") = result;
+  __asm volatile("jsr -300(a6)"
+                 : "+r"(zz9k_d0)
+                 : "r"(zz9k_a6), "r"(zz9k_d1), "r"(zz9k_a0)
+                 : ZZ9K_INLINE_CLOBBERS);
+  return (int)zz9k_d0;
+}
+#define ZZ9KAudioStreamPlay(session, flags, result) \
+  __ZZ9KAudioStreamPlayInline((session), (flags), (result))
+
+static __inline int __ZZ9KAudioStreamStopInline(
+    uint32_t session,
+    uint32_t flags,
+    ZZ9KAudioStreamResult *result)
+{
+  register uint32_t zz9k_d0 __asm("d0") = session;
+  register uint32_t zz9k_d1 __asm("d1") = flags;
+  register struct Library *zz9k_a6 __asm("a6") = ZZ9KBase;
+  register ZZ9KAudioStreamResult *zz9k_a0 __asm("a0") = result;
+  __asm volatile("jsr -306(a6)"
+                 : "+r"(zz9k_d0)
+                 : "r"(zz9k_a6), "r"(zz9k_d1), "r"(zz9k_a0)
+                 : ZZ9K_INLINE_CLOBBERS);
+  return (int)zz9k_d0;
+}
+#define ZZ9KAudioStreamStop(session, flags, result) \
+  __ZZ9KAudioStreamStopInline((session), (flags), (result))
+
 #endif
 
 #ifdef __cplusplus

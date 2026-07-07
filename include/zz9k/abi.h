@@ -151,6 +151,8 @@ enum ZZ9KOpcode {
   ZZ9K_OP_AUDIO_STREAM_FEED = ZZ9K_SERVICE_AUDIO + 0x04,
   ZZ9K_OP_AUDIO_STREAM_READ = ZZ9K_SERVICE_AUDIO + 0x05,
   ZZ9K_OP_AUDIO_STREAM_CLOSE = ZZ9K_SERVICE_AUDIO + 0x06,
+  ZZ9K_OP_AUDIO_STREAM_PLAY = ZZ9K_SERVICE_AUDIO + 0x07,
+  ZZ9K_OP_AUDIO_STREAM_STOP = ZZ9K_SERVICE_AUDIO + 0x08,
 
   ZZ9K_OP_DECOMPRESS = ZZ9K_SERVICE_CODEC + 0x00,
   ZZ9K_OP_DECOMPRESS_TEST = ZZ9K_SERVICE_CODEC + 0x01,
@@ -190,7 +192,8 @@ enum ZZ9KCapability {
   ZZ9K_CAP_SURFACE_OPS = 1U << 15,
   ZZ9K_CAP_COMPRESSION = 1U << 16,
   ZZ9K_CAP_GFX_OPS = 1U << 17,
-  ZZ9K_CAP_STORAGE_OPS = 1U << 18
+  ZZ9K_CAP_STORAGE_OPS = 1U << 18,
+  ZZ9K_CAP_AUDIO_PLAYBACK = 1U << 19
 };
 
 enum ZZ9KServiceFlags {
@@ -585,6 +588,18 @@ typedef struct ZZ9KAudioStreamClosePayload {
   uint8_t flags[4];
   uint8_t reserved[40];
 } ZZ9KAudioStreamClosePayload;
+
+typedef struct ZZ9KAudioStreamPlayPayload {
+  uint8_t session[4];
+  uint8_t flags[4];
+  uint8_t reserved[40];
+} ZZ9KAudioStreamPlayPayload;
+
+typedef struct ZZ9KAudioStreamStopPayload {
+  uint8_t session[4];
+  uint8_t flags[4];
+  uint8_t reserved[40];
+} ZZ9KAudioStreamStopPayload;
 
 typedef struct ZZ9KAudioStreamResultPayload {
   uint8_t session[4];

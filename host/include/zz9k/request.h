@@ -619,6 +619,44 @@ static inline int zz9k_request_audio_stream_close(ZZ9KRequest *request,
   return ZZ9K_STATUS_OK;
 }
 
+static inline int zz9k_request_audio_stream_play(ZZ9KRequest *request,
+                                                 uint32_t session,
+                                                 uint32_t flags)
+{
+  ZZ9KAudioStreamPlayPayload *payload;
+
+  if (!request || session == 0U || flags != 0U) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  zz9k_request_init(request, ZZ9K_OP_AUDIO_STREAM_PLAY);
+  request->entry.payload_len = sizeof(ZZ9KAudioStreamPlayPayload);
+  payload =
+      (ZZ9KAudioStreamPlayPayload *)request->entry.payload.inline_data;
+  zz9k_put_be32(payload->session, session);
+  zz9k_put_be32(payload->flags, flags);
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_request_audio_stream_stop(ZZ9KRequest *request,
+                                                 uint32_t session,
+                                                 uint32_t flags)
+{
+  ZZ9KAudioStreamStopPayload *payload;
+
+  if (!request || session == 0U || flags != 0U) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  zz9k_request_init(request, ZZ9K_OP_AUDIO_STREAM_STOP);
+  request->entry.payload_len = sizeof(ZZ9KAudioStreamStopPayload);
+  payload =
+      (ZZ9KAudioStreamStopPayload *)request->entry.payload.inline_data;
+  zz9k_put_be32(payload->session, session);
+  zz9k_put_be32(payload->flags, flags);
+  return ZZ9K_STATUS_OK;
+}
+
 static inline int zz9k_request_crypto_hash(ZZ9KRequest *request,
                                            const ZZ9KCryptoHashDesc *desc)
 {

@@ -141,6 +141,12 @@ int ZZ9KAudioStreamRead(ZZ9KLibrary *library, uint32_t session,
 int ZZ9KAudioStreamClose(ZZ9KLibrary *library, uint32_t session,
                          uint32_t flags,
                          ZZ9KAudioStreamResult *result);
+int ZZ9KAudioStreamPlay(ZZ9KLibrary *library, uint32_t session,
+                        uint32_t flags,
+                        ZZ9KAudioStreamResult *result);
+int ZZ9KAudioStreamStop(ZZ9KLibrary *library, uint32_t session,
+                        uint32_t flags,
+                        ZZ9KAudioStreamResult *result);
 int ZZ9KImageSessionBegin(ZZ9KLibrary *library,
                           const ZZ9KImageSessionBeginDesc *desc,
                           ZZ9KImageSessionResult *result);

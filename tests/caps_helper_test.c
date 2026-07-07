@@ -146,7 +146,7 @@ static int test_capability_names(void)
 
 static int test_capability_iteration(void)
 {
-  if (zz9k_known_capability_count() != 19U) {
+  if (zz9k_known_capability_count() != 20U) {
     return 1;
   }
   if (zz9k_known_capability_bit(0) != ZZ9K_CAP_MAILBOX) {
@@ -164,8 +164,11 @@ static int test_capability_iteration(void)
   if (zz9k_known_capability_bit(18) != ZZ9K_CAP_STORAGE_OPS) {
     return 6;
   }
-  if (zz9k_known_capability_bit(19) != 0U) {
+  if (zz9k_known_capability_bit(19) != ZZ9K_CAP_AUDIO_PLAYBACK) {
     return 7;
+  }
+  if (zz9k_known_capability_bit(20) != 0U) {
+    return 8;
   }
 
   return 0;

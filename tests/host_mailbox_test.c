@@ -2488,6 +2488,75 @@ static int test_audio_stream_helpers_roundtrip_results(void)
   return 0;
 }
 
+static int test_audio_stream_play_stop_roundtrip_results(void)
+{
+  struct TestMailbox mailbox;
+  ZZ9KContext *ctx;
+  ZZ9KBoard board;
+  ZZ9KAudioStreamResult result;
+
+  init_mailbox(&mailbox);
+  memset(&board, 0, sizeof(board));
+
+  prepare_completion(&mailbox, 1, ZZ9K_OP_AUDIO_STREAM_PLAY,
+                     ZZ9K_STATUS_OK,
+                     sizeof(ZZ9KAudioStreamResultPayload));
+  zz9k_put_be32(&mailbox.completion_ring[0].payload[0], 11U);
+  zz9k_put_be32(&mailbox.completion_ring[0].payload[4],
+                ZZ9K_AUDIO_STREAM_STATE_STREAMING);
+  zz9k_put_be32(&mailbox.completion_ring[0].payload[16],
+                ZZ9K_AUDIO_SAMPLE_FORMAT_S16BE);
+
+  if (zz9k_attach_mailbox(&ctx, &board, &mailbox.descriptor, 0, 0) !=
+      ZZ9K_STATUS_OK) {
+    return 1;
+  }
+
+  memset(&result, 0, sizeof(result));
+  if (zz9k_audio_stream_play(ctx, 11U, 0U, &result) != ZZ9K_STATUS_OK) {
+    zz9k_close(ctx);
+    return 2;
+  }
+  if (zz9k_get_be16(mailbox.request_ring[0].opcode) !=
+      ZZ9K_OP_AUDIO_STREAM_PLAY) {
+    zz9k_close(ctx);
+    return 3;
+  }
+  if (zz9k_get_be32(&mailbox.request_ring[0].payload[0]) != 11U ||
+      result.session != 11U ||
+      result.state != ZZ9K_AUDIO_STREAM_STATE_STREAMING) {
+    zz9k_close(ctx);
+    return 4;
+  }
+
+  prepare_completion_at(&mailbox, 1, 2, ZZ9K_OP_AUDIO_STREAM_STOP,
+                        ZZ9K_STATUS_OK,
+                        sizeof(ZZ9KAudioStreamResultPayload));
+  zz9k_put_be32(&mailbox.completion_ring[1].payload[0], 11U);
+  zz9k_put_be32(&mailbox.completion_ring[1].payload[4],
+                ZZ9K_AUDIO_STREAM_STATE_STREAMING);
+  zz9k_put_be32(&mailbox.completion_ring[1].payload[16],
+                ZZ9K_AUDIO_SAMPLE_FORMAT_S16BE);
+  memset(&result, 0, sizeof(result));
+  if (zz9k_audio_stream_stop(ctx, 11U, 0U, &result) != ZZ9K_STATUS_OK) {
+    zz9k_close(ctx);
+    return 5;
+  }
+  if (zz9k_get_be16(mailbox.request_ring[1].opcode) !=
+      ZZ9K_OP_AUDIO_STREAM_STOP) {
+    zz9k_close(ctx);
+    return 6;
+  }
+  if (zz9k_get_be32(&mailbox.request_ring[1].payload[0]) != 11U ||
+      result.session != 11U) {
+    zz9k_close(ctx);
+    return 7;
+  }
+
+  zz9k_close(ctx);
+  return 0;
+}
+
 static int test_sync_call_yields_bus_before_polling_completion(void)
 {
   struct TestMailbox mailbox;
@@ -2875,6 +2944,9 @@ int main(void)
 
   result = test_audio_stream_helpers_roundtrip_results();
   if (result) return 344 + result;
+
+  result = test_audio_stream_play_stop_roundtrip_results();
+  if (result) return 370 + result;
 
   result = test_sync_call_yields_bus_before_polling_completion();
   if (result) return 345 + result;

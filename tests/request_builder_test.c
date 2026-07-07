@@ -540,6 +540,8 @@ static int test_audio_stream_builders_encode_descriptors(void)
   const ZZ9KAudioStreamFeedPayload *feed_payload;
   const ZZ9KAudioStreamReadPayload *read_payload;
   const ZZ9KAudioStreamClosePayload *close_payload;
+  const ZZ9KAudioStreamPlayPayload *play_payload;
+  const ZZ9KAudioStreamStopPayload *stop_payload;
 
   memset(&begin, 0, sizeof(begin));
   begin.mp3_ring_handle = 0x40000031UL;
@@ -609,9 +611,41 @@ static int test_audio_stream_builders_encode_descriptors(void)
       (const ZZ9KAudioStreamClosePayload *)request.entry.payload.inline_data;
   if (zz9k_get_be32(close_payload->session) != 7U) return 16;
 
+  if (zz9k_request_audio_stream_play(&request, 7U, 0U) !=
+      ZZ9K_STATUS_OK) {
+    return 18;
+  }
+  if (request.entry.opcode != ZZ9K_OP_AUDIO_STREAM_PLAY) return 19;
+  if (request.entry.payload_len != sizeof(ZZ9KAudioStreamPlayPayload)) {
+    return 20;
+  }
+  play_payload =
+      (const ZZ9KAudioStreamPlayPayload *)request.entry.payload.inline_data;
+  if (zz9k_get_be32(play_payload->session) != 7U) return 21;
+
+  if (zz9k_request_audio_stream_stop(&request, 7U, 0U) !=
+      ZZ9K_STATUS_OK) {
+    return 22;
+  }
+  if (request.entry.opcode != ZZ9K_OP_AUDIO_STREAM_STOP) return 23;
+  if (request.entry.payload_len != sizeof(ZZ9KAudioStreamStopPayload)) {
+    return 24;
+  }
+  stop_payload =
+      (const ZZ9KAudioStreamStopPayload *)request.entry.payload.inline_data;
+  if (zz9k_get_be32(stop_payload->session) != 7U) return 25;
+
   if (zz9k_request_audio_stream_read(&request, 0U, 0U, 0U) !=
       ZZ9K_STATUS_BAD_REQUEST) {
     return 17;
+  }
+  if (zz9k_request_audio_stream_play(&request, 0U, 0U) !=
+      ZZ9K_STATUS_BAD_REQUEST) {
+    return 26;
+  }
+  if (zz9k_request_audio_stream_stop(&request, 0U, 0U) !=
+      ZZ9K_STATUS_BAD_REQUEST) {
+    return 27;
   }
 
   return 0;
