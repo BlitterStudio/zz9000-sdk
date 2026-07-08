@@ -210,11 +210,22 @@ enum ZZ9KCapability {
  * verbatim and allocates from the default shared heap, in which case a
  * HOST_WINDOW allocation on Zorro 2 still fails to map -- callers see the
  * same error they would have seen before the flag existed.
+ *
+ * The firmware heap sits at a fixed board offset near the top of the
+ * standard 4 MB Zorro 2 window. The 2 MB bitstream variants
+ * (VARIANT_2MB: zorro2-2mb, a500-2mb) cannot reach it, so the library
+ * answers HOST_WINDOW requests with ZZ9K_STATUS_UNSUPPORTED when the
+ * autoconfig window is smaller than ZZ9K_HOST_WINDOW_MIN_BOARD_SIZE --
+ * without a mailbox round trip. Lifting that would need the firmware to
+ * learn the window size (it is an FPGA compile-time constant) and place
+ * the heap window-relative; see the discussion on zz9000-firmware PR 45.
  */
 enum ZZ9KAllocFlags {
   ZZ9K_ALLOC_HOST_WINDOW = 1U << 0,
   ZZ9K_ALLOC_CARD_ONLY = 1U << 1
 };
+
+#define ZZ9K_HOST_WINDOW_MIN_BOARD_SIZE 0x00400000U
 
 enum ZZ9KServiceFlags {
   ZZ9K_SERVICE_FLAG_FIRMWARE = 1U << 0,

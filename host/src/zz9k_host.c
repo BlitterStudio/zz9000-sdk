@@ -1190,6 +1190,15 @@ int zz9k_alloc_shared(ZZ9KContext *ctx, uint32_t length, uint32_t alignment,
   if (card_only || ctx->board.zorro_version != 2) {
     flags &= ~(uint32_t)ZZ9K_ALLOC_HOST_WINDOW;
   }
+  /* The firmware heap sits near the top of the standard 4 MB Zorro 2
+   * window; the 2 MB bitstream variants (zorro2-2mb, a500-2mb) cannot
+   * reach it. Refuse up front rather than burn a mailbox round trip on
+   * an alloc that can never map (ZZ9K_HOST_WINDOW_MIN_BOARD_SIZE). */
+  if ((flags & ZZ9K_ALLOC_HOST_WINDOW) != 0U &&
+      ctx->board.board_size < ZZ9K_HOST_WINDOW_MIN_BOARD_SIZE) {
+    memset(buffer, 0, sizeof(*buffer));
+    return ZZ9K_STATUS_UNSUPPORTED;
+  }
 
   memset(buffer, 0, sizeof(*buffer));
   memset(&reply, 0, sizeof(reply));

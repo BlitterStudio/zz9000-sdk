@@ -300,7 +300,12 @@ mailbox byte order before filling public SDK structs.
   `ZZ9K_CAP_HOST_WINDOW_HEAP`. Older firmware ignores the bit and
   allocates from the default heap, so the call fails to map on Zorro 2
   exactly as a plain allocation always has (and the library now frees the
-  card-side handle on that path instead of leaking it).
+  card-side handle on that path instead of leaking it). The heap sits
+  near the top of the standard 4 MB Zorro 2 window; on the 2 MB bitstream
+  variants (`zorro2-2mb`, `a500-2mb`) the library answers
+  `ZZ9K_STATUS_UNSUPPORTED` without a mailbox round trip
+  (`ZZ9K_HOST_WINDOW_MIN_BOARD_SIZE`), so those boards keep the plain
+  software paths.
 
 Keep host-window allocations small and short-lived: the Zorro 2 heap is
 shared by every host-visible SDK client (the MHI driver's feed staging,
