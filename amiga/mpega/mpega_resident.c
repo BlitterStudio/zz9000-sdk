@@ -1097,7 +1097,12 @@ static int mpega_zz9k_acquire(struct MPEGACompatBase *base)
     opened_now = 1;
   }
 
-  if (ZZ9KBase->lib_Revision < ZZ9K_LIBRARY_MIN_REVISION_AUDIO_STREAM ||
+  /* ALLOC_FLAGS (rev 26) rather than AUDIO_STREAM (rev 22): this library
+   * passes ZZ9K_ALLOC_HOST_WINDOW/CARD_ONLY, and it is zz9k.library that
+   * strips HOST_WINDOW on Zorro 3. An older library forwards the bit
+   * verbatim and new firmware would then place the compact PCM ring
+   * inside Z3 P96 VRAM -- refuse the skew instead. */
+  if (ZZ9KBase->lib_Revision < ZZ9K_LIBRARY_MIN_REVISION_ALLOC_FLAGS ||
       ZZ9KQueryService(ZZ9K_SERVICE_AUDIO, &service) != ZZ9K_STATUS_OK ||
       (service.flags & ZZ9K_SERVICE_FLAG_AUDIO_MP3_STREAM) == 0U) {
     if (opened_now) {

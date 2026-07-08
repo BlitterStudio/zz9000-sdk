@@ -172,7 +172,7 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "CloseLibrary((struct Library *)DOSBase)");
   ok &= expect_contains(source, "CloseLibrary(UtilityBase)");
   ok &= expect_contains(source, "OpenLibrary((CONST_STRPTR)ZZ9K_LIBRARY_NAME");
-  ok &= expect_contains(source, "ZZ9K_LIBRARY_MIN_REVISION_AUDIO_STREAM");
+  ok &= expect_contains(source, "ZZ9K_LIBRARY_MIN_REVISION_ALLOC_FLAGS");
   ok &= expect_contains(source, "ZZ9KQueryService(ZZ9K_SERVICE_AUDIO");
   ok &= expect_contains(source, "ZZ9K_SERVICE_FLAG_AUDIO_MP3_STREAM");
   ok &= expect_contains(source, "ZZ9KAllocShared(MPEGA_MP3_RING_CAPACITY");
