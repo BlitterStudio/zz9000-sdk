@@ -166,6 +166,12 @@ int zz9k_audio_stream_read(ZZ9KContext *ctx, uint32_t session,
 int zz9k_audio_stream_close(ZZ9KContext *ctx, uint32_t session,
                             uint32_t flags,
                             ZZ9KAudioStreamResult *result);
+int zz9k_audio_stream_play(ZZ9KContext *ctx, uint32_t session,
+                           uint32_t flags,
+                           ZZ9KAudioStreamResult *result);
+int zz9k_audio_stream_stop(ZZ9KContext *ctx, uint32_t session,
+                           uint32_t flags,
+                           ZZ9KAudioStreamResult *result);
 int zz9k_image_session_begin(ZZ9KContext *ctx,
                              const ZZ9KImageSessionBeginDesc *desc,
                              ZZ9KImageSessionResult *result);

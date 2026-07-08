@@ -75,7 +75,10 @@ static inline int zz9k_audio_build_stream_begin_desc(
       !zz9k_audio_sample_format_known(output_format) ||
       (output_channels != 0U && output_channels != 1U &&
        output_channels != 2U) ||
-      low_water_bytes >= mp3_ring_capacity ||
+      /* Both water marks are PCM-ring thresholds: low_water is the
+       * playback pump's refill trigger, high_water caps decode output
+       * per pass. Neither relates to the compressed input ring. */
+      low_water_bytes >= pcm_ring_capacity ||
       high_water_bytes >= pcm_ring_capacity ||
       flags != 0U) {
     return 0;

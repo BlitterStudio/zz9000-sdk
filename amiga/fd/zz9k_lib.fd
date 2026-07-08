@@ -46,4 +46,6 @@ ZZ9KAudioStreamRead(session,pcm_read,flags,result)(d0/d1/d2/a0)
 ZZ9KAudioStreamClose(session,flags,result)(d0/d1/a0)
 ZZ9KCryptoKeyExchange(desc,result)(a0/a1)
 ZZ9KCryptoVerify(desc,valid)(a0/a1)
+ZZ9KAudioStreamPlay(session,flags,result)(d0/d1/a0)
+ZZ9KAudioStreamStop(session,flags,result)(d0/d1/a0)
 ##end

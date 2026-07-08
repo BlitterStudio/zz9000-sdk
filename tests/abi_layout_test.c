@@ -111,6 +111,14 @@ typedef char audio_stream_close_payload_is_48_bytes[
   (sizeof(ZZ9KAudioStreamClosePayload) == 48U) ? 1 : -1
 ];
 
+typedef char audio_stream_play_payload_is_48_bytes[
+  (sizeof(ZZ9KAudioStreamPlayPayload) == 48U) ? 1 : -1
+];
+
+typedef char audio_stream_stop_payload_is_48_bytes[
+  (sizeof(ZZ9KAudioStreamStopPayload) == 48U) ? 1 : -1
+];
+
 typedef char audio_stream_result_payload_is_48_bytes[
   (sizeof(ZZ9KAudioStreamResultPayload) == 48U) ? 1 : -1
 ];
@@ -247,6 +255,11 @@ int main(void)
   if (ZZ9K_OP_AUDIO_STREAM_FEED != ZZ9K_SERVICE_AUDIO + 0x04U) return 41;
   if (ZZ9K_OP_AUDIO_STREAM_READ != ZZ9K_SERVICE_AUDIO + 0x05U) return 42;
   if (ZZ9K_OP_AUDIO_STREAM_CLOSE != ZZ9K_SERVICE_AUDIO + 0x06U) return 43;
+  if (ZZ9K_OP_AUDIO_STREAM_PLAY != ZZ9K_SERVICE_AUDIO + 0x07U) return 95;
+  if (ZZ9K_OP_AUDIO_STREAM_STOP != ZZ9K_SERVICE_AUDIO + 0x08U) return 96;
+  if (ZZ9K_OP_AUDIO_STREAM_PLAY != 0x0507U) return 97;
+  if (ZZ9K_OP_AUDIO_STREAM_STOP != 0x0508U) return 98;
+  if (ZZ9K_CAP_AUDIO_PLAYBACK != (1U << 19)) return 99;
   if (ZZ9K_SERVICE_FLAG_AUDIO_MP3_STREAM != (1U << 20)) return 44;
   if (ZZ9K_AUDIO_STREAM_FEED_EOF != (1U << 0)) return 45;
   if (ZZ9K_AUDIO_STREAM_STATE_STREAMING == ZZ9K_AUDIO_STREAM_STATE_DONE) {

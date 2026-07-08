@@ -277,7 +277,17 @@ int main(int argc, char **argv)
       "jsr -288(a6)"},
     {"ZZ9KCryptoVerify", "ZZ9KCryptoVerify(desc,valid)(a0/a1)",
       "int ZZ9KCryptoVerify(const ZZ9KCryptoVerifyDesc *desc, int *valid);",
-      "jsr -294(a6)"}
+      "jsr -294(a6)"},
+    {"ZZ9KAudioStreamPlay",
+     "ZZ9KAudioStreamPlay(session,flags,result)(d0/d1/a0)",
+     "int ZZ9KAudioStreamPlay(uint32_t session, uint32_t flags, "
+     "ZZ9KAudioStreamResult *result);",
+     "jsr -300(a6)"},
+    {"ZZ9KAudioStreamStop",
+     "ZZ9KAudioStreamStop(session,flags,result)(d0/d1/a0)",
+     "int ZZ9KAudioStreamStop(uint32_t session, uint32_t flags, "
+     "ZZ9KAudioStreamResult *result);",
+     "jsr -306(a6)"}
   };
   char *fd;
   char *clib;

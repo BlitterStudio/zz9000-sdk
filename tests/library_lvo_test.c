@@ -32,7 +32,7 @@ static void test_library_identity(void)
 {
   expect_str("name", ZZ9K_LIBRARY_NAME, "zz9k.library");
   expect_u32("version", ZZ9K_LIBRARY_VERSION, 2);
-  expect_u32("revision", ZZ9K_LIBRARY_REVISION, 24);
+  expect_u32("revision", ZZ9K_LIBRARY_REVISION, 25);
 }
 
 static void test_standard_lvos(void)
@@ -91,7 +91,9 @@ static void test_public_lvos(void)
   expect_u32("audio_stream_close", ZZ9K_LVO_AUDIO_STREAM_CLOSE, -282);
   expect_u32("crypto_key_exchange", ZZ9K_LVO_CRYPTO_KEY_EXCHANGE, -288);
   expect_u32("crypto_verify", ZZ9K_LVO_CRYPTO_VERIFY, -294);
-  expect_u32("function_count", ZZ9K_LVO_FUNCTION_COUNT, 45);
+  expect_u32("audio_stream_play", ZZ9K_LVO_AUDIO_STREAM_PLAY, -300);
+  expect_u32("audio_stream_stop", ZZ9K_LVO_AUDIO_STREAM_STOP, -306);
+  expect_u32("function_count", ZZ9K_LVO_FUNCTION_COUNT, 47);
 }
 
 int main(void)
