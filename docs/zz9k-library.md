@@ -8,7 +8,7 @@ The current library identity is:
 ```c
 #define ZZ9K_LIBRARY_NAME "zz9k.library"
 #define ZZ9K_LIBRARY_VERSION 2
-#define ZZ9K_LIBRARY_REVISION 24
+#define ZZ9K_LIBRARY_REVISION 25
 ```
 
 Open the library with at least version 2:
@@ -1464,8 +1464,11 @@ return the standard audio-stream result. Gate on
 capability bit from `ZZ9KQueryCaps()`; the ops return
 `ZZ9K_STATUS_UNSUPPORTED` on firmware that does not implement them.
 
-`ZZ9KAudioStreamBeginDesc.low_water_bytes` is reserved for input-ring refill
-policy. `high_water_bytes` caps the amount of PCM firmware should produce in a
+`ZZ9KAudioStreamBeginDesc.low_water_bytes` is the PCM-ring refill
+threshold: while a session is bound to the AX output, the firmware tops the
+decoded PCM ring back up whenever it drains to this level. It is validated
+against `pcm_ring_capacity` (as is `high_water_bytes`); pass zero to refill
+only on explicit feeds. `high_water_bytes` caps the amount of PCM firmware should produce in a
 single mailbox call; pass zero for the firmware default, or a value below the
 PCM ring capacity to keep decode work sliced for interactive callers.
 `zz9k-mp3 --stats` prints timing counters for file reads, staging-buffer
