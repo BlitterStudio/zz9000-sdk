@@ -1175,10 +1175,29 @@ int zz9k_alloc_shared(ZZ9KContext *ctx, uint32_t length, uint32_t alignment,
   ZZ9KMailboxEntry reply;
   ZZ9KSharedBufferInfo info;
   uint32_t arm_addr;
+  int card_only;
   int status;
 
   if (!ctx || !buffer || length == 0) {
     return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  card_only = (flags & ZZ9K_ALLOC_CARD_ONLY) != 0U;
+  /* HOST_WINDOW exists so a Zorro 2 host can map the buffer through its
+   * 4 MB board window; the shared heap already maps on Zorro 3, so keep
+   * the tiny host-window heap free there. A card-only buffer needs no
+   * mapping on any bus. */
+  if (card_only || ctx->board.zorro_version != 2) {
+    flags &= ~(uint32_t)ZZ9K_ALLOC_HOST_WINDOW;
+  }
+  /* The firmware heap sits near the top of the standard 4 MB Zorro 2
+   * window; the 2 MB bitstream variants (zorro2-2mb, a500-2mb) cannot
+   * reach it. Refuse up front rather than burn a mailbox round trip on
+   * an alloc that can never map (ZZ9K_HOST_WINDOW_MIN_BOARD_SIZE). */
+  if ((flags & ZZ9K_ALLOC_HOST_WINDOW) != 0U &&
+      ctx->board.board_size < ZZ9K_HOST_WINDOW_MIN_BOARD_SIZE) {
+    memset(buffer, 0, sizeof(*buffer));
+    return ZZ9K_STATUS_UNSUPPORTED;
   }
 
   memset(buffer, 0, sizeof(*buffer));
@@ -1200,12 +1219,20 @@ int zz9k_alloc_shared(ZZ9KContext *ctx, uint32_t length, uint32_t alignment,
   buffer->handle = info.handle;
   arm_addr = info.arm_addr;
   buffer->length = info.length;
-  buffer->data = zz9k_arm_range_to_board_ptr(ctx->board.board_addr,
-                                             ctx->board.board_size, arm_addr,
-                                             buffer->length);
+  if (!card_only) {
+    buffer->data = zz9k_arm_range_to_board_ptr(ctx->board.board_addr,
+                                               ctx->board.board_size,
+                                               arm_addr, buffer->length);
+  }
 
   if (buffer->handle == ZZ9K_INVALID_HANDLE || buffer->length < length ||
-      !buffer->data) {
+      (!card_only && !buffer->data)) {
+    /* The card-side allocation exists even when we cannot use it; free
+     * it or every failed attempt permanently leaks a shared-heap block
+     * (seen on Zorro 2, where the default heap never maps). */
+    if (buffer->handle != ZZ9K_INVALID_HANDLE) {
+      (void)zz9k_free_shared(ctx, buffer->handle);
+    }
     memset(buffer, 0, sizeof(*buffer));
     return ZZ9K_STATUS_INTERNAL_ERROR;
   }

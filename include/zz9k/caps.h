@@ -92,7 +92,7 @@ static inline uint32_t zz9k_missing_service_flags(uint32_t available_flags,
 
 static inline uint32_t zz9k_known_capability_count(void)
 {
-  return 20U;
+  return 21U;
 }
 
 static inline uint32_t zz9k_known_capability_bit(uint32_t index)
@@ -138,6 +138,8 @@ static inline uint32_t zz9k_known_capability_bit(uint32_t index)
     return ZZ9K_CAP_STORAGE_OPS;
   case 19:
     return ZZ9K_CAP_AUDIO_PLAYBACK;
+  case 20:
+    return ZZ9K_CAP_HOST_WINDOW_HEAP;
   default:
     return 0U;
   }
@@ -314,6 +316,8 @@ static inline const char *zz9k_capability_name(uint32_t capability_bit)
     return "storage-ops";
   case ZZ9K_CAP_AUDIO_PLAYBACK:
     return "audio-playback";
+  case ZZ9K_CAP_HOST_WINDOW_HEAP:
+    return "host-window-heap";
   default:
     return 0;
   }

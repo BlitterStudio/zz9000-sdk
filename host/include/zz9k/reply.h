@@ -104,6 +104,9 @@ static inline int zz9k_reply_caps(const ZZ9KMailboxEntry *reply,
   if (reply->payload_len >= 36U) {
     caps->completion_ring_entries = zz9k_get_be32(&payload[32]);
   }
+  if (reply->payload_len >= 40U) {
+    caps->host_window_heap_size = zz9k_get_be32(&payload[36]);
+  }
 
   if (caps->magic != ZZ9K_ABI_MAGIC ||
       caps->abi_major != ZZ9K_ABI_VERSION_MAJOR) {
