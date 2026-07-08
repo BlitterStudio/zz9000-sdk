@@ -88,11 +88,11 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "#ifndef MPEGA_LIBRARY_NAME");
   ok &= expect_contains(source, "#define MPEGA_LIBRARY_NAME \"mpega.library.zz9k\"");
   ok &= expect_contains(source, "#endif /* MPEGA_LIBRARY_NAME */");
-  ok &= expect_contains(source, "#define MPEGA_LIBRARY_REVISION 122");
+  ok &= expect_contains(source, "#define MPEGA_LIBRARY_REVISION 123");
   ok &= expect_contains(source,
                         "#define MPEGA_LIBRARY_ID_STRING "
                         "\"$VER: \" MPEGA_LIBRARY_NAME");
-  ok &= expect_contains(source, "MPEGA_LIBRARY_NAME \" 2.122 (");
+  ok &= expect_contains(source, "MPEGA_LIBRARY_NAME \" 2.123 (");
   ok &= expect_contains(source, "struct DosLibrary *DOSBase;");
   ok &= expect_contains(source, "typedef struct MPEGACompatStream");
   ok &= expect_contains(source, "MPEGA_STREAM stream;");
@@ -177,7 +177,20 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "ZZ9K_SERVICE_FLAG_AUDIO_MP3_STREAM");
   ok &= expect_contains(source, "ZZ9KAllocShared(MPEGA_MP3_RING_CAPACITY");
   ok &= expect_contains(source, "ZZ9KAllocShared(MPEGA_PCM_RING_CAPACITY");
-  ok &= expect_contains(source, "ZZ9KAllocShared(MPEGA_STREAM_CHUNK_BYTES");
+  /* Zorro 2 support: card-only decode ring, host-window PCM/staging with
+   * a compact fallback when the board-window heap is the only mappable
+   * region (see MPEGA_PCM_RING_COMPACT_CAPACITY). */
+  ok &= expect_contains(source, "ZZ9K_ALLOC_CARD_ONLY,\n"
+                                "                      &state->mp3_ring)");
+  ok &= expect_contains(source,
+                        "ZZ9KAllocShared(MPEGA_PCM_RING_COMPACT_CAPACITY");
+  ok &= expect_contains(source, "ZZ9KAllocShared(staging_bytes");
+  ok &= expect_contains(source,
+                        "#define MPEGA_PCM_RING_COMPACT_CAPACITY (32UL * 1024UL)");
+  ok &= expect_contains(source,
+                        "#define MPEGA_STREAM_CHUNK_COMPACT_BYTES (16UL * 1024UL)");
+  ok &= expect_contains(source,
+                        "if (state->input_chunk_bytes > (LONG)state->staging.length)");
   ok &= expect_contains(source, "zz9k_audio_build_stream_begin_desc");
   ok &= expect_contains(source, "ZZ9KAudioStreamBegin(&begin");
   ok &= expect_contains(source, "ZZ9KAudioStreamFeed(&feed");

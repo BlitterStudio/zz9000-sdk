@@ -193,7 +193,27 @@ enum ZZ9KCapability {
   ZZ9K_CAP_COMPRESSION = 1U << 16,
   ZZ9K_CAP_GFX_OPS = 1U << 17,
   ZZ9K_CAP_STORAGE_OPS = 1U << 18,
-  ZZ9K_CAP_AUDIO_PLAYBACK = 1U << 19
+  ZZ9K_CAP_AUDIO_PLAYBACK = 1U << 19,
+  /* Firmware serves ZZ9K_ALLOC_HOST_WINDOW allocations from a small heap
+   * that is reachable through the Zorro 2 board window. */
+  ZZ9K_CAP_HOST_WINDOW_HEAP = 1U << 20
+};
+
+/*
+ * ZZ9K_OP_ALLOC_SHARED flag bits. HOST_WINDOW asks the firmware to place
+ * the buffer in the board-window-reachable heap so a Zorro 2 host can map
+ * it (the library strips the bit on Zorro 3, where the whole shared heap
+ * is mappable). CARD_ONLY declares that the 68k never touches the buffer
+ * contents: the library skips the board-window mapping and leaves
+ * ZZ9KSharedBuffer.data NULL, so the buffer is usable by handle only.
+ * Firmware older than ZZ9K_CAP_HOST_WINDOW_HEAP stores unknown bits
+ * verbatim and allocates from the default shared heap, in which case a
+ * HOST_WINDOW allocation on Zorro 2 still fails to map -- callers see the
+ * same error they would have seen before the flag existed.
+ */
+enum ZZ9KAllocFlags {
+  ZZ9K_ALLOC_HOST_WINDOW = 1U << 0,
+  ZZ9K_ALLOC_CARD_ONLY = 1U << 1
 };
 
 enum ZZ9KServiceFlags {
@@ -1002,7 +1022,8 @@ typedef struct ZZ9KCaps {
   uint32_t firmware_version;
   uint32_t request_ring_entries;
   uint32_t completion_ring_entries;
-  uint32_t reserved[6];
+  uint32_t host_window_heap_size;
+  uint32_t reserved[5];
 } ZZ9KCaps;
 
 typedef struct ZZ9KQueryCapsPayload {
@@ -1016,7 +1037,8 @@ typedef struct ZZ9KQueryCapsPayload {
   uint32_t firmware_version;
   uint32_t request_ring_entries;
   uint32_t completion_ring_entries;
-  uint8_t reserved[12];
+  uint32_t host_window_heap_size;
+  uint8_t reserved[8];
 } ZZ9KQueryCapsPayload;
 
 typedef char ZZ9KQueryCapsPayload_must_fit_inline[

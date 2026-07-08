@@ -30,13 +30,24 @@
 #endif /* MPEGA_LIBRARY_NAME */
 
 #define MPEGA_LIBRARY_VERSION 2
-#define MPEGA_LIBRARY_REVISION 122
-#define MPEGA_LIBRARY_ID_STRING "$VER: " MPEGA_LIBRARY_NAME " 2.122 (28.05.2026) ZZ9000 SDK experimental"
+#define MPEGA_LIBRARY_REVISION 123
+#define MPEGA_LIBRARY_ID_STRING "$VER: " MPEGA_LIBRARY_NAME " 2.123 (08.07.2026) ZZ9000 SDK experimental"
 
 #define MPEGA_MP3_RING_CAPACITY (128UL * 1024UL)
 #define MPEGA_PCM_RING_CAPACITY (256UL * 1024UL)
 #define MPEGA_PCM_ACK_BATCH_BYTES (192UL * 1024UL)
 #define MPEGA_STREAM_CHUNK_BYTES (64UL * 1024UL)
+/*
+ * Compact host-visible sizes for Zorro 2, where host-mappable allocations
+ * come from the firmware's 64 KB board-window heap (shared with the MHI
+ * driver's 4 KB staging buffer). Only the PCM ring and the feed staging
+ * buffer are host-visible; the decode input ring stays card-only at full
+ * size. Smaller rings just mean more feed/ack round trips -- the forced
+ * ack at the top of the feed loop keeps a small ring draining (the
+ * MPEGA_PCM_ACK_BATCH_BYTES threshold is simply never reached).
+ */
+#define MPEGA_PCM_RING_COMPACT_CAPACITY (32UL * 1024UL)
+#define MPEGA_STREAM_CHUNK_COMPACT_BYTES (16UL * 1024UL)
 #define MPEGA_DEFAULT_STREAM_BUFFER_BYTES 16384L
 #define MPEGA_INTERNAL_NO_PCM 1
 #define MPEGA_MAX_FEED_ATTEMPTS 128U
@@ -1142,34 +1153,54 @@ static void mpega_update_stream_info(MPEGACompatStream *state)
 static int mpega_stream_begin(MPEGACompatStream *state)
 {
   ZZ9KAudioStreamBeginDesc begin;
+  uint32_t staging_bytes;
 
   if (!state || !mpega_zz9k_acquire(state->base)) {
     return 0;
   }
   state->zz9k_acquired = 1;
 
-  if (ZZ9KAllocShared(MPEGA_MP3_RING_CAPACITY, 16U, 0U,
+  /* The decode input ring is card-side only (the 68k passes just the
+   * handle), so it must not consume board-window mapping space. */
+  if (ZZ9KAllocShared(MPEGA_MP3_RING_CAPACITY, 16U, ZZ9K_ALLOC_CARD_ONLY,
                       &state->mp3_ring) != ZZ9K_STATUS_OK) {
     return 0;
   }
   state->mp3_allocated = 1;
 
-  if (ZZ9KAllocShared(MPEGA_PCM_RING_CAPACITY, 16U, 0U,
+  /* The PCM ring and the feed staging buffer ARE host-visible (the planar
+   * copy reads the ring, feeds write staging). HOST_WINDOW is stripped by
+   * the library on Zorro 3 (normal shared-heap alloc, full sizes); on
+   * Zorro 2 it lands them in the firmware's small board-window heap,
+   * where the full-size ring cannot fit -- fall back to compact sizes. */
+  staging_bytes = MPEGA_STREAM_CHUNK_BYTES;
+  if (ZZ9KAllocShared(MPEGA_PCM_RING_CAPACITY, 16U, ZZ9K_ALLOC_HOST_WINDOW,
                       &state->pcm_ring) != ZZ9K_STATUS_OK) {
-    return 0;
+    if (ZZ9KAllocShared(MPEGA_PCM_RING_COMPACT_CAPACITY, 16U,
+                        ZZ9K_ALLOC_HOST_WINDOW,
+                        &state->pcm_ring) != ZZ9K_STATUS_OK) {
+      return 0;
+    }
+    staging_bytes = MPEGA_STREAM_CHUNK_COMPACT_BYTES;
   }
   state->pcm_allocated = 1;
 
-  if (ZZ9KAllocShared(MPEGA_STREAM_CHUNK_BYTES, 16U, 0U,
+  if (ZZ9KAllocShared(staging_bytes, 16U, ZZ9K_ALLOC_HOST_WINDOW,
                       &state->staging) != ZZ9K_STATUS_OK) {
     return 0;
   }
   state->staging_allocated = 1;
+  /* Never stage more per feed than the staging buffer holds. */
+  if (state->input_chunk_bytes > (LONG)state->staging.length) {
+    state->input_chunk_bytes = (LONG)state->staging.length;
+  }
 
+  /* low_water is the firmware pump's PCM refill threshold; it must stay
+   * below the ring capacity, so scale it with the staging quantum. */
   if (!zz9k_audio_build_stream_begin_desc(
           &begin, state->mp3_ring.handle, state->mp3_ring.length,
           state->pcm_ring.handle, state->pcm_ring.length, 0U, 0U,
-          ZZ9K_AUDIO_SAMPLE_FORMAT_S16BE, MPEGA_STREAM_CHUNK_BYTES,
+          ZZ9K_AUDIO_SAMPLE_FORMAT_S16BE, staging_bytes,
           0U, 0U)) {
     return 0;
   }

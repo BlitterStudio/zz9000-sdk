@@ -279,6 +279,33 @@ if (zz9k_reply_caps(&async.reply, &caps) == ZZ9K_STATUS_OK) {
 The decoders check completion status, expected opcode, payload length, and
 mailbox byte order before filling public SDK structs.
 
+## Shared-Buffer Allocation Flags
+
+`ZZ9KAllocShared(length, alignment, flags, buffer)` accepts flag bits from
+`enum ZZ9KAllocFlags` (library revision 26+,
+`ZZ9K_LIBRARY_MIN_REVISION_ALLOC_FLAGS`):
+
+- `ZZ9K_ALLOC_CARD_ONLY` — the 68k never touches the buffer contents; the
+  library skips the board-window mapping and `ZZ9KSharedBuffer.data` stays
+  `NULL` (same convention as `ZZ9K_SURFACE_FLAG_ARM_LOCAL` surfaces). Use
+  it for buffers that are only ever passed by handle — e.g. audio-stream
+  decode/PCM rings consumed on the card. This is what makes such buffers
+  allocatable on Zorro 2, where the default shared heap does not fit in
+  the 4 MB board window.
+- `ZZ9K_ALLOC_HOST_WINDOW` — the buffer must be CPU-visible. On Zorro 3
+  the library strips the bit (the whole shared heap already maps). On
+  Zorro 2 it is forwarded to the firmware, which serves the allocation
+  from a small (64 KB, advertised in `ZZ9KCaps.host_window_heap_size`)
+  heap inside the board window; firmware support is advertised as
+  `ZZ9K_CAP_HOST_WINDOW_HEAP`. Older firmware ignores the bit and
+  allocates from the default heap, so the call fails to map on Zorro 2
+  exactly as a plain allocation always has (and the library now frees the
+  card-side handle on that path instead of leaking it).
+
+Keep host-window allocations small and short-lived: the Zorro 2 heap is
+shared by every host-visible SDK client (the MHI driver's feed staging,
+mpega's staging + compact PCM ring, ...).
+
 ## Surface Jobs
 
 SDK v2 exposes zero-copy surface primitives for ARM-side operations on SDK
