@@ -267,14 +267,24 @@ void zz9k_set_armed_for_test(ZZ9KContext *ctx, int armed)
 }
 #endif
 
-static void zz9k_idle_between_polls(void)
+/* Idle spin between completion polls, progressive in the number of
+ * polls already taken: the first polls after enqueue are cheap, so
+ * fast ops (audio-stream feeds, inline status ops) complete within
+ * microseconds instead of paying a flat multi-millisecond spin per
+ * call, while the spin grows to the flat cadence so long ops (crypto,
+ * batch decode) poll the Zorro completion ring no more often than
+ * before. */
+static void zz9k_idle_between_polls_backoff(uint32_t ticks)
 {
 #if ZZ9K_HOST_AMIGA
   volatile uint32_t spin;
+  uint32_t limit;
 
-  for (spin = 0; spin < 50000UL; spin++) {
+  limit = (ticks < 7U) ? (500UL << ticks) : 50000UL;
+  for (spin = 0; spin < limit; spin++) {
   }
 #else
+  (void)ticks;
   if (zz9k_idle_hook_for_test) {
     zz9k_idle_hook_for_test();
   }
@@ -2417,7 +2427,7 @@ int zz9k_crypto_hash_batch(ZZ9KContext *ctx,
     }
 
     if (in_flight == 0U) {
-      zz9k_idle_between_polls();
+      zz9k_idle_between_polls_backoff(wait_ticks);
       wait_ticks++;
       if (wait_ticks >= timeout_ticks) {
         return ZZ9K_STATUS_TIMEOUT;
@@ -2440,7 +2450,7 @@ int zz9k_crypto_hash_batch(ZZ9KContext *ctx,
       status = zz9k_poll_batch(ctx, replies, poll_capacity,
                                &just_completed);
       if (status == ZZ9K_STATUS_BUSY) {
-        zz9k_idle_between_polls();
+        zz9k_idle_between_polls_backoff(wait_ticks);
         wait_ticks++;
         if (wait_ticks >= timeout_ticks) {
           return ZZ9K_STATUS_TIMEOUT;
@@ -2545,7 +2555,7 @@ int zz9k_crypto_stream_batch(ZZ9KContext *ctx,
     }
 
     if (in_flight == 0U) {
-      zz9k_idle_between_polls();
+      zz9k_idle_between_polls_backoff(wait_ticks);
       wait_ticks++;
       if (wait_ticks >= timeout_ticks) {
         return ZZ9K_STATUS_TIMEOUT;
@@ -2568,7 +2578,7 @@ int zz9k_crypto_stream_batch(ZZ9KContext *ctx,
       status = zz9k_poll_batch(ctx, replies, poll_capacity,
                                &just_completed);
       if (status == ZZ9K_STATUS_BUSY) {
-        zz9k_idle_between_polls();
+        zz9k_idle_between_polls_backoff(wait_ticks);
         wait_ticks++;
         if (wait_ticks >= timeout_ticks) {
           return ZZ9K_STATUS_TIMEOUT;
@@ -2673,7 +2683,7 @@ int zz9k_crypto_aead_batch(ZZ9KContext *ctx,
     }
 
     if (in_flight == 0U) {
-      zz9k_idle_between_polls();
+      zz9k_idle_between_polls_backoff(wait_ticks);
       wait_ticks++;
       if (wait_ticks >= timeout_ticks) {
         return ZZ9K_STATUS_TIMEOUT;
@@ -2696,7 +2706,7 @@ int zz9k_crypto_aead_batch(ZZ9KContext *ctx,
       status = zz9k_poll_batch(ctx, replies, poll_capacity,
                                &just_completed);
       if (status == ZZ9K_STATUS_BUSY) {
-        zz9k_idle_between_polls();
+        zz9k_idle_between_polls_backoff(wait_ticks);
         wait_ticks++;
         if (wait_ticks >= timeout_ticks) {
           return ZZ9K_STATUS_TIMEOUT;
@@ -2783,7 +2793,7 @@ int zz9k_call(ZZ9KContext *ctx, ZZ9KRequest *request, ZZ9KMailboxEntry *reply,
   }
 #endif
 
-  zz9k_idle_between_polls();
+  zz9k_idle_between_polls_backoff(0);
   if (!use_wall_clock && timeout_ticks == 0U) {
     status = ZZ9K_STATUS_TIMEOUT;
     goto done;
@@ -2813,7 +2823,7 @@ int zz9k_call(ZZ9KContext *ctx, ZZ9KRequest *request, ZZ9KMailboxEntry *reply,
       status = ZZ9K_STATUS_TIMEOUT;
       goto done;
     }
-    zz9k_idle_between_polls();
+    zz9k_idle_between_polls_backoff(ticks + 1U);
   }
 
 done:
