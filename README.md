@@ -23,6 +23,31 @@ exposed to AmigaOS through `zz9k.library`, with public helper headers under
 fixed-address ARM launcher, standalone ARM examples, and their bare-metal
 support libraries have been removed from this branch.
 
+## What This Fork Adds
+
+Compared with the older MNT ARM SDK, this repository now centers on a
+stable AmigaOS-facing service runtime rather than standalone ARM sample
+programs:
+
+- `zz9k.library` plus SDK v2 headers for async calls, shared buffers,
+  surfaces, image decode/scale, audio, compression, and crypto.
+- End-user tools for service inspection, benchmarking, image viewing,
+  MP3 playback, archive extraction, and release smoke checks.
+- `zz9k-picture.datatype` and JPEG/PNG descriptors for optional
+  DataTypes integration.
+- `mpega.library` and audio-stream helpers used by the current MHI/MP3
+  stack.
+- LHA/LZH archive decompression offload, including batch verification
+  paths that fall back to software when firmware support is absent.
+- AmiSSL/OpenSSL 3 provider work for TLS acceleration: X25519, P-256
+  ECDHE, P-256 ECDSA verify, RSA-2048 PKCS#1/SHA-256 verify, AES-GCM,
+  and ChaCha20-Poly1305 where the board and firmware advertise support.
+- Zorro 2-aware allocation flags (`HOST_WINDOW` / `CARD_ONLY`) so small
+  audio staging buffers can stay CPU-visible while card-only rings avoid
+  the 4 MB aperture limit.
+- Docker packaging, host-side tests, ABI drift checks, and release smoke
+  documentation.
+
 Start new AmigaOS-side work with [`docs/zz9k-library.md`](docs/zz9k-library.md).
 Firmware-side service metadata is described in
 [`docs/zz9k-modules.md`](docs/zz9k-modules.md); conventions for third-party and
@@ -45,6 +70,13 @@ powershell -ExecutionPolicy Bypass -File scripts\build-m68k-amigaos.ps1
 powershell -ExecutionPolicy Bypass -File scripts\package-m68k-amigaos.ps1
 ```
 
+or from a POSIX shell:
+
+```sh
+./scripts/build-m68k-amigaos.sh
+./scripts/package-m68k-amigaos.sh
+```
+
 The package is written to `build/package/amigaos3`. It contains:
 
 - `Libs/zz9k.library`
@@ -53,7 +85,7 @@ The package is written to `build/package/amigaos3`. It contains:
 - CLI tools such as `zz9k-info`, `zz9k-services`, `zz9k-bench`,
   `zz9k-surfaceops`, `zz9k-mp3`, `zz9k-mpega-smoke`, `zz9k-jpeg`, `zz9k-png`,
   `zz9k-view`, `zz9k-hash`, `zz9k-chacha`, `zz9k-aead`, and
-  archive/decompression tools
+  archive/decompression tools including `zz9k-archive`
 - `Classes/DataTypes/zz9k-picture.datatype` plus JPEG/PNG descriptors packaged
   inactive under `Storage/DataTypes` for explicit opt-in activation
 - developer headers under `Developer/Include`
@@ -61,8 +93,12 @@ The package is written to `build/package/amigaos3`. It contains:
 - examples under `Examples`
 - `MANIFEST.sha256` with SHA-256 checksums for every packaged file
 
-SDK v2 requires the matching ZZ9000 SDK-service firmware (v2.2.0 or newer). After installing
-the SDK package and booting that firmware, run this hardware smoke check:
+SDK v2 requires matching ZZ9000 SDK-service firmware. Firmware v2.2.0 is the
+older baseline for the service ABI, but current matched firmware, SDK payloads,
+and drivers are expected for Zorro 2 host-window audio/MP3 allocation,
+`ZZ9000.CFG` query support, and the newest service capability flags. After
+installing the SDK package and booting that firmware, run this hardware smoke
+check:
 
 ```text
 zz9k-services --check-release

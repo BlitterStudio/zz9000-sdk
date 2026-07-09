@@ -91,9 +91,13 @@ installer; installing by hand, match the variant to your CPU.
 
 Copy the matching `amissl.library` over the one in `LIBS:AmiSSL/` (keep a backup
 of the original), then run any TLS application. To confirm offload is active, use
-the self-test from the application-side docs, or watch a TLS handshake: anything
-negotiating X25519 or AES-GCM/ChaCha20-Poly1305 is accelerated; everything else —
-including certificate (ECDSA/RSA) verification — runs in AmiSSL's software.
+the self-test from the application-side docs, or watch a TLS handshake. Current
+firmware/provider builds accelerate X25519, P-256 ECDHE, P-256 ECDSA
+certificate verification, RSA-2048 PKCS#1/SHA-256 certificate verification,
+AES-GCM, and ChaCha20-Poly1305 when the board advertises the matching service
+flag. Non-P256 curves, RSA-PSS and other RSA modes, client-certificate signing,
+and algorithms outside the ZZ9000 surface delegate to AmiSSL's software
+provider.
 
 `ENV:ZZ9K_DISABLE_OFFLOAD` is a diagnostic kill switch: set it (e.g.
 `setenv ZZ9K_DISABLE_OFFLOAD 1`) and the provider still loads but never touches
