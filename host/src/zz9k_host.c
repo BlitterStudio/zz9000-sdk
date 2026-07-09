@@ -913,12 +913,25 @@ int zz9k_completion_irq_enable(ZZ9KContext *ctx, int enable)
 }
 
 #if ZZ9K_HOST_AMIGA
-static int zz9k_sdk_should_use_int2(void)
+int zz9k_sdk_use_int2(const ZZ9KContext *ctx)
 {
   BPTR f = Open((CONST_STRPTR)"ENV:ZZ9K_INT2", MODE_OLDFILE);
   if (f) {
     Close(f);
     return 1;
+  }
+  /* No ENV override: consult the ZZ9000.CFG `int2` key. On firmware
+   * older than ABI 2.3 the register group reads as zero, so the key
+   * reports absent and INT6 stays the default. */
+  if (ctx && ctx->board.board_addr) {
+    volatile uint16_t *key =
+        zz9k_reg16(ctx->board.board_addr, ZZ9K_REG_CONFIG_KEY);
+    volatile uint16_t *present =
+        zz9k_reg16(ctx->board.board_addr, ZZ9K_REG_CONFIG_PRESENT);
+    *key = ZZ9K_CFG_KEY_INT2;
+    if (*present && *key) {
+      return 1;
+    }
   }
   return 0;
 }
@@ -1006,7 +1019,7 @@ int zz9k_arm_completion_irq(ZZ9KContext *ctx)
   }
   ctx->irq_task = FindTask(0);
   ctx->irq_signal_mask = 1UL << ctx->irq_signal_bit;
-  ctx->irq_int_bit = zz9k_sdk_should_use_int2() ? INTB_PORTS : INTB_EXTER;
+  ctx->irq_int_bit = zz9k_sdk_use_int2(ctx) ? INTB_PORTS : INTB_EXTER;
 
   memset(&ctx->irq, 0, sizeof(ctx->irq));
   ctx->irq.is_Node.ln_Type = NT_INTERRUPT;

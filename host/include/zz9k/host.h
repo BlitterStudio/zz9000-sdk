@@ -238,6 +238,16 @@ int zz9k_completion_irq_supported(ZZ9KContext *ctx);
 int zz9k_completion_irq_enable(ZZ9KContext *ctx, int enable);
 
 /*
+ * Should the SDK completion interrupt attach to INT2 (INTB_PORTS)
+ * instead of the INT6 default? True when ENV:ZZ9K_INT2 exists, else
+ * when the SD card's ZZ9000.CFG has `int2 = on` (firmware ABI >= 2.3;
+ * older firmware reports the key absent). Amiga-only; the shared
+ * decision point for zz9k.library and the SDK tools so all ZZ9000
+ * interrupt consumers pick the same line.
+ */
+int zz9k_sdk_use_int2(const ZZ9KContext *ctx);
+
+/*
  * Arm this context to block on the SDK completion IRQ inside zz9k_call()
  * instead of busy-polling. Amiga-only; returns ZZ9K_STATUS_UNSUPPORTED on the
  * host or when the firmware does not advertise ZZ9K_CAP_IRQ_COMPLETION. On any
