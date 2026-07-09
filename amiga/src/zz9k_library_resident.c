@@ -356,23 +356,6 @@ static ULONG zz9k_lib_irq_isr(REG(a1, struct ZZ9KBase *base))
   return 1;
 }
 
-static int zz9k_lib_env_exists(const char *path)
-{
-  BPTR file;
-
-  file = Open((CONST_STRPTR)path, MODE_OLDFILE);
-  if (!file) {
-    return 0;
-  }
-  Close(file);
-  return 1;
-}
-
-static int zz9k_lib_should_use_int2(void)
-{
-  return zz9k_lib_env_exists("ENV:ZZ9K_INT2");
-}
-
 static int zz9k_lib_irq_install_locked(struct ZZ9KBase *base)
 {
   if (!base || !base->core.ctx) {
@@ -385,7 +368,11 @@ static int zz9k_lib_irq_install_locked(struct ZZ9KBase *base)
     return ZZ9K_STATUS_OK;
   }
 
-  base->irq_int_bit = zz9k_lib_should_use_int2() ? INTB_PORTS : INTB_EXTER;
+  /* INT2 vs INT6: ENV:ZZ9K_INT2, then the ZZ9000.CFG `int2` key
+   * (shared decision in zz9k_sdk_use_int2 so every SDK interrupt
+   * consumer picks the same line). */
+  base->irq_int_bit = zz9k_sdk_use_int2(base->core.ctx) ? INTB_PORTS
+                                                        : INTB_EXTER;
   memset(&base->irq, 0, sizeof(base->irq));
   base->irq.is_Node.ln_Type = NT_INTERRUPT;
   base->irq.is_Node.ln_Pri = 0;

@@ -72,23 +72,6 @@ static uint32_t zz9k_irqtest_isr(ZZ9KIRQTestState *state asm("a1"))
   return 1;
 }
 
-static int zz9k_irqtest_env_exists(const char *path)
-{
-  BPTR file;
-
-  file = Open((CONST_STRPTR)path, MODE_OLDFILE);
-  if (!file) {
-    return 0;
-  }
-  Close(file);
-  return 1;
-}
-
-static int zz9k_irqtest_should_use_int2(void)
-{
-  return zz9k_irqtest_env_exists("ENV:ZZ9K_INT2");
-}
-
 static int zz9k_irqtest_install_irq(ZZ9KIRQTestState *state,
                                     ZZ9KContext *ctx)
 {
@@ -101,7 +84,9 @@ static int zz9k_irqtest_install_irq(ZZ9KIRQTestState *state,
 
   state->task = FindTask(0);
   state->signal_mask = 1UL << state->signal;
-  state->int_bit = zz9k_irqtest_should_use_int2() ? INTB_PORTS : INTB_EXTER;
+  /* INT2 vs INT6: ENV:ZZ9K_INT2, then the ZZ9000.CFG `int2` key
+   * (shared decision in zz9k_sdk_use_int2, same as zz9k.library). */
+  state->int_bit = zz9k_sdk_use_int2(ctx) ? INTB_PORTS : INTB_EXTER;
   state->irq.is_Node.ln_Type = NT_INTERRUPT;
   state->irq.is_Node.ln_Pri = 126;
   state->irq.is_Node.ln_Name = "ZZ9000 SDK IRQ";

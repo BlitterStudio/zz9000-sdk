@@ -65,6 +65,16 @@ extern "C" {
 #define ZZ9K_REG_SDK_DIAG_Z3ADDR    0x0118U
 #define ZZ9K_REG_SDK_MAGIC_VALUE    0x5a39U
 
+/*
+ * ZZ9000.CFG query interface (firmware ABI >= 2.3): write a key id to
+ * CONFIG_KEY, then read the value back from CONFIG_KEY and the
+ * "present in the config file" flag from CONFIG_PRESENT. On older
+ * firmware the group reads as zero, so every key reports absent.
+ */
+#define ZZ9K_REG_CONFIG_KEY         0x00e8U
+#define ZZ9K_REG_CONFIG_PRESENT     0x00eaU
+#define ZZ9K_CFG_KEY_INT2           5U
+
 #define ZZ9K_INTERRUPT_ETH          0x0001U
 #define ZZ9K_INTERRUPT_AUDIO        0x0002U
 #define ZZ9K_INTERRUPT_VBLANK       0x0004U

@@ -1321,7 +1321,12 @@ Library revision 20 keeps INT6 as the default interrupt line for the resident
 library, matching the historical ZZ9000 setup. If a system is configured to
 route the SDK completion interrupt through INT2, set `ENV:ZZ9K_INT2` before
 the resident library installs its SDK interrupt server. The standalone
-`zz9k-irqtest` diagnostic uses the same environment name.
+`zz9k-irqtest` diagnostic uses the same environment name. With firmware
+ABI 2.3+ the setting can instead live as `int2 = on` in the SD card's
+`ZZ9000.CFG` (editable from ZZTop's Settings window); the library, the
+diagnostic and the ZZ9000 device drivers all consult it through the same
+query interface, and an existing `ENV:ZZ9K_INT2` variable takes precedence
+over the config file.
 
 Programs that require the wait helper should check:
 
