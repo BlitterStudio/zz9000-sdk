@@ -912,9 +912,9 @@ int zz9k_completion_irq_enable(ZZ9KContext *ctx, int enable)
   return ZZ9K_STATUS_OK;
 }
 
-#if ZZ9K_HOST_AMIGA
 int zz9k_sdk_use_int2(const ZZ9KContext *ctx)
 {
+#if ZZ9K_HOST_AMIGA
   BPTR f = Open((CONST_STRPTR)"ENV:ZZ9K_INT2", MODE_OLDFILE);
   if (f) {
     Close(f);
@@ -934,7 +934,14 @@ int zz9k_sdk_use_int2(const ZZ9KContext *ctx)
     }
   }
   return 0;
+#else
+  /* Host stub: no Amiga interrupt lines to choose between. */
+  (void)ctx;
+  return 0;
+#endif
 }
+
+#if ZZ9K_HOST_AMIGA
 
 static uint32_t zz9k_sdk_isr(ZZ9KContext *ctx asm("a1"))
 {
