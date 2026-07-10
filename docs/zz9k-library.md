@@ -1328,13 +1328,13 @@ diagnostic and the ZZ9000 device drivers all consult it through the same
 query interface, and an existing `ENV:ZZ9K_INT2` variable takes precedence
 over the config file.
 
-Raw-transport contexts (`zz9k_open`) arm the SDK completion interrupt
-automatically when the firmware advertises irq-completion, so synchronous
-`zz9k_call` waits sleep on the interrupt instead of polling. Set
-`ENV:ZZ9K_NO_IRQ_WAIT` (any positive integer) before the program starts to
-restore the polling behavior — useful when diagnosing interrupt-delivery
-problems or comparing wait strategies. The armed wait's hard bound is the
-context's wall-clock offload budget when set, otherwise
+Raw-transport contexts (`zz9k_open` and `zz9k_attach_mailbox`) use the
+fine-grained polling path by default. A program may call
+`zz9k_arm_completion_irq` explicitly when one task owns the context for the
+entire armed lifetime. Do not arm shared library or provider contexts whose
+calls can arrive from different tasks: the interrupt wake target is the task
+that armed the context. The armed wait's hard bound is the context's
+wall-clock offload budget when set, otherwise
 `ENV:ZZ9K_SYNC_WAIT_TIMEOUT_MS` (default 5000), read once per context.
 
 Programs that require the wait helper should check:

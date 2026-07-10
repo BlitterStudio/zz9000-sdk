@@ -136,6 +136,9 @@ int main(int argc, char **argv)
   ok &= source_not_contains(source, "zz9k_pending_sync_add_locked");
   ok &= source_not_contains(source, "zz9k_poll_sync_completion_locked");
   ok &= source_not_contains(source, "zz9000.sdk.mailbox.v2");
+  ok &= source_not_contains(source,
+                            "(void)zz9k_arm_completion_irq(*ctx);");
+  ok &= source_not_contains(source, "ZZ9K_NO_IRQ_WAIT");
   ok &= function_contains(source, "zz9k_call",
                           "lock_status = zz9k_mailbox_lock(ctx);");
   ok &= function_contains(source, "zz9k_call",
