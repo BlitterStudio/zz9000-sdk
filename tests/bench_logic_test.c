@@ -355,6 +355,34 @@ static int test_crypto_output_buffer_fits_aead_pipeline(void)
   return 0;
 }
 
+static int test_probe_microsecond_conversion(void)
+{
+  if (zz9k_bench_ticks_to_us(709379ULL, 709379U) != 1000000U) return 1;
+  if (zz9k_bench_ticks_to_us(709ULL, 709379U) != 999U) return 2;
+  if (zz9k_bench_ticks_to_us(0ULL, 709379U) != 0U) return 3;
+  if (zz9k_bench_ticks_to_us(100ULL, 0U) != 0U) return 4;
+  if (zz9k_bench_ticks_to_us(5000000000000ULL, 1U) != UINT32_MAX) return 5;
+  return 0;
+}
+
+static int test_probe_stats_track_min_avg_max(void)
+{
+  ZZ9KBenchProbeStats stats;
+
+  zz9k_bench_probe_stats_init(&stats);
+  if (zz9k_bench_probe_stats_avg(&stats) != 0ULL) return 1;
+
+  zz9k_bench_probe_stats_add(&stats, 300ULL);
+  zz9k_bench_probe_stats_add(&stats, 100ULL);
+  zz9k_bench_probe_stats_add(&stats, 200ULL);
+
+  if (stats.samples != 3U) return 2;
+  if (stats.min != 100ULL) return 3;
+  if (stats.max != 300ULL) return 4;
+  if (zz9k_bench_probe_stats_avg(&stats) != 200ULL) return 5;
+  return 0;
+}
+
 int main(void)
 {
   int result;
@@ -388,6 +416,12 @@ int main(void)
 
   result = test_crypto_output_buffer_fits_aead_pipeline();
   if (result) return 210 + result;
+
+  result = test_probe_microsecond_conversion();
+  if (result) return 230 + result;
+
+  result = test_probe_stats_track_min_avg_max();
+  if (result) return 240 + result;
 
   return 0;
 }

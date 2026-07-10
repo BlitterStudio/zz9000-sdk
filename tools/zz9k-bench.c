@@ -46,6 +46,11 @@
 #define ZZ9K_BENCH_CPU_WRITE_SMALL_BYTES (16UL * 1024UL)
 #define ZZ9K_BENCH_CPU_WRITE_LARGE_BYTES (256UL * 1024UL)
 #define ZZ9K_BENCH_PING_PIPE_DEPTH 16U
+/* Latency probe: tight ring polling bounded so a dead board cannot hang the
+ * bench; the gapped variant controls for the probe's own Zorro read traffic
+ * delaying the firmware's housekeeping (observer effect). */
+#define ZZ9K_BENCH_PROBE_POLL_BACKSTOP 2000000UL
+#define ZZ9K_BENCH_PROBE_GAP_SPINS 500UL
 #define ZZ9K_BENCH_CRYPTO_PIPE_DEPTH 16U
 #define ZZ9K_BENCH_TLS_RECORD_BYTES (16UL * 1024UL)
 #define ZZ9K_BENCH_SHA256_DIGEST_BYTES 32U
@@ -198,6 +203,58 @@ static uint32_t zz9k_bench_ticks_to_ms(ZZ9KBenchTick ticks,
   }
 
   return (uint32_t)ms;
+}
+
+static uint32_t zz9k_bench_ticks_to_us(ZZ9KBenchTick ticks,
+                                       uint32_t ticks_per_second)
+{
+  uint64_t us;
+
+  if (ticks_per_second == 0) {
+    return 0;
+  }
+
+  us = ((uint64_t)ticks * 1000000ULL) / ticks_per_second;
+  if (us > UINT32_MAX) {
+    return UINT32_MAX;
+  }
+
+  return (uint32_t)us;
+}
+
+/* Latency-probe accumulator: min/avg/max roundtrip ticks over a run. */
+typedef struct ZZ9KBenchProbeStats {
+  ZZ9KBenchTick total;
+  ZZ9KBenchTick min;
+  ZZ9KBenchTick max;
+  uint32_t samples;
+} ZZ9KBenchProbeStats;
+
+static void zz9k_bench_probe_stats_init(ZZ9KBenchProbeStats *stats)
+{
+  memset(stats, 0, sizeof(*stats));
+}
+
+static void zz9k_bench_probe_stats_add(ZZ9KBenchProbeStats *stats,
+                                       ZZ9KBenchTick elapsed)
+{
+  if (stats->samples == 0U || elapsed < stats->min) {
+    stats->min = elapsed;
+  }
+  if (elapsed > stats->max) {
+    stats->max = elapsed;
+  }
+  stats->total += elapsed;
+  stats->samples++;
+}
+
+static ZZ9KBenchTick zz9k_bench_probe_stats_avg(
+    const ZZ9KBenchProbeStats *stats)
+{
+  if (stats->samples == 0U) {
+    return 0;
+  }
+  return stats->total / stats->samples;
 }
 
 static uint32_t zz9k_bench_kib_per_second(uint32_t bytes,
@@ -732,6 +789,107 @@ static int zz9k_bench_run_pipelined_ping(ZZ9KContext *ctx,
 
   zz9k_bench_print_calls("SDK ping pipe", iterations, pipe_ticks,
                          ticks_per_second);
+  return 0;
+}
+
+/* One submit -> poll-until-matching-completion roundtrip, bypassing
+ * zz9k_call's wait loop entirely. gap_spins == 0 polls tight. */
+static int zz9k_bench_probe_once(ZZ9KContext *ctx,
+                                 const ZZ9KBenchTimer *timer,
+                                 uint32_t gap_spins,
+                                 ZZ9KBenchTick *elapsed)
+{
+  ZZ9KRequest request;
+  ZZ9KMailboxEntry reply;
+  ZZ9KBenchTick start;
+  uint8_t payload[4];
+  uint32_t request_id;
+  uint32_t polls;
+  int status;
+
+  payload[0] = 'p';
+  payload[1] = 'r';
+  payload[2] = 'b';
+  payload[3] = gap_spins ? 'g' : 't';
+
+  memset(&request, 0, sizeof(request));
+  status = zz9k_request_ping(&request, payload, sizeof(payload));
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  request_id = 0;
+  start = zz9k_bench_timer_now(timer);
+  status = zz9k_submit(ctx, &request, &request_id);
+  if (status != ZZ9K_STATUS_QUEUED) {
+    return status;
+  }
+
+  for (polls = 0; polls < ZZ9K_BENCH_PROBE_POLL_BACKSTOP; polls++) {
+    memset(&reply, 0, sizeof(reply));
+    status = zz9k_poll(ctx, &reply);
+    if (status == ZZ9K_STATUS_OK && reply.request_id == request_id) {
+      *elapsed = zz9k_bench_elapsed_ticks(start,
+                                          zz9k_bench_timer_now(timer));
+      return reply.status;
+    }
+    if (status != ZZ9K_STATUS_OK && status != ZZ9K_STATUS_BUSY) {
+      return status;
+    }
+    if (gap_spins) {
+      volatile uint32_t spin;
+
+      for (spin = 0; spin < gap_spins; spin++) {
+      }
+    }
+  }
+
+  return ZZ9K_STATUS_TIMEOUT;
+}
+
+static int zz9k_bench_run_ping_probe(ZZ9KContext *ctx,
+                                     const ZZ9KBenchTimer *timer,
+                                     uint32_t iterations,
+                                     uint32_t ticks_per_second)
+{
+  static const struct {
+    const char *label;
+    uint32_t gap_spins;
+  } variants[2] = {
+    { "SDK ping probe tight", 0UL },
+    { "SDK ping probe gapped", ZZ9K_BENCH_PROBE_GAP_SPINS },
+  };
+  uint32_t v;
+  uint32_t i;
+
+  for (v = 0; v < 2U; v++) {
+    ZZ9KBenchProbeStats stats;
+    ZZ9KBenchTick elapsed;
+    int status;
+
+    zz9k_bench_probe_stats_init(&stats);
+    for (i = 0; i < iterations; i++) {
+      elapsed = 0;
+      status = zz9k_bench_probe_once(ctx, timer, variants[v].gap_spins,
+                                     &elapsed);
+      if (status != ZZ9K_STATUS_OK) {
+        printf("%s: %s (%d)\n", variants[v].label,
+               zz9k_status_name(status), status);
+        return 1;
+      }
+      zz9k_bench_probe_stats_add(&stats, elapsed);
+    }
+
+    printf("%-22s min %8lu  avg %8lu  max %8lu us\n",
+           variants[v].label,
+           (unsigned long)zz9k_bench_ticks_to_us(stats.min,
+                                                 ticks_per_second),
+           (unsigned long)zz9k_bench_ticks_to_us(
+               zz9k_bench_probe_stats_avg(&stats), ticks_per_second),
+           (unsigned long)zz9k_bench_ticks_to_us(stats.max,
+                                                 ticks_per_second));
+  }
+
   return 0;
 }
 
@@ -1910,6 +2068,10 @@ int main(int argc, char **argv)
   }
   if (zz9k_bench_run_pipelined_ping(ctx, &timer, iterations,
                                     ticks_per_second) != 0) {
+    goto out;
+  }
+  if (zz9k_bench_run_ping_probe(ctx, &timer, iterations,
+                                ticks_per_second) != 0) {
     goto out;
   }
   if (zz9k_bench_run_memory(ctx, &timer, iterations, ticks_per_second) != 0) {
