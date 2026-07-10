@@ -261,9 +261,11 @@ int zz9k_sdk_use_int2(const ZZ9KContext *ctx);
  * The arming task is captured as the wake target, so arm and every subsequent
  * zz9k_call on this context must run on the same task. Idempotent.
  * While a zz9k_call on an armed context is blocked it holds the shared
- * mailbox lock (up to ENV:ZZ9K_SYNC_WAIT_TIMEOUT_MS, default 5s), so a slow
- * or wedged operation serializes all mailbox clients until it completes or
- * times out.
+ * mailbox lock, so a slow or wedged operation serializes all mailbox
+ * clients until it completes or times out. The hard bound is the context's
+ * wall-clock offload budget when set (zz9k_set_offload_timeout_ms);
+ * otherwise ENV:ZZ9K_SYNC_WAIT_TIMEOUT_MS (default 5s), read once per
+ * context.
  */
 int zz9k_arm_completion_irq(ZZ9KContext *ctx);
 

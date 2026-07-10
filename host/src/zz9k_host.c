@@ -82,6 +82,7 @@ struct ZZ9KContext {
   uint32_t next_request_id;
   uint32_t sync_cookie_mask;
   uint32_t offload_timeout_ms;
+  uint32_t sync_wait_timeout_ms;   /* armed-wait ENV bound, read once; 0 = unread */
   unsigned char irq_armed;
 #if ZZ9K_HOST_AMIGA
   struct Interrupt irq;
@@ -365,6 +366,21 @@ static uint32_t zz9k_sync_wait_timeout_ms(void)
 {
   return zz9k_env_u32("ZZ9K_SYNC_WAIT_TIMEOUT_MS",
                       ZZ9K_SYNC_WAIT_TIMEOUT_MS_DEFAULT);
+}
+
+/* Hard bound for the armed (block-on-IRQ) wait: the wall-clock offload
+ * budget takes precedence when set, so the provider's offload-or-fallback
+ * posture survives arming; otherwise ENV:ZZ9K_SYNC_WAIT_TIMEOUT_MS, read
+ * once per context — never per call. */
+static uint32_t zz9k_armed_wait_timeout_ms(ZZ9KContext *ctx)
+{
+  if (ctx->offload_timeout_ms != 0U) {
+    return ctx->offload_timeout_ms;
+  }
+  if (ctx->sync_wait_timeout_ms == 0U) {
+    ctx->sync_wait_timeout_ms = zz9k_sync_wait_timeout_ms();
+  }
+  return ctx->sync_wait_timeout_ms;
 }
 
 /* Monotonic-ish millisecond reading; unsigned deltas absorb wrap. */
@@ -2833,7 +2849,8 @@ int zz9k_call(ZZ9KContext *ctx, ZZ9KRequest *request, ZZ9KMailboxEntry *reply,
   if (ctx->irq_armed) {
     status = zz9k_await_completion_locked(ctx, request_id,
                                           request->entry.opcode, sync_cookie,
-                                          reply, zz9k_sync_wait_timeout_ms());
+                                          reply,
+                                          zz9k_armed_wait_timeout_ms(ctx));
     goto done;
   }
 

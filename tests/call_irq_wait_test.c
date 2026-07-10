@@ -8,11 +8,16 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#if !defined(_WIN32)
+#define _POSIX_C_SOURCE 200112L   /* setenv for the ENV-cache test */
+#endif
+
 #include "zz9k/host.h"
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #define TEST_SYNC_COOKIE_MASK 0x5aa55aa5UL
 #define REQ_ID 0x1234UL
@@ -101,6 +106,37 @@ static int block_ctrlc(void)
 {
   g_block_calls++;
   return 1;          /* nonzero == Ctrl-C */
+}
+
+static int block_advance_20(void)
+{
+  g_block_calls++;
+  g_now_ms += 20;
+  return 0;
+}
+
+static int block_advance_50(void)
+{
+  g_block_calls++;
+  g_now_ms += 50;
+  return 0;
+}
+
+static int block_inject_on_1st(void)
+{
+  g_block_calls++;
+  g_now_ms += 4;
+  inject_reply(g_mbox);
+  return 0;
+}
+
+static void set_env(const char *name, const char *value)
+{
+#if defined(_WIN32)
+  _putenv_s(name, value);
+#else
+  setenv(name, value, 1);
+#endif
 }
 
 static void reset_hooks(void)
@@ -316,6 +352,71 @@ static int test_host_arm_is_noop(void)
   return 0;
 }
 
+static int test_armed_offload_timeout_precedence(void)
+{
+  struct TestMailbox mailbox;
+  uint16_t doorbell = 0;
+  ZZ9KContext *ctx;
+  ZZ9KRequest request;
+  ZZ9KMailboxEntry reply;
+  int status;
+
+  reset_hooks();
+  ctx = open_ctx(&mailbox, &doorbell);
+  if (!ctx) return 1;
+  zz9k_set_armed_for_test(ctx, 1);
+  zz9k_set_now_hook_for_test(now_hook);
+  zz9k_set_block_hook_for_test(block_advance_20);
+  zz9k_set_offload_timeout_ms(ctx, 30U);
+  build_ping(&request);
+  memset(&reply, 0, sizeof(reply));
+
+  status = zz9k_call(ctx, &request, &reply, ZZ9K_DEFAULT_TIMEOUT_TICKS);
+  check(status == ZZ9K_STATUS_TIMEOUT, "armed wait honors offload budget");
+  check(g_block_calls == 2, "offload budget bounds the wait (2 blocks)");
+  zz9k_close(ctx);
+  return 0;
+}
+
+static int test_armed_sync_timeout_cached_once(void)
+{
+  struct TestMailbox mailbox;
+  uint16_t doorbell = 0;
+  ZZ9KContext *ctx;
+  ZZ9KRequest request;
+  ZZ9KMailboxEntry reply;
+  int status;
+
+  reset_hooks();
+  set_env("ZZ9K_SYNC_WAIT_TIMEOUT_MS", "100");
+  ctx = open_ctx(&mailbox, &doorbell);
+  if (!ctx) return 1;
+  zz9k_set_armed_for_test(ctx, 1);
+  zz9k_set_now_hook_for_test(now_hook);
+
+  /* First armed call reads (and caches) the 100 ms bound, then completes. */
+  zz9k_set_block_hook_for_test(block_inject_on_1st);
+  build_ping(&request);
+  memset(&reply, 0, sizeof(reply));
+  status = zz9k_call(ctx, &request, &reply, ZZ9K_DEFAULT_TIMEOUT_TICKS);
+  check(status == ZZ9K_STATUS_OK, "first armed call completes");
+
+  /* ENV now says 10 ms. A per-call re-read would time out after ONE 50 ms
+   * block; the cached 100 ms bound needs TWO. */
+  set_env("ZZ9K_SYNC_WAIT_TIMEOUT_MS", "10");
+  g_block_calls = 0;
+  zz9k_set_block_hook_for_test(block_advance_50);
+  build_ping(&request);
+  memset(&reply, 0, sizeof(reply));
+  status = zz9k_call(ctx, &request, &reply, ZZ9K_DEFAULT_TIMEOUT_TICKS);
+  check(status == ZZ9K_STATUS_TIMEOUT, "second armed call times out");
+  check(g_block_calls == 2, "ENV bound read once per context, not per call");
+
+  set_env("ZZ9K_SYNC_WAIT_TIMEOUT_MS", "");
+  zz9k_close(ctx);
+  return 0;
+}
+
 int main(void)
 {
   test_reply_present_before_first_block();
@@ -325,6 +426,8 @@ int main(void)
   test_unarmed_uses_spin_path();
   test_hard_transport_error();
   test_host_arm_is_noop();
+  test_armed_offload_timeout_precedence();
+  test_armed_sync_timeout_cached_once();
 
   if (failures) {
     printf("call_irq_wait_test: %d failure(s)\n", failures);
