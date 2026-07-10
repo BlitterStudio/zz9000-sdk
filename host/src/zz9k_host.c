@@ -267,20 +267,30 @@ void zz9k_set_armed_for_test(ZZ9KContext *ctx, int armed)
 }
 #endif
 
-/* Idle spin between completion polls, progressive in the number of
- * polls already taken: the first polls after enqueue are cheap, so
- * fast ops (audio-stream feeds, inline status ops) complete within
- * microseconds instead of paying a flat multi-millisecond spin per
- * call, while the spin grows to the flat cadence so long ops (crypto,
- * batch decode) poll the Zorro completion ring no more often than
- * before. */
+/* Idle spin between completion polls. The head of the schedule is
+ * fine-grained (poll every ~500 spins for the first 16 polls) so fast ops
+ * (ping, inline status, small crypto) are discovered within ~1 ms instead of
+ * being overshot by exponential gaps; from poll 16 the gap doubles up to the
+ * pre-existing flat 50000-spin cadence, so long ops (crypto, batch decode)
+ * poll the Zorro completion ring no more often than before. */
+uint32_t zz9k_idle_backoff_limit(uint32_t ticks)
+{
+  if (ticks < 16U) {
+    return 500U;
+  }
+  if (ticks < 22U) {
+    return 500U << (ticks - 15U);
+  }
+  return 50000U;
+}
+
 static void zz9k_idle_between_polls_backoff(uint32_t ticks)
 {
 #if ZZ9K_HOST_AMIGA
   volatile uint32_t spin;
   uint32_t limit;
 
-  limit = (ticks < 7U) ? (500UL << ticks) : 50000UL;
+  limit = zz9k_idle_backoff_limit(ticks);
   for (spin = 0; spin < limit; spin++) {
   }
 #else

@@ -118,6 +118,12 @@ void zz9k_close(ZZ9KContext *ctx);
 /* Enable a real-time timeout budget for unarmed polling calls on this context.
    0 disables the wall-clock budget and restores the legacy tick bound. */
 void zz9k_set_offload_timeout_ms(ZZ9KContext *ctx, uint32_t timeout_ms);
+/* Spin-count budget before unarmed completion poll number `ticks` (0-based).
+ * The head stays fine-grained so short ops are discovered within ~1 ms on a
+ * 68060; the tail keeps the pre-existing coarse cadence so long ops poll the
+ * Zorro completion ring no more often than before. Pure; exposed so host
+ * tests can pin the schedule. */
+uint32_t zz9k_idle_backoff_limit(uint32_t ticks);
 int zz9k_query_caps(ZZ9KContext *ctx, ZZ9KCaps *caps);
 int zz9k_query_service(ZZ9KContext *ctx, uint32_t service_id,
                        ZZ9KServiceInfo *service);

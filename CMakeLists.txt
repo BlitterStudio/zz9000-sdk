@@ -126,6 +126,19 @@ target_include_directories(call_irq_wait_test
 target_link_libraries(call_irq_wait_test PRIVATE zz9k_host)
 add_test(NAME call_irq_wait_test COMMAND call_irq_wait_test)
 
+add_executable(backoff_schedule_test
+  tests/backoff_schedule_test.c
+)
+
+target_include_directories(backoff_schedule_test
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/host/include
+)
+
+target_link_libraries(backoff_schedule_test PRIVATE zz9k_host)
+add_test(NAME backoff_schedule_test COMMAND backoff_schedule_test)
+
 add_executable(host_mailbox_source_test
   tests/host_mailbox_source_test.c
 )
