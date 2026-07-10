@@ -266,6 +266,10 @@ int zz9k_sdk_use_int2(const ZZ9KContext *ctx);
  * wall-clock offload budget when set (zz9k_set_offload_timeout_ms);
  * otherwise ENV:ZZ9K_SYNC_WAIT_TIMEOUT_MS (default 5s), read once per
  * context.
+ * zz9k_open arms the context automatically when the firmware advertises
+ * ZZ9K_CAP_IRQ_COMPLETION; set ENV:ZZ9K_NO_IRQ_WAIT (any positive integer)
+ * to keep the polling default. Explicit arming here still works with that
+ * variable set. zz9k_attach_mailbox never auto-arms.
  */
 int zz9k_arm_completion_irq(ZZ9KContext *ctx);
 
