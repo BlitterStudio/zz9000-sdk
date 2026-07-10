@@ -774,16 +774,6 @@ int zz9k_open(ZZ9KContext **ctx)
     (*ctx)->sdk_irq_control = zz9k_reg16(board.board_addr,
                                          ZZ9K_REG_SDK_IRQ_ACK);
   }
-  if (status == ZZ9K_STATUS_OK && *ctx &&
-      zz9k_completion_irq_supported(*ctx) &&
-      zz9k_env_u32("ZZ9K_NO_IRQ_WAIT", 0) == 0) {
-    /* Default the opener's task onto the block-on-IRQ wait. Best-effort:
-     * on any arming failure the context stays on the poll path,
-     * byte-for-byte the pre-auto-arm behavior. ENV:ZZ9K_NO_IRQ_WAIT
-     * (any positive integer) restores the polling default; explicit
-     * zz9k_arm_completion_irq still works with it set. */
-    (void)zz9k_arm_completion_irq(*ctx);
-  }
   return status;
 #else
   return ZZ9K_STATUS_UNSUPPORTED;

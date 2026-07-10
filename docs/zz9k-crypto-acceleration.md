@@ -118,12 +118,14 @@ The 6.1 ms figure above was 68k wait discipline, not transport cost. A
 latency probe (`zz9k-bench` `SDK ping probe`: submit + ring-poll with the
 wait loop bypassed) measured the true roundtrip floor at **225–339 µs
 (avg 279 µs)**; tight and gapped polling agree, so the probe is not
-perturbing the firmware it measures. Two transport changes close the gap:
-the unarmed poll backoff keeps a fine-grained head before escalating
-(`zz9k_idle_backoff_limit`), and `zz9k_open` now auto-arms the completion
-IRQ (`ENV:ZZ9K_NO_IRQ_WAIT` opts out).
+perturbing the firmware it measures. The unarmed poll backoff now keeps a
+fine-grained head before escalating (`zz9k_idle_backoff_limit`). Automatic
+IRQ arming at `zz9k_open` was subsequently withdrawn after hardware testing
+showed that shared resident-library contexts can be called from a task other
+than the one captured as the interrupt wake target. Task-owned tools may
+still call `zz9k_arm_completion_irq` explicitly.
 
-Re-measured on the same 68060 hardware:
+Re-measured on the same 68060 hardware with the IRQ wait explicitly armed:
 
 | Metric | before | after |
 |---|---|---|
