@@ -112,6 +112,36 @@ path, but they are network-latency-dominated and crypto cost is irrelevant
 there. Software m68k ChaCha20-Poly1305 plateaus at ~160 KiB/s, so batched
 offload is ~59x faster for bulk transfer.
 
+### Addendum 2026-07-10: sync-call latency fix supersedes the 6.1 ms floor
+
+The 6.1 ms figure above was 68k wait discipline, not transport cost. A
+latency probe (`zz9k-bench` `SDK ping probe`: submit + ring-poll with the
+wait loop bypassed) measured the true roundtrip floor at **225–339 µs
+(avg 279 µs)**; tight and gapped polling agree, so the probe is not
+perturbing the firmware it measures. Two transport changes close the gap:
+the unarmed poll backoff keeps a fine-grained head before escalating
+(`zz9k_idle_backoff_limit`), and `zz9k_open` now auto-arms the completion
+IRQ (`ENV:ZZ9K_NO_IRQ_WAIT` opts out).
+
+Re-measured on the same 68060 hardware:
+
+| Metric | before | after |
+|---|---|---|
+| `SDK ping` (sync) | 6.1 ms/call (161 calls/s) | **0.28 ms/call (3342 calls/s)** |
+| ChaCha20-Poly1305 sync break-even | 2 KB | **64 B** |
+| ChaCha20-Poly1305 sync @ 16 KB | 2539 KiB/s | **8550 KiB/s** |
+| AES-128-GCM sync @ 16 KB | 2487 KiB/s | **3588 KiB/s (batch 3969 — sync within ~10%)** |
+| X25519 | 6.36 ms/op (124x) | **3.15 ms/op (250x)** |
+| P-256 ECDH | 12.25 ms/op | **8.91 ms/op** |
+| P-256 keygen | — | **6.26 ms/op** |
+| ECDSA-P256 verify | 18.78 ms/op | **15.90 ms/op** |
+| RSA-2048 verify | 11.29 ms/op | **6.51 ms/op** |
+
+Every synchronous mailbox figure elsewhere in this document predates this
+fix; where a number leans on the 6.1 ms mailbox model, the ~0.3 ms floor
+now applies. Batching still wins for small records (64 B: 578 KiB/s
+batched vs 162 sync), but it is an optimization again, not a rescue.
+
 ### X25519 key exchange (Phase 1, measured)
 
 `zz9k-cryptobench` X25519 section (16 iterations, software m68k vs synchronous
