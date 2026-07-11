@@ -76,17 +76,19 @@ static int test_service_text(void)
   if (!expect_text(zz9k_service_text(ZZ9K_SERVICE_CORE), "core")) return 1;
   if (!expect_text(zz9k_service_text(ZZ9K_SERVICE_IMAGE), "image")) return 2;
   if (!expect_text(zz9k_service_text(ZZ9K_SERVICE_CRYPTO), "crypto")) return 3;
+  if (!expect_text(zz9k_service_text(ZZ9K_SERVICE_VIDEO), "video")) return 5;
   if (!expect_text(zz9k_service_text(0xffffffffUL), "unknown")) return 4;
   return 0;
 }
 
 static int test_known_service_iteration(void)
 {
-  if (zz9k_known_service_count() != 11U) return 1;
+  if (zz9k_known_service_count() != 12U) return 1;
   if (zz9k_known_service_id(0) != ZZ9K_SERVICE_CORE) return 2;
   if (zz9k_known_service_id(4) != ZZ9K_SERVICE_IMAGE) return 3;
   if (zz9k_known_service_id(10) != ZZ9K_SERVICE_MODULE) return 4;
-  if (zz9k_known_service_id(11) != 0xffffffffUL) return 5;
+  if (zz9k_known_service_id(11) != ZZ9K_SERVICE_VIDEO) return 5;
+  if (zz9k_known_service_id(12) != 0xffffffffUL) return 6;
   return 0;
 }
 

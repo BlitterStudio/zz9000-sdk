@@ -57,6 +57,8 @@ static inline uint32_t zz9k_service_capability_mask(uint32_t service_id)
     return ZZ9K_CAP_DIAGNOSTICS;
   case ZZ9K_SERVICE_MODULE:
     return ZZ9K_CAP_MODULES;
+  case ZZ9K_SERVICE_VIDEO:
+    return ZZ9K_CAP_VIDEO_DECODE;
   default:
     return 0U;
   }
@@ -92,7 +94,7 @@ static inline uint32_t zz9k_missing_service_flags(uint32_t available_flags,
 
 static inline uint32_t zz9k_known_capability_count(void)
 {
-  return 21U;
+  return 22U;
 }
 
 static inline uint32_t zz9k_known_capability_bit(uint32_t index)
@@ -140,6 +142,8 @@ static inline uint32_t zz9k_known_capability_bit(uint32_t index)
     return ZZ9K_CAP_AUDIO_PLAYBACK;
   case 20:
     return ZZ9K_CAP_HOST_WINDOW_HEAP;
+  case 21:
+    return ZZ9K_CAP_VIDEO_DECODE;
   default:
     return 0U;
   }
@@ -158,6 +162,9 @@ static inline uint32_t zz9k_known_service_flag_count(uint32_t service_id)
   }
   if (service_id == ZZ9K_SERVICE_CRYPTO) {
     return 5U;
+  }
+  if (service_id == ZZ9K_SERVICE_VIDEO) {
+    return 9U;
   }
   return 4U;
 }
@@ -270,6 +277,23 @@ static inline uint32_t zz9k_known_service_flag(uint32_t service_id,
     }
   }
 
+  if (service_id == ZZ9K_SERVICE_VIDEO) {
+    switch (index) {
+    case 4:
+      return ZZ9K_SERVICE_FLAG_VIDEO_MPEG1;
+    case 5:
+      return ZZ9K_SERVICE_FLAG_VIDEO_MPEG_PS;
+    case 6:
+      return ZZ9K_SERVICE_FLAG_VIDEO_DIRECT_OVERLAY;
+    case 7:
+      return ZZ9K_SERVICE_FLAG_VIDEO_STREAMING_INPUT;
+    case 8:
+      return ZZ9K_SERVICE_FLAG_VIDEO_CORE1;
+    default:
+      return 0U;
+    }
+  }
+
   return 0U;
 }
 
@@ -318,6 +342,8 @@ static inline const char *zz9k_capability_name(uint32_t capability_bit)
     return "audio-playback";
   case ZZ9K_CAP_HOST_WINDOW_HEAP:
     return "host-window-heap";
+  case ZZ9K_CAP_VIDEO_DECODE:
+    return "video-decode";
   default:
     return 0;
   }
@@ -426,6 +452,23 @@ static inline const char *zz9k_service_flag_name(uint32_t service_id,
     switch (service_flag) {
     case ZZ9K_SERVICE_FLAG_CRYPTO_X25519:
       return "x25519";
+    default:
+      return 0;
+    }
+  }
+
+  if (service_id == ZZ9K_SERVICE_VIDEO) {
+    switch (service_flag) {
+    case ZZ9K_SERVICE_FLAG_VIDEO_MPEG1:
+      return "mpeg1";
+    case ZZ9K_SERVICE_FLAG_VIDEO_MPEG_PS:
+      return "mpeg-ps";
+    case ZZ9K_SERVICE_FLAG_VIDEO_DIRECT_OVERLAY:
+      return "direct-overlay";
+    case ZZ9K_SERVICE_FLAG_VIDEO_STREAMING_INPUT:
+      return "streaming-input";
+    case ZZ9K_SERVICE_FLAG_VIDEO_CORE1:
+      return "core1";
     default:
       return 0;
     }

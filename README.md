@@ -30,7 +30,8 @@ stable AmigaOS-facing service runtime rather than standalone ARM sample
 programs:
 
 - `zz9k.library` plus SDK v2 headers for async calls, shared buffers,
-  surfaces, image decode/scale, audio, compression, and crypto.
+  surfaces, image decode/scale, streaming video, audio, compression, and
+  crypto.
 - End-user tools for service inspection, benchmarking, image viewing,
   MP3 playback, archive extraction, and release smoke checks.
 - `zz9k-picture.datatype` and JPEG/PNG descriptors for optional
@@ -84,7 +85,7 @@ The package is written to `build/package/amigaos3`. It contains:
   `Libs/mpega.library.zz9k` for side-by-side diagnostics
 - CLI tools such as `zz9k-info`, `zz9k-services`, `zz9k-bench`,
   `zz9k-surfaceops`, `zz9k-mp3`, `zz9k-mpega-smoke`, `zz9k-jpeg`, `zz9k-png`,
-  `zz9k-view`, `zz9k-hash`, `zz9k-chacha`, `zz9k-aead`, and
+  `zz9k-view`, `zzplay`, `zz9k-hash`, `zz9k-chacha`, `zz9k-aead`, and
   archive/decompression tools including `zz9k-archive`
 - `Classes/DataTypes/zz9k-picture.datatype` plus JPEG/PNG descriptors packaged
   inactive under `Storage/DataTypes` for explicit opt-in activation

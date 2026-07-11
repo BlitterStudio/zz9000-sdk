@@ -447,6 +447,29 @@ target_include_directories(image_stream_reply_test
 
 add_test(NAME image_stream_reply_test COMMAND image_stream_reply_test)
 
+add_executable(video_session_abi_test
+  tests/video_session_abi_test.c
+)
+
+target_include_directories(video_session_abi_test
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/host/include
+)
+
+add_test(NAME video_session_abi_test COMMAND video_session_abi_test)
+
+add_executable(zzplay_probe_test
+  tests/zzplay_probe_test.c
+)
+
+target_include_directories(zzplay_probe_test
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools
+)
+
+add_test(NAME zzplay_probe_test COMMAND zzplay_probe_test)
+
 add_executable(module_manifest_test
   tests/module_manifest_test.c
 )

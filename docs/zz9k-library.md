@@ -650,6 +650,62 @@ buffer. If it reports `no-memory`, check the printed shared-buffer count,
 surface count, invalid allocator slot count, and largest free heap block to
 distinguish leaked SDK resources from an allocator metadata problem.
 
+## Streaming Video Sessions
+
+The experimental video service is codec- and container-neutral. A session is
+created with separate `codec`, `container`, and `output_format` fields. MPEG-1
+video in an MPEG Program Stream with direct P96 overlay output is the first
+registered backend. Firmware advertises the exact supported combination with
+`ZZ9K_SERVICE_FLAG_VIDEO_*` bits. This experimental ABI was not released in
+its former packed-YUY2-output form; direct overlay is the sole contract.
+
+The decoder configuration and source geometry are immutable for a session.
+Each successful decode publishes the decoder-owned planar frame to the active
+overlay compositor; no P96 bitmap pointer or pitch is passed by the client:
+
+```c
+ZZ9KVideoSessionBeginDesc begin = {0};
+ZZ9KVideoSessionDecodeDesc decode = {0};
+ZZ9KVideoSessionResult result;
+
+begin.codec = ZZ9K_VIDEO_CODEC_MPEG1;
+begin.container = ZZ9K_VIDEO_CONTAINER_MPEG_PS;
+begin.width = width;
+begin.height = height;
+begin.output_format = ZZ9K_VIDEO_OUTPUT_DIRECT_OVERLAY;
+zz9k_video_session_begin(ctx, &begin, &result);
+
+decode.session = result.session;
+zz9k_video_session_decode(ctx, &decode, &result);
+```
+
+Compressed input is supplied in bounded shared-buffer chunks with
+`ZZ9KVideoSessionWriteDesc`; mark the final chunk with
+`ZZ9K_VIDEO_SESSION_WRITE_EOF`. `NEED_INPUT`, `FRAME_READY`, and `DONE` result
+flags drive the client loop without exposing backend-specific state.
+
+`build/zzplay` is the first standalone AmigaOS client:
+
+```text
+zzplay Work:Video/test.mpg
+zzplay --fps Work:Video/test.mpg
+zzplay --benchmark Work:Video/test.mpg
+```
+
+It currently accepts MPEG-1 Program Streams, opens a P96 overlay window,
+publishes decoder-owned planar frames directly, and paces through `timer.device`.
+`--fps` prints rolling and final playback FPS plus `decode-call` FPS, which
+excludes deliberate pacing and includes time waiting for prior queued overlay
+composition. `--benchmark` also disables pacing, making playback FPS the
+uncapped end-to-end throughput for firmware comparisons. Console reporting is
+sampled every two seconds to keep its own overhead small. This prototype is
+video-only; audio and A/V synchronization remain follow-up work.
+Additional codecs should be added as new firmware backend registry entries and
+new advertised codec/container flags, without changing the session lifecycle
+or direct-overlay contract. MPEG-1 elementary streams or MJPEG are relatively
+small follow-ups; MPEG-2 and newer inter-frame codecs need separate decoder,
+memory, and hardware-performance qualification.
+
 ## Audio Decode Jobs
 
 The audio service reserves explicit feature flags for this service family:
