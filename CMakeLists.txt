@@ -465,6 +465,7 @@ add_executable(zzplay_probe_test
 
 target_include_directories(zzplay_probe_test
   PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/tools
 )
 

@@ -11,6 +11,7 @@
 #include "zz9k/sdk.h"
 #include "zzplay-probe.h"
 #include "zzplay-stats.h"
+#include "zzplay-stream.h"
 
 #include <devices/timer.h>
 #include <exec/libraries.h>
@@ -352,8 +353,13 @@ int main(int argc, char **argv)
   int timer_open = 0;
   int stop = 0;
   int done = 0;
+  int eof = 0;
+  int eof_sent = 0;
   int show_fps = 0;
   int uncapped = 0;
+  uint32_t accepted_total = 0U;
+  uint32_t pending_offset = 0U;
+  uint32_t pending_length = 0U;
   int i;
 
   memset(&info, 0, sizeof(info));
@@ -431,12 +437,7 @@ int main(int argc, char **argv)
   }
   status = zz9k_query_service(ctx, ZZ9K_SERVICE_VIDEO, &service);
   if (status != ZZ9K_STATUS_OK ||
-      (service.flags & (ZZ9K_SERVICE_FLAG_VIDEO_MPEG1 |
-                        ZZ9K_SERVICE_FLAG_VIDEO_MPEG_PS |
-                        ZZ9K_SERVICE_FLAG_VIDEO_DIRECT_OVERLAY)) !=
-          (ZZ9K_SERVICE_FLAG_VIDEO_MPEG1 |
-           ZZ9K_SERVICE_FLAG_VIDEO_MPEG_PS |
-           ZZ9K_SERVICE_FLAG_VIDEO_DIRECT_OVERLAY)) {
+      !zzplay_video_backend_available(service.flags)) {
     fprintf(stderr, "zzplay: required MPEG-1/PS direct-overlay backend is unavailable\n");
     status = ZZ9K_STATUS_UNSUPPORTED;
     goto cleanup;
@@ -476,24 +477,43 @@ int main(int argc, char **argv)
   printf("zzplay: frame path direct planar overlay\n");
 
   while (!stop && !done) {
-    size_t got = fread((void *)(uintptr_t)input.data, 1U, input.length, file);
-    int eof = got < input.length;
+    if (pending_length == 0U && !eof) {
+      size_t got = fread((void *)(uintptr_t)input.data, 1U,
+                         input.length, file);
 
-    if (ferror(file)) {
-      fprintf(stderr, "zzplay: input read failed\n");
-      status = ZZ9K_STATUS_IO_ERROR;
-      break;
+      if (ferror(file)) {
+        fprintf(stderr, "zzplay: input read failed\n");
+        status = ZZ9K_STATUS_IO_ERROR;
+        break;
+      }
+      pending_offset = 0U;
+      pending_length = (uint32_t)got;
+      eof = got < input.length;
     }
     memset(&write, 0, sizeof(write));
     write.session = session;
     write.src_handle = input.handle;
-    write.src_length = (uint32_t)got;
-    write.flags = eof ? ZZ9K_VIDEO_SESSION_WRITE_EOF : 0U;
+    write.src_offset = pending_offset;
+    write.src_length = pending_length;
+    write.flags = (eof && pending_length == 0U)
+                      ? ZZ9K_VIDEO_SESSION_WRITE_EOF
+                      : 0U;
     status = zz9k_video_session_write(ctx, &write, &result);
     if (status != ZZ9K_STATUS_OK) {
       fprintf(stderr, "zzplay: stream write failed: %s\n",
               zz9k_status_name(status));
       break;
+    }
+    if (write.src_length != 0U) {
+      if (!zzplay_advance_input(&pending_offset, &pending_length,
+                                &accepted_total,
+                                result.bytes_accepted)) {
+        fprintf(stderr, "zzplay: firmware reported invalid input progress\n");
+        status = ZZ9K_STATUS_INTERNAL_ERROR;
+        break;
+      }
+    } else {
+      eof_sent = 1;
     }
 
     for (;;) {
@@ -520,6 +540,9 @@ int main(int argc, char **argv)
         break;
       }
       if ((result.flags & ZZ9K_VIDEO_SESSION_RESULT_NEED_INPUT) != 0U) {
+        if (pending_length != 0U || (eof && !eof_sent)) {
+          break;
+        }
         if (eof) {
           fprintf(stderr, "zzplay: truncated stream at end of input\n");
           status = ZZ9K_STATUS_IO_ERROR;
