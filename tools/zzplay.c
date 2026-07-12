@@ -519,6 +519,7 @@ int main(int argc, char **argv)
     for (;;) {
       TimeVal_Type started;
       TimeVal_Type ended;
+      ZZPlayVideoResultAction action;
       uint32_t elapsed = 0U;
 
       stop = zzplay_window_stop(window);
@@ -535,11 +536,32 @@ int main(int argc, char **argv)
         stop = 1;
         break;
       }
-      if ((result.flags & ZZ9K_VIDEO_SESSION_RESULT_DONE) != 0U) {
+      action = zzplay_video_result_action(result.flags);
+      if (zzplay_video_result_has_frame(result.flags)) {
+        frames++;
+        if (result.frame_rate_milli != 0U) {
+          frame_period_us = 1000000000U / result.frame_rate_milli;
+        }
+        if (timer_open && !uncapped) {
+          GetSysTime(&ended);
+          elapsed = zzplay_elapsed_us(&started, &ended);
+          if (elapsed < frame_period_us) {
+            zzplay_wait_us(&timer, frame_period_us - elapsed);
+          }
+        }
+        if (show_fps) {
+          if (uncapped) {
+            GetSysTime(&ended);
+            elapsed = zzplay_elapsed_us(&started, &ended);
+          }
+          zzplay_stats_frame(&stats, elapsed);
+        }
+      }
+      if (action == ZZPLAY_VIDEO_RESULT_DONE) {
         done = 1;
         break;
       }
-      if ((result.flags & ZZ9K_VIDEO_SESSION_RESULT_NEED_INPUT) != 0U) {
+      if (action == ZZPLAY_VIDEO_RESULT_NEED_INPUT) {
         if (pending_length != 0U || (eof && !eof_sent)) {
           break;
         }
@@ -550,29 +572,11 @@ int main(int argc, char **argv)
         }
         break;
       }
-      if ((result.flags & ZZ9K_VIDEO_SESSION_RESULT_FRAME_READY) == 0U) {
+      if (action == ZZPLAY_VIDEO_RESULT_INVALID) {
         fprintf(stderr, "zzplay: decoder returned an unknown state\n");
         status = ZZ9K_STATUS_INTERNAL_ERROR;
         stop = 1;
         break;
-      }
-      frames++;
-      if (result.frame_rate_milli != 0U) {
-        frame_period_us = 1000000000U / result.frame_rate_milli;
-      }
-      if (timer_open && !uncapped) {
-        GetSysTime(&ended);
-        elapsed = zzplay_elapsed_us(&started, &ended);
-        if (elapsed < frame_period_us) {
-          zzplay_wait_us(&timer, frame_period_us - elapsed);
-        }
-      }
-      if (show_fps) {
-        if (uncapped) {
-          GetSysTime(&ended);
-          elapsed = zzplay_elapsed_us(&started, &ended);
-        }
-        zzplay_stats_frame(&stats, elapsed);
       }
     }
   }

@@ -61,5 +61,22 @@ int main(void)
       offset != 1024U || remaining != 2048U || accepted_total != 4096U) {
     return 8;
   }
+  if (zzplay_video_result_action(ZZ9K_VIDEO_SESSION_RESULT_HEADER_READY) !=
+          ZZPLAY_VIDEO_RESULT_CONTINUE ||
+      zzplay_video_result_action(ZZ9K_VIDEO_SESSION_RESULT_FRAME_READY |
+                                 ZZ9K_VIDEO_SESSION_RESULT_NEED_INPUT) !=
+          ZZPLAY_VIDEO_RESULT_NEED_INPUT ||
+      !zzplay_video_result_has_frame(
+          ZZ9K_VIDEO_SESSION_RESULT_FRAME_READY |
+          ZZ9K_VIDEO_SESSION_RESULT_NEED_INPUT) ||
+      zzplay_video_result_action(ZZ9K_VIDEO_SESSION_RESULT_FRAME_READY |
+                                 ZZ9K_VIDEO_SESSION_RESULT_DONE) !=
+          ZZPLAY_VIDEO_RESULT_DONE ||
+      !zzplay_video_result_has_frame(
+          ZZ9K_VIDEO_SESSION_RESULT_FRAME_READY |
+          ZZ9K_VIDEO_SESSION_RESULT_DONE) ||
+      zzplay_video_result_action(0U) != ZZPLAY_VIDEO_RESULT_INVALID) {
+    return 9;
+  }
   return 0;
 }
