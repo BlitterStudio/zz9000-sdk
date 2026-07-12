@@ -114,7 +114,7 @@ static inline const char *zz9k_compression_algorithm_text(uint32_t algorithm)
 
 static inline uint32_t zz9k_known_service_count(void)
 {
-  return 11U;
+  return 12U;
 }
 
 static inline uint32_t zz9k_known_service_id(uint32_t index)
@@ -142,6 +142,8 @@ static inline uint32_t zz9k_known_service_id(uint32_t index)
     return ZZ9K_SERVICE_DIAG;
   case 10:
     return ZZ9K_SERVICE_MODULE;
+  case 11:
+    return ZZ9K_SERVICE_VIDEO;
   default:
     return 0xffffffffUL;
   }
@@ -172,6 +174,8 @@ static inline const char *zz9k_service_text(uint32_t service_id)
     return "diag";
   case ZZ9K_SERVICE_MODULE:
     return "module";
+  case ZZ9K_SERVICE_VIDEO:
+    return "video";
   default:
     return "unknown";
   }

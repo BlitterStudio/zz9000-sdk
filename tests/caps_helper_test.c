@@ -109,6 +109,10 @@ static int test_service_capability_advertising_helpers(void)
                                                ZZ9K_CAP_STORAGE_OPS)) {
     return 11;
   }
+  if (zz9k_service_capability_mask(ZZ9K_SERVICE_VIDEO) !=
+      ZZ9K_CAP_VIDEO_DECODE) {
+    return 12;
+  }
 
   return 0;
 }
@@ -137,6 +141,10 @@ static int test_capability_names(void)
                    "storage-ops")) {
     return 6;
   }
+  if (!expect_name(zz9k_capability_name(ZZ9K_CAP_VIDEO_DECODE),
+                   "video-decode")) {
+    return 8;
+  }
   if (zz9k_capability_name(0x80000000UL) != 0) {
     return 7;
   }
@@ -146,7 +154,7 @@ static int test_capability_names(void)
 
 static int test_capability_iteration(void)
 {
-  if (zz9k_known_capability_count() != 21U) {
+  if (zz9k_known_capability_count() != 22U) {
     return 1;
   }
   if (zz9k_known_capability_bit(0) != ZZ9K_CAP_MAILBOX) {
@@ -170,9 +178,10 @@ static int test_capability_iteration(void)
   if (zz9k_known_capability_bit(20) != ZZ9K_CAP_HOST_WINDOW_HEAP) {
     return 8;
   }
-  if (zz9k_known_capability_bit(21) != 0U) {
+  if (zz9k_known_capability_bit(21) != ZZ9K_CAP_VIDEO_DECODE) {
     return 9;
   }
+  if (zz9k_known_capability_bit(22) != 0U) return 10;
 
   return 0;
 }
@@ -306,6 +315,20 @@ static int test_service_flag_names(void)
   if (zz9k_service_flag_name(ZZ9K_SERVICE_AUDIO, 0x80000000UL) != 0) {
     return 19;
   }
+  if (!expect_name(zz9k_service_flag_name(
+                       ZZ9K_SERVICE_VIDEO,
+                       ZZ9K_SERVICE_FLAG_VIDEO_MPEG1),
+                   "mpeg1") ||
+      !expect_name(zz9k_service_flag_name(
+                       ZZ9K_SERVICE_VIDEO,
+                       ZZ9K_SERVICE_FLAG_VIDEO_MPEG_PS),
+                   "mpeg-ps") ||
+      !expect_name(zz9k_service_flag_name(
+                       ZZ9K_SERVICE_VIDEO,
+                       ZZ9K_SERVICE_FLAG_VIDEO_DIRECT_OVERLAY),
+                   "direct-overlay")) {
+    return 24;
+  }
 
   return 0;
 }
@@ -430,6 +453,16 @@ static int test_service_flag_iteration(void)
   }
   if (zz9k_known_service_flag(ZZ9K_SERVICE_AUDIO, 9) != 0U) {
     return 26;
+  }
+  if (zz9k_known_service_flag_count(ZZ9K_SERVICE_VIDEO) != 9U ||
+      zz9k_known_service_flag(ZZ9K_SERVICE_VIDEO, 4) !=
+          ZZ9K_SERVICE_FLAG_VIDEO_MPEG1 ||
+      zz9k_known_service_flag(ZZ9K_SERVICE_VIDEO, 5) !=
+          ZZ9K_SERVICE_FLAG_VIDEO_MPEG_PS ||
+      zz9k_known_service_flag(ZZ9K_SERVICE_VIDEO, 8) !=
+          ZZ9K_SERVICE_FLAG_VIDEO_CORE1 ||
+      zz9k_known_service_flag(ZZ9K_SERVICE_VIDEO, 9) != 0U) {
+    return 29;
   }
 
   return 0;

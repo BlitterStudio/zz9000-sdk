@@ -105,6 +105,7 @@ static int check_script(const char *path, const char *name)
   ok &= expect_contains(script, name, "build/zz9k-cryptobench");
   ok &= expect_contains(script, name, "build/zz9k-m68kbench");
   ok &= expect_contains(script, name, "build/zz9k-mp3");
+  ok &= expect_contains(script, name, "build/zzplay");
   ok &= expect_contains(script, name, "build/zz9k-mpega-smoke");
   if (strstr(name, ".ps1")) {
     ok &= expect_contains(script, name,

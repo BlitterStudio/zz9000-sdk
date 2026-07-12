@@ -124,6 +124,7 @@ enum ZZ9KService {
   ZZ9K_SERVICE_CRYPTO = 0x0800,
   ZZ9K_SERVICE_DIAG = 0x0900,
   ZZ9K_SERVICE_MODULE = 0x0a00,
+  ZZ9K_SERVICE_VIDEO = 0x0b00,
   ZZ9K_SERVICE_VENDOR = 0x8000
 };
 
@@ -178,6 +179,11 @@ enum ZZ9KOpcode {
   ZZ9K_OP_CRYPTO_KX        = ZZ9K_SERVICE_CRYPTO + 0x03,
   ZZ9K_OP_CRYPTO_VERIFY    = ZZ9K_SERVICE_CRYPTO + 0x04,
 
+  ZZ9K_OP_VIDEO_SESSION_BEGIN = ZZ9K_SERVICE_VIDEO + 0x00,
+  ZZ9K_OP_VIDEO_SESSION_WRITE = ZZ9K_SERVICE_VIDEO + 0x01,
+  ZZ9K_OP_VIDEO_SESSION_DECODE = ZZ9K_SERVICE_VIDEO + 0x02,
+  ZZ9K_OP_VIDEO_SESSION_CLOSE = ZZ9K_SERVICE_VIDEO + 0x03,
+
   ZZ9K_OP_DIAG_READ = ZZ9K_SERVICE_DIAG + 0x00,
   ZZ9K_OP_DIAG_TIMING = ZZ9K_SERVICE_DIAG + 0x01,
   ZZ9K_OP_DIAG_SCHED = ZZ9K_SERVICE_DIAG + 0x02
@@ -206,7 +212,8 @@ enum ZZ9KCapability {
   ZZ9K_CAP_AUDIO_PLAYBACK = 1U << 19,
   /* Firmware serves ZZ9K_ALLOC_HOST_WINDOW allocations from a small heap
    * that is reachable through the Zorro 2 board window. */
-  ZZ9K_CAP_HOST_WINDOW_HEAP = 1U << 20
+  ZZ9K_CAP_HOST_WINDOW_HEAP = 1U << 20,
+  ZZ9K_CAP_VIDEO_DECODE = 1U << 21
 };
 
 /*
@@ -259,6 +266,12 @@ enum ZZ9KServiceFlags {
   ZZ9K_SERVICE_FLAG_AUDIO_RESAMPLE = 1U << 18,
   ZZ9K_SERVICE_FLAG_AUDIO_PCM16_STEREO = 1U << 19,
   ZZ9K_SERVICE_FLAG_AUDIO_MP3_STREAM = 1U << 20,
+
+  ZZ9K_SERVICE_FLAG_VIDEO_MPEG1 = 1U << 16,
+  ZZ9K_SERVICE_FLAG_VIDEO_MPEG_PS = 1U << 17,
+  ZZ9K_SERVICE_FLAG_VIDEO_DIRECT_OVERLAY = 1U << 18,
+  ZZ9K_SERVICE_FLAG_VIDEO_STREAMING_INPUT = 1U << 19,
+  ZZ9K_SERVICE_FLAG_VIDEO_CORE1 = 1U << 20,
 
   ZZ9K_SERVICE_FLAG_CODEC_DEFLATE_RAW = 1U << 16,
   ZZ9K_SERVICE_FLAG_CODEC_ZLIB = 1U << 17,
@@ -657,6 +670,54 @@ typedef struct ZZ9KAudioStreamResultPayload {
   uint8_t flags[4];
 } ZZ9KAudioStreamResultPayload;
 
+/* Decoder identity and immutable geometry are fixed at BEGIN. DECODE publishes
+ * a decoder-owned frame to the active P96 overlay; client-visible bitmap
+ * addresses and pitches are deliberately not part of this contract. */
+typedef struct ZZ9KVideoSessionBeginPayload {
+  uint8_t codec[4];
+  uint8_t container[4];
+  uint8_t width[4];
+  uint8_t height[4];
+  uint8_t output_format[4];
+  uint8_t flags[4];
+  uint8_t reserved[24];
+} ZZ9KVideoSessionBeginPayload;
+
+typedef struct ZZ9KVideoSessionWritePayload {
+  uint8_t session[4];
+  uint8_t src_handle[4];
+  uint8_t src_offset[4];
+  uint8_t src_length[4];
+  uint8_t flags[4];
+  uint8_t reserved[28];
+} ZZ9KVideoSessionWritePayload;
+
+typedef struct ZZ9KVideoSessionDecodePayload {
+  uint8_t session[4];
+  uint8_t flags[4];
+  uint8_t reserved[40];
+} ZZ9KVideoSessionDecodePayload;
+
+typedef struct ZZ9KVideoSessionClosePayload {
+  uint8_t session[4];
+  uint8_t flags[4];
+  uint8_t reserved[40];
+} ZZ9KVideoSessionClosePayload;
+
+typedef struct ZZ9KVideoSessionResultPayload {
+  uint8_t session[4];
+  uint8_t state[4];
+  uint8_t width[4];
+  uint8_t height[4];
+  uint8_t frame_rate_milli[4];
+  uint8_t frame_number[4];
+  uint8_t frame_time_millis[4];
+  uint8_t bytes_accepted[4];
+  uint8_t bytes_written[4];
+  uint8_t flags[4];
+  uint8_t reserved[8];
+} ZZ9KVideoSessionResultPayload;
+
 typedef struct ZZ9KCryptoHashPayload {
   uint8_t src_handle[4];
   uint8_t src_offset[4];
@@ -900,6 +961,21 @@ typedef char ZZ9KAudioDecodePayload_must_be_48_bytes[
 ];
 typedef char ZZ9KAudioDecodeResultPayload_must_be_48_bytes[
   (sizeof(ZZ9KAudioDecodeResultPayload) == 48U) ? 1 : -1
+];
+typedef char ZZ9KVideoSessionBeginPayload_must_be_48_bytes[
+  (sizeof(ZZ9KVideoSessionBeginPayload) == 48U) ? 1 : -1
+];
+typedef char ZZ9KVideoSessionWritePayload_must_be_48_bytes[
+  (sizeof(ZZ9KVideoSessionWritePayload) == 48U) ? 1 : -1
+];
+typedef char ZZ9KVideoSessionDecodePayload_must_be_48_bytes[
+  (sizeof(ZZ9KVideoSessionDecodePayload) == 48U) ? 1 : -1
+];
+typedef char ZZ9KVideoSessionClosePayload_must_be_48_bytes[
+  (sizeof(ZZ9KVideoSessionClosePayload) == 48U) ? 1 : -1
+];
+typedef char ZZ9KVideoSessionResultPayload_must_be_48_bytes[
+  (sizeof(ZZ9KVideoSessionResultPayload) == 48U) ? 1 : -1
 ];
 typedef char ZZ9KCryptoHashPayload_must_be_48_bytes[
   (sizeof(ZZ9KCryptoHashPayload) == 48U) ? 1 : -1
@@ -1251,6 +1327,41 @@ typedef struct ZZ9KAudioStreamResult {
   uint32_t flags;
 } ZZ9KAudioStreamResult;
 
+typedef struct ZZ9KVideoSessionBeginDesc {
+  uint32_t codec;
+  uint32_t container;
+  uint32_t width;
+  uint32_t height;
+  uint32_t output_format;
+  uint32_t flags;
+} ZZ9KVideoSessionBeginDesc;
+
+typedef struct ZZ9KVideoSessionWriteDesc {
+  uint32_t session;
+  uint32_t src_handle;
+  uint32_t src_offset;
+  uint32_t src_length;
+  uint32_t flags;
+} ZZ9KVideoSessionWriteDesc;
+
+typedef struct ZZ9KVideoSessionDecodeDesc {
+  uint32_t session;
+  uint32_t flags;
+} ZZ9KVideoSessionDecodeDesc;
+
+typedef struct ZZ9KVideoSessionResult {
+  uint32_t session;
+  uint32_t state;
+  uint32_t width;
+  uint32_t height;
+  uint32_t frame_rate_milli;
+  uint32_t frame_number;
+  uint32_t frame_time_millis;
+  uint32_t bytes_accepted;
+  uint32_t bytes_written;
+  uint32_t flags;
+} ZZ9KVideoSessionResult;
+
 typedef struct ZZ9KCryptoHashDesc {
   uint32_t src_handle;
   uint32_t src_offset;
@@ -1532,6 +1643,37 @@ enum ZZ9KAudioStreamResultFlags {
   ZZ9K_AUDIO_STREAM_RESULT_PCM_READY = 1U << 1,
   ZZ9K_AUDIO_STREAM_RESULT_DONE = 1U << 2,
   ZZ9K_AUDIO_STREAM_RESULT_BACKPRESSURE = 1U << 3
+};
+
+enum ZZ9KVideoCodec {
+  ZZ9K_VIDEO_CODEC_MPEG1 = 1U
+};
+
+enum ZZ9KVideoContainer {
+  ZZ9K_VIDEO_CONTAINER_MPEG_PS = 1U
+};
+
+enum ZZ9KVideoOutputFormat {
+  ZZ9K_VIDEO_OUTPUT_DIRECT_OVERLAY = 1U
+};
+
+enum ZZ9KVideoSessionWriteFlags {
+  ZZ9K_VIDEO_SESSION_WRITE_EOF = 1U << 0
+};
+
+enum ZZ9KVideoSessionState {
+  ZZ9K_VIDEO_SESSION_STATE_NEED_INPUT = 1U,
+  ZZ9K_VIDEO_SESSION_STATE_READY = 2U,
+  ZZ9K_VIDEO_SESSION_STATE_FRAME_READY = 3U,
+  ZZ9K_VIDEO_SESSION_STATE_DONE = 4U,
+  ZZ9K_VIDEO_SESSION_STATE_ERROR = 5U
+};
+
+enum ZZ9KVideoSessionResultFlags {
+  ZZ9K_VIDEO_SESSION_RESULT_HEADER_READY = 1U << 0,
+  ZZ9K_VIDEO_SESSION_RESULT_NEED_INPUT = 1U << 1,
+  ZZ9K_VIDEO_SESSION_RESULT_FRAME_READY = 1U << 2,
+  ZZ9K_VIDEO_SESSION_RESULT_DONE = 1U << 3
 };
 
 enum ZZ9KCryptoHashAlgorithm {

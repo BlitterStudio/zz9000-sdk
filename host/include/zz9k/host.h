@@ -178,6 +178,18 @@ int zz9k_audio_stream_play(ZZ9KContext *ctx, uint32_t session,
 int zz9k_audio_stream_stop(ZZ9KContext *ctx, uint32_t session,
                            uint32_t flags,
                            ZZ9KAudioStreamResult *result);
+int zz9k_video_session_begin(ZZ9KContext *ctx,
+                             const ZZ9KVideoSessionBeginDesc *desc,
+                             ZZ9KVideoSessionResult *result);
+int zz9k_video_session_write(ZZ9KContext *ctx,
+                             const ZZ9KVideoSessionWriteDesc *desc,
+                             ZZ9KVideoSessionResult *result);
+int zz9k_video_session_decode(ZZ9KContext *ctx,
+                              const ZZ9KVideoSessionDecodeDesc *desc,
+                              ZZ9KVideoSessionResult *result);
+int zz9k_video_session_close(ZZ9KContext *ctx, uint32_t session,
+                             uint32_t flags,
+                             ZZ9KVideoSessionResult *result);
 int zz9k_image_session_begin(ZZ9KContext *ctx,
                              const ZZ9KImageSessionBeginDesc *desc,
                              ZZ9KImageSessionResult *result);
