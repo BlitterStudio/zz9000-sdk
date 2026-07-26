@@ -181,3 +181,54 @@ Failure routing:
 - MPEGA-only failures route to the resident compatibility shim.
 - Surface slowdown during full-speed audio diagnostics is measured as
   contention unless the graphics or audio command times out or returns errors.
+
+## Streaming Video And P96 PIP
+
+Use a known MPEG-1 Program Stream. Start with normal pacing and inspect the
+pixels before collecting uncapped performance:
+
+```text
+zzplay --fps Work:Video/test.mpg
+zzplay --benchmark Work:Video/test.mpg
+```
+
+For firmware with the native FPGA overlay, also resize the playing PIP window
+away from its exact source dimensions and then return it to 1:1. Exact-size,
+fully visible presentation is eligible for the native plane; resized or
+clipped presentation uses the ARM compositor fallback.
+
+While playback is active, cycle the live `ZZScanlines` modes and bring a
+native Amiga PAL/NTSC screen to the front, then return to the P96 RTG screen.
+High-resolution RTG intentionally suppresses visible scanline shading, so the
+scanline portion is a stability check: the PIP and desktop must remain
+unchanged. Native-video takeover must not retain stale PIP/RTG pixels, and the
+return must recover cleanly after P96 supplies fresh overlay state.
+
+Expected pass signal:
+
+- `zzplay` identifies the stream and reports `direct planar overlay`.
+- Colors, horizontal placement, and every row are correct at 1:1 and resized.
+- No flicker, tearing, stale first row, or corruption appears below or outside
+  the window.
+- Moving, resizing, obscuring, and closing the PIP leaves the desktop clean.
+- Scanline-control writes and native-video takeover/RTG return do not expose
+  stale surfaces or corrupt either presentation path.
+- The hardware pointer/sprite remains topmost.
+- Paced playback and uncapped benchmark complete without SDK errors or leaked
+  shared buffers/surfaces.
+
+Do not treat FPS output as a performance pass when the displayed pixels are
+wrong.
+
+Failure routing:
+
+- Missing video capability/service/streaming-input flags route to the matched
+  firmware/SDK release pair.
+- Correct resized output with wrong 1:1 output proves the decoder-owned
+  planar frame, frame-ready publication, and ARM compositor, but does not
+  exercise the native-only planar-to-packed conversion or staging-buffer
+  flip. Route that result through packed staging, VDMA, and the PL formatter.
+- Wrong output in both states routes to artifact identity, decoder output,
+  frame publication, and their common state before changing RTL.
+- Any corruption outside the PIP is a stop condition; preserve the UART log
+  and exact artifact hashes.
