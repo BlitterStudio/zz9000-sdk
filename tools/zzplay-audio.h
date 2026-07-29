@@ -47,9 +47,18 @@ typedef struct ZZPlayBackendDecision {
 } ZZPlayBackendDecision;
 
 typedef struct ZZPlayAudioSinkOps {
-  int (*open)(void *user, uint32_t sample_rate, uint32_t channels);
-  int (*write)(void *user, const void *samples, size_t length);
+  int (*prepare)(void *user, uint32_t sample_rate, uint32_t channels);
+  void *(*acquire_buffer)(void *user, size_t *capacity_bytes);
+  int (*submit_buffer)(void *user, size_t bytes);
+  int (*play)(void *user);
+  int (*poll)(void *user);
+  int (*pause)(void *user);
+  int (*resume)(void *user);
+  int (*drain)(void *user);
+  void (*stop)(void *user);
   void (*close)(void *user);
+  uint64_t (*played_frames)(const void *user);
+  uint64_t (*queued_frames)(const void *user);
 } ZZPlayAudioSinkOps;
 
 ZZPlayBackendDecision zzplay_audio_select(

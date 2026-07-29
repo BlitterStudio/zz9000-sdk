@@ -53,6 +53,33 @@ int zzplay_probe_mpeg_sequence(const uint8_t *data,
   return 0;
 }
 
+void zzplay_probe_mpeg_program(const uint8_t *data,
+                               size_t length,
+                               ZZPlayVideoInfo *info)
+{
+  size_t i;
+
+  if (!data || !info || length < 4U) {
+    return;
+  }
+  for (i = 0U; i + 4U <= length; i++) {
+    uint8_t stream_id;
+
+    if (data[i] != 0x00U || data[i + 1U] != 0x00U ||
+        data[i + 2U] != 0x01U) {
+      continue;
+    }
+    stream_id = data[i + 3U];
+    if (stream_id == 0xbaU) {
+      info->is_program_stream = 1;
+    } else if (stream_id >= 0xe0U && stream_id <= 0xefU) {
+      info->has_video_pes = 1;
+    } else if (stream_id >= 0xc0U && stream_id <= 0xdfU) {
+      info->has_audio_pes = 1;
+    }
+  }
+}
+
 int zzplay_probe_file(FILE *file, ZZPlayVideoInfo *info)
 {
   uint8_t *buffer;
@@ -63,6 +90,7 @@ int zzplay_probe_file(FILE *file, ZZPlayVideoInfo *info)
   if (!file || !info || fseek(file, 0L, SEEK_SET) != 0) {
     return 0;
   }
+  memset(info, 0, sizeof(*info));
   buffer = (uint8_t *)malloc(ZZPLAY_PROBE_CHUNK + ZZPLAY_PROBE_CARRY);
   if (!buffer) {
     return 0;
@@ -77,9 +105,10 @@ int zzplay_probe_file(FILE *file, ZZPlayVideoInfo *info)
     }
     got = fread(buffer + carry, 1U, want, file);
     available = carry + got;
-    if (zzplay_probe_mpeg_sequence(buffer, available, info)) {
+    zzplay_probe_mpeg_program(buffer, available, info);
+    if (!found &&
+        zzplay_probe_mpeg_sequence(buffer, available, info)) {
       found = 1;
-      break;
     }
     total += got;
     if (got == 0U) {

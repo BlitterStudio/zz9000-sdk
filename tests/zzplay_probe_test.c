@@ -55,6 +55,21 @@ static int check_file_probe(void)
   return !zzplay_video_info_supported(&info);
 }
 
+static int check_program_probe(void)
+{
+  static const uint8_t program[] = {
+    0x00U, 0x00U, 0x01U, 0xbaU,
+    0x55U, 0x00U, 0x00U, 0x01U, 0xe0U,
+    0x55U, 0x00U, 0x00U, 0x01U, 0xc0U
+  };
+  ZZPlayVideoInfo info;
+
+  memset(&info, 0, sizeof(info));
+  zzplay_probe_mpeg_program(program, sizeof(program), &info);
+  return info.is_program_stream && info.has_video_pes &&
+         info.has_audio_pes;
+}
+
 static int check_stats_and_transport(void)
 {
   ZZPlayStatsCore stats;
@@ -71,6 +86,15 @@ static int check_stats_and_transport(void)
   zzplay_stats_reset_report(&stats);
   if (stats.total_frames != 2U || stats.report_frames != 0U ||
       stats.report_decode_us != 0U) {
+    return 0;
+  }
+  zzplay_stats_record_sync(&stats, ZZPLAY_SYNC_HOLD, 1801);
+  zzplay_stats_record_sync(&stats, ZZPLAY_SYNC_PRESENT, -200);
+  zzplay_stats_record_sync(&stats, ZZPLAY_SYNC_DISCARD, -4000);
+  if (stats.hold_events != 1U || stats.presented_frames != 1U ||
+      stats.discarded_frames != 1U || stats.late_frames != 1U ||
+      stats.current_drift_pts != -4000 ||
+      stats.max_abs_drift_pts != 4000U) {
     return 0;
   }
 
@@ -167,6 +191,9 @@ int main(void)
   }
   if (!check_stats_and_transport()) {
     return 11;
+  }
+  if (!check_program_probe()) {
+    return 12;
   }
   return 0;
 }

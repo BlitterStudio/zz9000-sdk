@@ -8,7 +8,11 @@
 
 typedef enum ZZPlayState {
   ZZPLAY_STATE_PREPARING = 0,
+  ZZPLAY_STATE_PREBUFFERING,
   ZZPLAY_STATE_PLAYING,
+  ZZPLAY_STATE_PAUSED,
+  ZZPLAY_STATE_DRAINING,
+  ZZPLAY_STATE_LOOPING,
   ZZPLAY_STATE_STOPPED,
   ZZPLAY_STATE_ERROR
 } ZZPlayState;
@@ -41,7 +45,9 @@ typedef enum ZZPlayResource {
   ZZPLAY_RESOURCE_VIDEO_WINDOW,
   ZZPLAY_RESOURCE_SDK_CONTEXT,
   ZZPLAY_RESOURCE_INPUT_BUFFER,
+  ZZPLAY_RESOURCE_PCM_BUFFER,
   ZZPLAY_RESOURCE_VIDEO_SESSION,
+  ZZPLAY_RESOURCE_AUDIO_SINK,
   ZZPLAY_RESOURCE_TIMER,
   ZZPLAY_RESOURCE_COUNT
 } ZZPlayResource;
@@ -62,7 +68,13 @@ typedef int (*ZZPlayReleaseResource)(void *user,
                                      ZZPlayResource resource);
 
 void zzplay_core_init(ZZPlayCore *core);
+int zzplay_core_begin_prebuffer(ZZPlayCore *core);
 int zzplay_core_start(ZZPlayCore *core);
+int zzplay_core_pause(ZZPlayCore *core);
+int zzplay_core_resume(ZZPlayCore *core);
+int zzplay_core_begin_drain(ZZPlayCore *core);
+int zzplay_core_begin_loop(ZZPlayCore *core);
+int zzplay_core_restart_loop(ZZPlayCore *core);
 void zzplay_core_stop(ZZPlayCore *core, ZZPlayStopReason reason);
 void zzplay_core_fail(ZZPlayCore *core, ZZPlayFailure failure, int status);
 int zzplay_core_is_terminal(const ZZPlayCore *core);

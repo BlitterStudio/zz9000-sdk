@@ -34,6 +34,34 @@ void zzplay_stats_reset_report(ZZPlayStatsCore *stats)
   stats->report_frames = 0U;
 }
 
+void zzplay_stats_record_sync(ZZPlayStatsCore *stats,
+                              ZZPlaySyncDecision decision,
+                              int64_t drift_pts)
+{
+  uint64_t magnitude;
+
+  if (!stats) {
+    return;
+  }
+  stats->current_drift_pts = drift_pts;
+  magnitude = drift_pts < 0
+                  ? (drift_pts == INT64_MIN
+                         ? (UINT64_C(1) << 63)
+                         : (uint64_t)(-drift_pts))
+                  : (uint64_t)drift_pts;
+  if (magnitude > stats->max_abs_drift_pts) {
+    stats->max_abs_drift_pts = magnitude;
+  }
+  if (decision == ZZPLAY_SYNC_HOLD) {
+    stats->hold_events++;
+  } else if (decision == ZZPLAY_SYNC_DISCARD) {
+    stats->discarded_frames++;
+    stats->late_frames++;
+  } else {
+    stats->presented_frames++;
+  }
+}
+
 uint32_t zzplay_fps_milli(uint32_t frames, uint64_t elapsed_us)
 {
   uint64_t value;

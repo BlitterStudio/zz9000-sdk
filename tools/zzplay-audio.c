@@ -43,9 +43,12 @@ static int zzplay_audio_supports(ZZPlayMediaAudio media,
   if (backend == ZZPLAY_AUDIO_MHI) {
     return media == ZZPLAY_MEDIA_AUDIO_MP3;
   }
-  if (backend == ZZPLAY_AUDIO_AHI || backend == ZZPLAY_AUDIO_AX) {
+  if (backend == ZZPLAY_AUDIO_AHI) {
     return media == ZZPLAY_MEDIA_AUDIO_MP2 ||
            media == ZZPLAY_MEDIA_AUDIO_MP3;
+  }
+  if (backend == ZZPLAY_AUDIO_AX) {
+    return media == ZZPLAY_MEDIA_AUDIO_MP3;
   }
   return 0;
 }
@@ -101,6 +104,9 @@ ZZPlayBackendDecision zzplay_audio_select(
   if (decision.status == ZZPLAY_BACKEND_OK) {
     decision.fell_back =
         media == ZZPLAY_MEDIA_AUDIO_MP3 ? 1 : 0;
+    return decision;
+  }
+  if (media == ZZPLAY_MEDIA_AUDIO_MP2) {
     return decision;
   }
   decision = zzplay_audio_select_explicit(media, ZZPLAY_AUDIO_AX,

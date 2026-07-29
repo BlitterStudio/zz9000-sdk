@@ -35,6 +35,9 @@ static int check_options(void)
   char *help_argv[] = {
     (char *)"zzplay", (char *)"--help"
   };
+  char *audio_argv[] = {
+    (char *)"zzplay", (char *)"--audio=ahi", (char *)"movie.mpg"
+  };
   char *extra_argv[] = {
     (char *)"zzplay", (char *)"one.mpg", (char *)"two.mpg"
   };
@@ -46,7 +49,7 @@ static int check_options(void)
   if (zzplay_options_parse_cli(3, fps_argv, &options) !=
           ZZPLAY_OPTIONS_OK ||
       !options.show_fps || options.uncapped ||
-      options.audio_backend != ZZPLAY_AUDIO_NONE ||
+      options.audio_backend != ZZPLAY_AUDIO_AUTO ||
       options.path != fps_argv[2]) {
     return 0;
   }
@@ -55,6 +58,12 @@ static int check_options(void)
       !options.show_fps || !options.uncapped ||
       options.audio_backend != ZZPLAY_AUDIO_NONE ||
       options.path != benchmark_argv[2]) {
+    return 0;
+  }
+  if (zzplay_options_parse_cli(3, audio_argv, &options) !=
+          ZZPLAY_OPTIONS_OK ||
+      options.audio_backend != ZZPLAY_AUDIO_AHI ||
+      options.path != audio_argv[2]) {
     return 0;
   }
   if (zzplay_options_parse_cli(2, help_argv, &options) !=
@@ -116,6 +125,27 @@ static int check_terminal_states(void)
       core.failure != ZZPLAY_FAILURE_ALLOCATION ||
       core.status != 17 ||
       !zzplay_core_is_terminal(&core)) {
+    return 0;
+  }
+  return 1;
+}
+
+static int check_extended_lifecycle(void)
+{
+  ZZPlayCore core;
+
+  zzplay_core_init(&core);
+  if (!zzplay_core_begin_prebuffer(&core) ||
+      core.state != ZZPLAY_STATE_PREBUFFERING ||
+      !zzplay_core_start(&core) ||
+      !zzplay_core_pause(&core) ||
+      core.state != ZZPLAY_STATE_PAUSED ||
+      !zzplay_core_resume(&core) ||
+      !zzplay_core_begin_drain(&core) ||
+      core.state != ZZPLAY_STATE_DRAINING ||
+      !zzplay_core_begin_loop(&core) ||
+      !zzplay_core_restart_loop(&core) ||
+      core.state != ZZPLAY_STATE_PREBUFFERING) {
     return 0;
   }
   return 1;
@@ -193,6 +223,9 @@ int main(void)
   }
   if (!check_cleanup()) {
     return 4;
+  }
+  if (!check_extended_lifecycle()) {
+    return 5;
   }
   return 0;
 }

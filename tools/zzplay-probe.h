@@ -15,10 +15,16 @@ typedef struct ZZPlayVideoInfo {
   uint32_t width;
   uint32_t height;
   uint32_t frame_rate_milli;
+  int is_program_stream;
+  int has_video_pes;
+  int has_audio_pes;
 } ZZPlayVideoInfo;
 
 uint32_t zzplay_mpeg_frame_rate_milli(uint8_t code);
 int zzplay_probe_mpeg_sequence(const uint8_t *data,
+                               size_t length,
+                               ZZPlayVideoInfo *info);
+void zzplay_probe_mpeg_program(const uint8_t *data,
                                size_t length,
                                ZZPlayVideoInfo *info);
 int zzplay_probe_file(FILE *file, ZZPlayVideoInfo *info);

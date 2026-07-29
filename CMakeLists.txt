@@ -473,11 +473,14 @@ add_test(NAME media_session_abi_test COMMAND media_session_abi_test)
 
 add_library(zzplay_core STATIC
   tools/zzplay-audio.c
+  tools/zzplay-audio-clock.c
   tools/zzplay-core.c
+  tools/zzplay-media.c
   tools/zzplay-options.c
   tools/zzplay-probe.c
   tools/zzplay-stats.c
   tools/zzplay-stream.c
+  tools/zzplay-sync.c
   tools/zzplay-video.c
 )
 
@@ -507,6 +510,37 @@ add_executable(zzplay_backend_test
 
 target_link_libraries(zzplay_backend_test PRIVATE zzplay_core)
 add_test(NAME zzplay_backend_test COMMAND zzplay_backend_test)
+
+add_executable(zzplay_audio_clock_test
+  tests/zzplay_audio_clock_test.c
+)
+
+target_link_libraries(zzplay_audio_clock_test PRIVATE zzplay_core)
+add_test(NAME zzplay_audio_clock_test COMMAND zzplay_audio_clock_test)
+
+add_executable(zzplay_sync_test
+  tests/zzplay_sync_test.c
+)
+
+target_link_libraries(zzplay_sync_test PRIVATE zzplay_core)
+add_test(NAME zzplay_sync_test COMMAND zzplay_sync_test)
+
+add_executable(zzplay_media_test
+  tests/zzplay_media_test.c
+)
+
+target_link_libraries(zzplay_media_test PRIVATE zzplay_core)
+add_test(NAME zzplay_media_test COMMAND zzplay_media_test)
+
+add_executable(zzplay_ahi_source_test
+  tests/zzplay_ahi_source_test.c
+)
+
+add_test(
+  NAME zzplay_ahi_source_test
+  COMMAND zzplay_ahi_source_test
+          ${CMAKE_CURRENT_SOURCE_DIR}/tools/zzplay-ahi.c
+)
 
 add_executable(module_manifest_test
   tests/module_manifest_test.c

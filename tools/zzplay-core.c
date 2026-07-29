@@ -2,7 +2,6 @@
 
 #include "zzplay-core.h"
 #include "zzplay-controls.h"
-#include "zzplay-sync.h"
 
 #include <string.h>
 
@@ -17,10 +16,68 @@ void zzplay_core_init(ZZPlayCore *core)
 
 int zzplay_core_start(ZZPlayCore *core)
 {
-  if (!core || core->state != ZZPLAY_STATE_PREPARING) {
+  if (!core ||
+      (core->state != ZZPLAY_STATE_PREPARING &&
+       core->state != ZZPLAY_STATE_PREBUFFERING)) {
     return 0;
   }
   core->state = ZZPLAY_STATE_PLAYING;
+  return 1;
+}
+
+int zzplay_core_begin_prebuffer(ZZPlayCore *core)
+{
+  if (!core || core->state != ZZPLAY_STATE_PREPARING) {
+    return 0;
+  }
+  core->state = ZZPLAY_STATE_PREBUFFERING;
+  return 1;
+}
+
+int zzplay_core_pause(ZZPlayCore *core)
+{
+  if (!core || core->state != ZZPLAY_STATE_PLAYING) {
+    return 0;
+  }
+  core->state = ZZPLAY_STATE_PAUSED;
+  return 1;
+}
+
+int zzplay_core_resume(ZZPlayCore *core)
+{
+  if (!core || core->state != ZZPLAY_STATE_PAUSED) {
+    return 0;
+  }
+  core->state = ZZPLAY_STATE_PLAYING;
+  return 1;
+}
+
+int zzplay_core_begin_drain(ZZPlayCore *core)
+{
+  if (!core ||
+      (core->state != ZZPLAY_STATE_PLAYING &&
+       core->state != ZZPLAY_STATE_PREBUFFERING)) {
+    return 0;
+  }
+  core->state = ZZPLAY_STATE_DRAINING;
+  return 1;
+}
+
+int zzplay_core_begin_loop(ZZPlayCore *core)
+{
+  if (!core || core->state != ZZPLAY_STATE_DRAINING) {
+    return 0;
+  }
+  core->state = ZZPLAY_STATE_LOOPING;
+  return 1;
+}
+
+int zzplay_core_restart_loop(ZZPlayCore *core)
+{
+  if (!core || core->state != ZZPLAY_STATE_LOOPING) {
+    return 0;
+  }
+  core->state = ZZPLAY_STATE_PREBUFFERING;
   return 1;
 }
 
@@ -115,21 +172,4 @@ ZZPlayStopReason zzplay_control_stop_reason(int ctrl_c,
     return ZZPLAY_STOP_WINDOW_CLOSE;
   }
   return ZZPLAY_STOP_NONE;
-}
-
-uint32_t zzplay_frame_period_us(uint32_t frame_rate_milli)
-{
-  return frame_rate_milli == 0U
-             ? 0U
-             : 1000000000U / frame_rate_milli;
-}
-
-uint32_t zzplay_pacing_wait_us(uint32_t frame_period_us,
-                               uint32_t elapsed_us,
-                               int uncapped)
-{
-  if (uncapped || elapsed_us >= frame_period_us) {
-    return 0U;
-  }
-  return frame_period_us - elapsed_us;
 }
