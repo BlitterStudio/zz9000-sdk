@@ -9,9 +9,14 @@
  */
 
 #include "zz9k/sdk.h"
+#include "zzplay-controls.h"
+#include "zzplay-core.h"
+#include "zzplay-options.h"
 #include "zzplay-probe.h"
 #include "zzplay-stats.h"
 #include "zzplay-stream.h"
+#include "zzplay-sync.h"
+#include "zzplay-video.h"
 
 #include <devices/timer.h>
 #include <exec/libraries.h>
@@ -25,13 +30,9 @@
 
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #define ZZPLAY_INPUT_BYTES (64U * 1024U)
-#define ZZPLAY_PROBE_BYTES (256U * 1024U)
-#define ZZPLAY_MAX_WIDTH 1920U
-#define ZZPLAY_MAX_HEIGHT 1080U
 #define ZZPLAY_FPS_REPORT_US 2000000U
 
 struct Library *P96Base;
@@ -47,10 +48,21 @@ struct ZZPlayTimer {
 struct ZZPlayStats {
   TimeVal_Type last_sample;
   TimeVal_Type report_started;
-  uint64_t wall_us;
-  uint64_t decode_us;
-  uint64_t report_decode_us;
-  uint32_t report_frames;
+  ZZPlayStatsCore core;
+};
+
+struct ZZPlayRuntime {
+  ZZPlayCore core;
+  ZZPlayOptions options;
+  FILE *file;
+  ZZ9KContext *ctx;
+  ZZ9KSharedBuffer input;
+  struct ZZPlayTimer timer;
+  struct ZZPlayStats stats;
+  struct Window *window;
+  struct BitMap *bitmap;
+  uint32_t session;
+  uint32_t frames;
 };
 
 static uint32_t zzplay_elapsed_us(const TimeVal_Type *start,
@@ -81,6 +93,7 @@ static void zzplay_print_fps(const char *label, uint32_t playback_milli,
 static void zzplay_stats_start(struct ZZPlayStats *stats)
 {
   memset(stats, 0, sizeof(*stats));
+  zzplay_stats_reset(&stats->core);
   GetSysTime(&stats->last_sample);
   stats->report_started = stats->last_sample;
 }
@@ -94,33 +107,31 @@ static void zzplay_stats_frame(struct ZZPlayStats *stats,
 
   GetSysTime(&now);
   sample_us = zzplay_elapsed_us(&stats->last_sample, &now);
-  stats->wall_us += sample_us;
-  stats->decode_us += decode_us;
-  stats->report_decode_us += decode_us;
-  stats->report_frames++;
+  zzplay_stats_record_frame(&stats->core, sample_us, decode_us);
   stats->last_sample = now;
 
   report_us = zzplay_elapsed_us(&stats->report_started, &now);
   if (report_us >= ZZPLAY_FPS_REPORT_US) {
-    zzplay_print_fps("current",
-                     zzplay_fps_milli(stats->report_frames, report_us),
-                     zzplay_fps_milli(stats->report_frames,
-                                      stats->report_decode_us));
+    zzplay_print_fps(
+        "current",
+        zzplay_fps_milli(stats->core.report_frames, report_us),
+        zzplay_fps_milli(stats->core.report_frames,
+                         stats->core.report_decode_us));
     stats->report_started = now;
-    stats->report_decode_us = 0U;
-    stats->report_frames = 0U;
+    zzplay_stats_reset_report(&stats->core);
   }
 }
 
-static void zzplay_stats_finish(const struct ZZPlayStats *stats,
-                                uint32_t frames)
+static void zzplay_stats_finish(const struct ZZPlayStats *stats)
 {
-  if (frames == 0U || stats->wall_us == 0U) {
+  if (stats->core.total_frames == 0U || stats->core.wall_us == 0U) {
     printf("zzplay: average fps unavailable\n");
     return;
   }
-  zzplay_print_fps("average", zzplay_fps_milli(frames, stats->wall_us),
-                   zzplay_fps_milli(frames, stats->decode_us));
+  zzplay_print_fps(
+      "average",
+      zzplay_fps_milli(stats->core.total_frames, stats->core.wall_us),
+      zzplay_fps_milli(stats->core.total_frames, stats->core.decode_us));
 }
 
 static int zzplay_timer_open(struct ZZPlayTimer *timer)
@@ -137,7 +148,7 @@ static int zzplay_timer_open(struct ZZPlayTimer *timer)
     timer->port = 0;
     return 0;
   }
-  if (OpenDevice(TIMERNAME, UNIT_MICROHZ,
+  if (OpenDevice((CONST_STRPTR)TIMERNAME, UNIT_MICROHZ,
                  (struct IORequest *)timer->request, 0) != 0) {
     DeleteIORequest((struct IORequest *)timer->request);
     DeleteMsgPort(timer->port);
@@ -199,61 +210,21 @@ static uint32_t zzplay_elapsed_us(const TimeVal_Type *start,
   return seconds * 1000000U + (uint32_t)micros;
 }
 
-static int zzplay_probe_file(FILE *file, ZZPlayVideoInfo *info)
-{
-  uint8_t *buffer;
-  size_t carry = 0U;
-  size_t total = 0U;
-  int found = 0;
-
-  buffer = (uint8_t *)malloc(4096U + 7U);
-  if (!buffer) {
-    return 0;
-  }
-  while (total < ZZPLAY_PROBE_BYTES) {
-    size_t want = 4096U;
-    size_t got;
-    size_t available;
-
-    if (want > ZZPLAY_PROBE_BYTES - total) {
-      want = ZZPLAY_PROBE_BYTES - total;
-    }
-    got = fread(buffer + carry, 1U, want, file);
-    available = carry + got;
-    if (zzplay_probe_mpeg_sequence(buffer, available, info)) {
-      found = 1;
-      break;
-    }
-    total += got;
-    if (got == 0U) {
-      break;
-    }
-    carry = available < 7U ? available : 7U;
-    memmove(buffer, buffer + available - carry, carry);
-  }
-  free(buffer);
-  if (fseek(file, 0L, SEEK_SET) != 0) {
-    return 0;
-  }
-  clearerr(file);
-  return found;
-}
-
-static int zzplay_window_stop(struct Window *window)
+static ZZPlayStopReason zzplay_poll_stop(struct Window *window)
 {
   struct IntuiMessage *message;
-  int stop = 0;
+  int ctrl_c;
+  int window_close = 0;
 
-  if ((SetSignal(0L, 0L) & SIGBREAKF_CTRL_C) != 0U) {
-    stop = 1;
-  }
-  while (window && (message = (struct IntuiMessage *)GetMsg(window->UserPort))) {
+  ctrl_c = (SetSignal(0L, 0L) & SIGBREAKF_CTRL_C) != 0U;
+  while (window &&
+         (message = (struct IntuiMessage *)GetMsg(window->UserPort))) {
     if (message->Class == IDCMP_CLOSEWINDOW) {
-      stop = 1;
+      window_close = 1;
     }
     ReplyMsg((struct Message *)message);
   }
-  return stop;
+  return zzplay_control_stop_reason(ctrl_c, window_close);
 }
 
 static struct Window *zzplay_open_pip(const ZZPlayVideoInfo *info,
@@ -323,80 +294,120 @@ static int zzplay_decode_once(ZZ9KContext *ctx, uint32_t session,
                               ZZ9KVideoSessionResult *result)
 {
   ZZ9KVideoSessionDecodeDesc decode;
+
   memset(&decode, 0, sizeof(decode));
   decode.session = session;
   return zz9k_video_session_decode(ctx, &decode, result);
 }
 
+static void zzplay_fail(struct ZZPlayRuntime *runtime,
+                        ZZPlayFailure failure,
+                        int status)
+{
+  zzplay_core_fail(&runtime->core, failure, status);
+}
+
+static int zzplay_release_resource(void *user,
+                                   ZZPlayResource resource)
+{
+  struct ZZPlayRuntime *runtime = (struct ZZPlayRuntime *)user;
+
+  switch (resource) {
+    case ZZPLAY_RESOURCE_TIMER:
+      zzplay_timer_close(&runtime->timer);
+      break;
+    case ZZPLAY_RESOURCE_VIDEO_SESSION:
+      if (runtime->session != 0U && runtime->ctx) {
+        ZZ9KVideoSessionResult result;
+        int status = zz9k_video_session_close(
+            runtime->ctx, runtime->session, 0U, &result);
+        runtime->session = 0U;
+        return status;
+      }
+      break;
+    case ZZPLAY_RESOURCE_INPUT_BUFFER:
+      if (runtime->input.handle != 0U && runtime->ctx) {
+        (void)zz9k_free_shared(runtime->ctx, runtime->input.handle);
+      }
+      memset(&runtime->input, 0, sizeof(runtime->input));
+      break;
+    case ZZPLAY_RESOURCE_SDK_CONTEXT:
+      if (runtime->ctx) {
+        zz9k_close(runtime->ctx);
+        runtime->ctx = 0;
+      }
+      break;
+    case ZZPLAY_RESOURCE_VIDEO_WINDOW:
+      if (runtime->window) {
+        p96PIP_Close(runtime->window);
+        runtime->window = 0;
+        runtime->bitmap = 0;
+      }
+      break;
+    case ZZPLAY_RESOURCE_P96_LIBRARY:
+      if (P96Base) {
+        CloseLibrary(P96Base);
+        P96Base = 0;
+      }
+      break;
+    case ZZPLAY_RESOURCE_INPUT_FILE:
+      if (runtime->file) {
+        (void)fclose(runtime->file);
+        runtime->file = 0;
+      }
+      break;
+    default:
+      return ZZ9K_STATUS_BAD_REQUEST;
+  }
+  return ZZ9K_STATUS_OK;
+}
+
 int main(int argc, char **argv)
 {
-  const char *path = 0;
-  FILE *file = 0;
+  struct ZZPlayRuntime runtime;
+  ZZPlayOptionsResult options_result;
   ZZPlayVideoInfo info;
+  ZZPlayTransport transport;
   ZZ9KBoard board;
-  ZZ9KContext *ctx = 0;
   ZZ9KCaps caps;
   ZZ9KServiceInfo service;
-  ZZ9KSharedBuffer input;
   ZZ9KVideoSessionBeginDesc begin;
   ZZ9KVideoSessionWriteDesc write;
   ZZ9KVideoSessionResult result;
-  struct ZZPlayTimer timer;
-  struct ZZPlayStats stats;
-  struct Window *window = 0;
-  struct BitMap *bitmap = 0;
-  uint32_t session = 0U;
   uint32_t frame_period_us;
-  uint32_t frames = 0U;
   LONG pip_error = 0;
-  int status = ZZ9K_STATUS_OK;
-  int timer_open = 0;
-  int stop = 0;
-  int done = 0;
-  int eof = 0;
-  int eof_sent = 0;
-  int show_fps = 0;
-  int uncapped = 0;
-  uint32_t accepted_total = 0U;
-  uint32_t pending_offset = 0U;
-  uint32_t pending_length = 0U;
-  int i;
+  int cleanup_status;
 
+  memset(&runtime, 0, sizeof(runtime));
   memset(&info, 0, sizeof(info));
   memset(&board, 0, sizeof(board));
-  memset(&input, 0, sizeof(input));
-  memset(&timer, 0, sizeof(timer));
-  memset(&stats, 0, sizeof(stats));
-  for (i = 1; i < argc; i++) {
-    if (strcmp(argv[i], "--fps") == 0) {
-      show_fps = 1;
-    } else if (strcmp(argv[i], "--benchmark") == 0) {
-      show_fps = 1;
-      uncapped = 1;
-    } else if (strcmp(argv[i], "--help") == 0) {
-      zzplay_usage(stdout);
-      return 0;
-    } else if (!path) {
-      path = argv[i];
-    } else {
-      zzplay_usage(stderr);
-      return 20;
-    }
+  zzplay_core_init(&runtime.core);
+  zzplay_transport_init(&transport);
+
+  options_result = zzplay_options_parse_cli(
+      argc, argv, &runtime.options);
+  if (options_result == ZZPLAY_OPTIONS_HELP) {
+    zzplay_usage(stdout);
+    return 0;
   }
-  if (!path) {
+  if (options_result != ZZPLAY_OPTIONS_OK) {
     zzplay_usage(stderr);
     return 20;
   }
-  file = fopen(path, "rb");
-  if (!file) {
-    fprintf(stderr, "zzplay: cannot open %s\n", path);
+
+  runtime.file = fopen(runtime.options.path, "rb");
+  if (!runtime.file) {
+    fprintf(stderr, "zzplay: cannot open %s\n", runtime.options.path);
     return 20;
   }
-  if (!zzplay_probe_file(file, &info) || info.width < 16U ||
-      info.height < 16U || info.width > ZZPLAY_MAX_WIDTH ||
-      info.height > ZZPLAY_MAX_HEIGHT) {
+  (void)zzplay_resource_acquire(
+      &runtime.core.resources, ZZPLAY_RESOURCE_INPUT_FILE);
+
+  if (!zzplay_probe_file(runtime.file, &info) ||
+      !zzplay_video_info_supported(&info)) {
     fprintf(stderr, "zzplay: no supported MPEG sequence header found\n");
-    status = ZZ9K_STATUS_UNSUPPORTED;
+    zzplay_fail(&runtime, ZZPLAY_FAILURE_INVALID_INPUT,
+                ZZ9K_STATUS_UNSUPPORTED);
     goto cleanup;
   }
   printf("zzplay: MPEG-1/PS %lux%lu, %lu.%03lu fps\n",
@@ -406,47 +417,74 @@ int main(int argc, char **argv)
 
   if (zz9k_find_board(&board) != ZZ9K_STATUS_OK ||
       board.zorro_version != 3U) {
-    fprintf(stderr, "zzplay: the P96 video window currently requires Zorro 3\n");
-    status = ZZ9K_STATUS_UNSUPPORTED;
+    fprintf(stderr,
+            "zzplay: the P96 video window currently requires Zorro 3\n");
+    zzplay_fail(&runtime, ZZPLAY_FAILURE_UNSUPPORTED_BOARD,
+                ZZ9K_STATUS_UNSUPPORTED);
     goto cleanup;
   }
+
   P96Base = OpenLibrary((CONST_STRPTR)"Picasso96API.library", 2U);
   if (!P96Base) {
     fprintf(stderr, "zzplay: cannot open Picasso96API.library\n");
-    status = ZZ9K_STATUS_UNSUPPORTED;
+    zzplay_fail(&runtime, ZZPLAY_FAILURE_P96, ZZ9K_STATUS_UNSUPPORTED);
     goto cleanup;
   }
-  window = zzplay_open_pip(&info, &bitmap, &pip_error);
-  if (!window) {
+  (void)zzplay_resource_acquire(
+      &runtime.core.resources, ZZPLAY_RESOURCE_P96_LIBRARY);
+
+  runtime.window = zzplay_open_pip(&info, &runtime.bitmap, &pip_error);
+  if (!runtime.window) {
     fprintf(stderr, "zzplay: cannot open P96 PIP window (error %ld)\n",
             (long)pip_error);
-    status = ZZ9K_STATUS_UNSUPPORTED;
+    zzplay_fail(&runtime, ZZPLAY_FAILURE_PIP, ZZ9K_STATUS_UNSUPPORTED);
     goto cleanup;
   }
-  status = zz9k_open(&ctx);
-  if (status != ZZ9K_STATUS_OK) {
-    fprintf(stderr, "zzplay: SDK open failed: %s\n", zz9k_status_name(status));
+  (void)zzplay_resource_acquire(
+      &runtime.core.resources, ZZPLAY_RESOURCE_VIDEO_WINDOW);
+
+  cleanup_status = zz9k_open(&runtime.ctx);
+  if (runtime.ctx) {
+    (void)zzplay_resource_acquire(
+        &runtime.core.resources, ZZPLAY_RESOURCE_SDK_CONTEXT);
+  }
+  if (cleanup_status != ZZ9K_STATUS_OK) {
+    fprintf(stderr, "zzplay: SDK open failed: %s\n",
+            zz9k_status_name(cleanup_status));
+    zzplay_fail(&runtime, ZZPLAY_FAILURE_SDK, cleanup_status);
     goto cleanup;
   }
-  status = zz9k_query_caps(ctx, &caps);
-  if (status != ZZ9K_STATUS_OK ||
+  cleanup_status = zz9k_query_caps(runtime.ctx, &caps);
+  if (cleanup_status != ZZ9K_STATUS_OK ||
       (caps.capability_bits & ZZ9K_CAP_VIDEO_DECODE) == 0U) {
     fprintf(stderr, "zzplay: firmware does not advertise video decode\n");
-    status = ZZ9K_STATUS_UNSUPPORTED;
+    zzplay_fail(&runtime, ZZPLAY_FAILURE_CAPABILITY,
+                ZZ9K_STATUS_UNSUPPORTED);
     goto cleanup;
   }
-  status = zz9k_query_service(ctx, ZZ9K_SERVICE_VIDEO, &service);
-  if (status != ZZ9K_STATUS_OK ||
+  cleanup_status = zz9k_query_service(
+      runtime.ctx, ZZ9K_SERVICE_VIDEO, &service);
+  if (cleanup_status != ZZ9K_STATUS_OK ||
       !zzplay_video_backend_available(service.flags)) {
-    fprintf(stderr, "zzplay: required MPEG-1/PS direct-overlay backend is unavailable\n");
-    status = ZZ9K_STATUS_UNSUPPORTED;
+    fprintf(stderr,
+            "zzplay: required MPEG-1/PS direct-overlay backend "
+            "is unavailable\n");
+    zzplay_fail(&runtime, ZZPLAY_FAILURE_CAPABILITY,
+                ZZ9K_STATUS_UNSUPPORTED);
     goto cleanup;
   }
-  status = zz9k_alloc_shared(ctx, ZZPLAY_INPUT_BYTES, 64U,
-                             ZZ9K_ALLOC_HOST_WINDOW, &input);
-  if (status != ZZ9K_STATUS_OK || !input.data) {
+
+  cleanup_status = zz9k_alloc_shared(
+      runtime.ctx, ZZPLAY_INPUT_BYTES, 64U,
+      ZZ9K_ALLOC_HOST_WINDOW, &runtime.input);
+  if (runtime.input.handle != 0U) {
+    (void)zzplay_resource_acquire(
+        &runtime.core.resources, ZZPLAY_RESOURCE_INPUT_BUFFER);
+  }
+  if (cleanup_status != ZZ9K_STATUS_OK || !runtime.input.data) {
     fprintf(stderr, "zzplay: input buffer allocation failed: %s\n",
-            zz9k_status_name(status));
+            zz9k_status_name(cleanup_status));
+    zzplay_fail(&runtime, ZZPLAY_FAILURE_ALLOCATION, cleanup_status);
     goto cleanup;
   }
   memset(&begin, 0, sizeof(begin));
@@ -455,164 +493,155 @@ int main(int argc, char **argv)
   begin.width = info.width;
   begin.height = info.height;
   begin.output_format = ZZ9K_VIDEO_OUTPUT_DIRECT_OVERLAY;
-  status = zz9k_video_session_begin(ctx, &begin, &result);
-  if (status != ZZ9K_STATUS_OK) {
+  memset(&result, 0, sizeof(result));
+  cleanup_status = zz9k_video_session_begin(
+      runtime.ctx, &begin, &result);
+  if (result.session != 0U) {
+    runtime.session = result.session;
+    (void)zzplay_resource_acquire(
+        &runtime.core.resources, ZZPLAY_RESOURCE_VIDEO_SESSION);
+  }
+  if (cleanup_status != ZZ9K_STATUS_OK) {
     fprintf(stderr, "zzplay: session begin failed: %s\n",
-            zz9k_status_name(status));
+            zz9k_status_name(cleanup_status));
+    zzplay_fail(&runtime, ZZPLAY_FAILURE_SESSION, cleanup_status);
     goto cleanup;
   }
-  session = result.session;
-  timer_open = zzplay_timer_open(&timer);
-  if (!timer_open) {
+  if (!zzplay_timer_open(&runtime.timer)) {
     fprintf(stderr, "zzplay: cannot open timer.device\n");
-    status = ZZ9K_STATUS_IO_ERROR;
+    zzplay_fail(&runtime, ZZPLAY_FAILURE_TIMER, ZZ9K_STATUS_IO_ERROR);
     goto cleanup;
   }
-  frame_period_us = 1000000000U / info.frame_rate_milli;
-  if (show_fps) {
+  (void)zzplay_resource_acquire(
+      &runtime.core.resources, ZZPLAY_RESOURCE_TIMER);
+
+  frame_period_us = zzplay_frame_period_us(info.frame_rate_milli);
+  if (runtime.options.show_fps) {
     printf("zzplay: FPS reporting enabled%s\n",
-           uncapped ? " (uncapped benchmark)" : "");
-    zzplay_stats_start(&stats);
+           runtime.options.uncapped ? " (uncapped benchmark)" : "");
+    zzplay_stats_start(&runtime.stats);
   }
   printf("zzplay: frame path direct planar overlay\n");
+  (void)zzplay_core_start(&runtime.core);
 
-  while (!stop && !done) {
-    if (pending_length == 0U && !eof) {
-      size_t got = fread((void *)(uintptr_t)input.data, 1U,
-                         input.length, file);
+  while (runtime.core.state == ZZPLAY_STATE_PLAYING) {
+    if (transport.pending_length == 0U && !transport.eof) {
+      size_t got = fread((void *)(uintptr_t)runtime.input.data, 1U,
+                         runtime.input.length, runtime.file);
 
-      if (ferror(file)) {
+      if (ferror(runtime.file)) {
         fprintf(stderr, "zzplay: input read failed\n");
-        status = ZZ9K_STATUS_IO_ERROR;
+        zzplay_fail(&runtime, ZZPLAY_FAILURE_IO, ZZ9K_STATUS_IO_ERROR);
         break;
       }
-      pending_offset = 0U;
-      pending_length = (uint32_t)got;
-      eof = got < input.length;
+      zzplay_transport_set_chunk(
+          &transport, (uint32_t)got, got < runtime.input.length);
     }
+
     memset(&write, 0, sizeof(write));
-    write.session = session;
-    write.src_handle = input.handle;
-    write.src_offset = pending_offset;
-    write.src_length = pending_length;
-    write.flags = (eof && pending_length == 0U)
-                      ? ZZ9K_VIDEO_SESSION_WRITE_EOF
-                      : 0U;
-    status = zz9k_video_session_write(ctx, &write, &result);
-    if (status != ZZ9K_STATUS_OK) {
+    write.session = runtime.session;
+    write.src_handle = runtime.input.handle;
+    write.src_offset = transport.pending_offset;
+    write.src_length = transport.pending_length;
+    write.flags = zzplay_transport_write_flags(&transport);
+    cleanup_status = zz9k_video_session_write(
+        runtime.ctx, &write, &result);
+    if (cleanup_status != ZZ9K_STATUS_OK) {
       fprintf(stderr, "zzplay: stream write failed: %s\n",
-              zz9k_status_name(status));
+              zz9k_status_name(cleanup_status));
+      zzplay_fail(&runtime, ZZPLAY_FAILURE_IO, cleanup_status);
       break;
     }
     if (write.src_length != 0U) {
-      if (!zzplay_advance_input(&pending_offset, &pending_length,
-                                &accepted_total,
-                                result.bytes_accepted)) {
-        fprintf(stderr, "zzplay: firmware reported invalid input progress\n");
-        status = ZZ9K_STATUS_INTERNAL_ERROR;
+      if (!zzplay_transport_advance(
+              &transport, result.bytes_accepted)) {
+        fprintf(stderr,
+                "zzplay: firmware reported invalid input progress\n");
+        zzplay_fail(&runtime, ZZPLAY_FAILURE_PROTOCOL,
+                    ZZ9K_STATUS_INTERNAL_ERROR);
         break;
       }
     } else {
-      eof_sent = 1;
+      transport.eof_sent = 1;
     }
 
-    for (;;) {
+    while (runtime.core.state == ZZPLAY_STATE_PLAYING) {
       TimeVal_Type started;
       TimeVal_Type ended;
+      ZZPlayStopReason stop_reason;
       ZZPlayVideoResultAction action;
       uint32_t elapsed = 0U;
+      uint32_t wait_us;
 
-      stop = zzplay_window_stop(window);
-      if (stop) {
+      stop_reason = zzplay_poll_stop(runtime.window);
+      if (stop_reason != ZZPLAY_STOP_NONE) {
+        zzplay_core_stop(&runtime.core, stop_reason);
         break;
       }
-      if (timer_open) {
-        GetSysTime(&started);
-      }
-      status = zzplay_decode_once(ctx, session, &result);
-      if (status != ZZ9K_STATUS_OK) {
+      GetSysTime(&started);
+      cleanup_status = zzplay_decode_once(
+          runtime.ctx, runtime.session, &result);
+      if (cleanup_status != ZZ9K_STATUS_OK) {
         fprintf(stderr, "zzplay: frame decode failed: %s\n",
-                zz9k_status_name(status));
-        stop = 1;
+                zz9k_status_name(cleanup_status));
+        zzplay_fail(&runtime, ZZPLAY_FAILURE_SESSION, cleanup_status);
         break;
       }
+
       action = zzplay_video_result_action(result.flags);
       if (zzplay_video_result_has_frame(result.flags)) {
-        frames++;
+        runtime.frames++;
         if (result.frame_rate_milli != 0U) {
-          frame_period_us = 1000000000U / result.frame_rate_milli;
+          frame_period_us =
+              zzplay_frame_period_us(result.frame_rate_milli);
         }
-        if (timer_open && !uncapped) {
-          GetSysTime(&ended);
-          elapsed = zzplay_elapsed_us(&started, &ended);
-          if (elapsed < frame_period_us) {
-            zzplay_wait_us(&timer, frame_period_us - elapsed);
-          }
-        }
-        if (show_fps) {
-          if (uncapped) {
-            GetSysTime(&ended);
-            elapsed = zzplay_elapsed_us(&started, &ended);
-          }
-          zzplay_stats_frame(&stats, elapsed);
+        GetSysTime(&ended);
+        elapsed = zzplay_elapsed_us(&started, &ended);
+        wait_us = zzplay_pacing_wait_us(
+            frame_period_us, elapsed, runtime.options.uncapped);
+        zzplay_wait_us(&runtime.timer, wait_us);
+        if (runtime.options.show_fps) {
+          zzplay_stats_frame(&runtime.stats, elapsed);
         }
       }
+
       if (action == ZZPLAY_VIDEO_RESULT_DONE) {
-        done = 1;
+        zzplay_core_stop(&runtime.core, ZZPLAY_STOP_EOF);
         break;
       }
       if (action == ZZPLAY_VIDEO_RESULT_NEED_INPUT) {
-        if (pending_length != 0U || (eof && !eof_sent)) {
+        if (transport.pending_length != 0U ||
+            (transport.eof && !transport.eof_sent)) {
           break;
         }
-        if (eof) {
+        if (transport.eof) {
           fprintf(stderr, "zzplay: truncated stream at end of input\n");
-          status = ZZ9K_STATUS_IO_ERROR;
-          stop = 1;
+          zzplay_fail(&runtime, ZZPLAY_FAILURE_IO,
+                      ZZ9K_STATUS_IO_ERROR);
         }
         break;
       }
       if (action == ZZPLAY_VIDEO_RESULT_INVALID) {
-        fprintf(stderr, "zzplay: decoder returned an unknown state\n");
-        status = ZZ9K_STATUS_INTERNAL_ERROR;
-        stop = 1;
+        fprintf(stderr,
+                "zzplay: decoder returned an unknown state\n");
+        zzplay_fail(&runtime, ZZPLAY_FAILURE_PROTOCOL,
+                    ZZ9K_STATUS_INTERNAL_ERROR);
         break;
       }
     }
   }
 
 cleanup:
-  if (session != 0U && ctx) {
-    ZZ9KVideoSessionResult close_result;
-    int close_status = zz9k_video_session_close(ctx, session, 0U,
-                                                &close_result);
-    if (status == ZZ9K_STATUS_OK && close_status != ZZ9K_STATUS_OK) {
-      status = close_status;
-    }
+  cleanup_status = zzplay_resources_release_all(
+      &runtime.core.resources, zzplay_release_resource, &runtime);
+  if (runtime.core.state != ZZPLAY_STATE_ERROR &&
+      cleanup_status != ZZ9K_STATUS_OK) {
+    zzplay_fail(&runtime, ZZPLAY_FAILURE_SESSION, cleanup_status);
   }
-  if (timer_open) {
-    zzplay_timer_close(&timer);
-  }
-  if (input.handle != 0U && ctx) {
-    (void)zz9k_free_shared(ctx, input.handle);
-  }
-  if (ctx) {
-    zz9k_close(ctx);
-  }
-  if (window) {
-    p96PIP_Close(window);
-  }
-  if (P96Base) {
-    CloseLibrary(P96Base);
-    P96Base = 0;
-  }
-  if (file) {
-    fclose(file);
-  }
-  if (status == ZZ9K_STATUS_OK) {
-    printf("zzplay: %lu frames\n", (unsigned long)frames);
-    if (show_fps) {
-      zzplay_stats_finish(&stats, frames);
+  if (runtime.core.state != ZZPLAY_STATE_ERROR) {
+    printf("zzplay: %lu frames\n", (unsigned long)runtime.frames);
+    if (runtime.options.show_fps) {
+      zzplay_stats_finish(&runtime.stats);
     }
     return 0;
   }

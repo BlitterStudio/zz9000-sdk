@@ -5,7 +5,91 @@
 #include "../tools/zzplay-stream.h"
 
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
+
+static int check_file_probe(void)
+{
+  uint8_t split[4101];
+  static const uint8_t header[8] = {
+    0x00U, 0x00U, 0x01U, 0xb3U, 0x14U, 0x00U, 0xf0U, 0x13U
+  };
+  FILE *file;
+  ZZPlayVideoInfo info;
+
+  memset(split, 0x55, sizeof(split));
+  memcpy(split + 4093U, header, sizeof(header));
+  file = tmpfile();
+  if (!file) {
+    return 0;
+  }
+  if (fwrite(split, 1U, sizeof(split), file) != sizeof(split) ||
+      fflush(file) != 0) {
+    fclose(file);
+    return 0;
+  }
+  memset(&info, 0, sizeof(info));
+  if (!zzplay_probe_file(file, &info) || ftell(file) != 0L ||
+      info.width != 320U || info.height != 240U ||
+      info.frame_rate_milli != 25000U ||
+      !zzplay_video_info_supported(&info)) {
+    fclose(file);
+    return 0;
+  }
+  fclose(file);
+
+  file = tmpfile();
+  if (!file) {
+    return 0;
+  }
+  if (fwrite(header, 1U, 7U, file) != 7U || fflush(file) != 0 ||
+      zzplay_probe_file(file, &info) || ftell(file) != 0L) {
+    fclose(file);
+    return 0;
+  }
+  fclose(file);
+
+  info.width = 15U;
+  info.height = 240U;
+  info.frame_rate_milli = 25000U;
+  return !zzplay_video_info_supported(&info);
+}
+
+static int check_stats_and_transport(void)
+{
+  ZZPlayStatsCore stats;
+  ZZPlayTransport transport;
+
+  zzplay_stats_reset(&stats);
+  zzplay_stats_record_frame(&stats, 40000U, 12000U);
+  zzplay_stats_record_frame(&stats, 40000U, 10000U);
+  if (stats.total_frames != 2U || stats.report_frames != 2U ||
+      stats.wall_us != 80000U || stats.decode_us != 22000U ||
+      stats.report_decode_us != 22000U) {
+    return 0;
+  }
+  zzplay_stats_reset_report(&stats);
+  if (stats.total_frames != 2U || stats.report_frames != 0U ||
+      stats.report_decode_us != 0U) {
+    return 0;
+  }
+
+  zzplay_transport_init(&transport);
+  zzplay_transport_set_chunk(&transport, 4096U, 0);
+  if (zzplay_transport_write_flags(&transport) != 0U ||
+      !zzplay_transport_advance(&transport, 1024U) ||
+      transport.pending_offset != 1024U ||
+      transport.pending_length != 3072U) {
+    return 0;
+  }
+  zzplay_transport_set_chunk(&transport, 0U, 1);
+  if (zzplay_transport_write_flags(&transport) !=
+      ZZ9K_VIDEO_SESSION_WRITE_EOF) {
+    return 0;
+  }
+  transport.eof_sent = 1;
+  return zzplay_transport_write_flags(&transport) == 0U;
+}
 
 int main(void)
 {
@@ -77,6 +161,12 @@ int main(void)
           ZZ9K_VIDEO_SESSION_RESULT_DONE) ||
       zzplay_video_result_action(0U) != ZZPLAY_VIDEO_RESULT_INVALID) {
     return 9;
+  }
+  if (!check_file_probe()) {
+    return 10;
+  }
+  if (!check_stats_and_transport()) {
+    return 11;
   }
   return 0;
 }

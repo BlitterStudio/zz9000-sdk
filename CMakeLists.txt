@@ -459,17 +459,42 @@ target_include_directories(video_session_abi_test
 
 add_test(NAME video_session_abi_test COMMAND video_session_abi_test)
 
-add_executable(zzplay_probe_test
-  tests/zzplay_probe_test.c
+add_library(zzplay_core STATIC
+  tools/zzplay-audio.c
+  tools/zzplay-core.c
+  tools/zzplay-options.c
+  tools/zzplay-probe.c
+  tools/zzplay-stats.c
+  tools/zzplay-stream.c
+  tools/zzplay-video.c
 )
 
-target_include_directories(zzplay_probe_test
-  PRIVATE
+target_include_directories(zzplay_core
+  PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/tools
 )
 
+add_executable(zzplay_probe_test
+  tests/zzplay_probe_test.c
+)
+
+target_link_libraries(zzplay_probe_test PRIVATE zzplay_core)
 add_test(NAME zzplay_probe_test COMMAND zzplay_probe_test)
+
+add_executable(zzplay_core_test
+  tests/zzplay_core_test.c
+)
+
+target_link_libraries(zzplay_core_test PRIVATE zzplay_core)
+add_test(NAME zzplay_core_test COMMAND zzplay_core_test)
+
+add_executable(zzplay_backend_test
+  tests/zzplay_backend_test.c
+)
+
+target_link_libraries(zzplay_backend_test PRIVATE zzplay_core)
+add_test(NAME zzplay_backend_test COMMAND zzplay_backend_test)
 
 add_executable(module_manifest_test
   tests/module_manifest_test.c
