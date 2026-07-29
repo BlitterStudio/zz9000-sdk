@@ -532,6 +532,152 @@ static inline int zz9k_reply_video_session_result(
   return ZZ9K_STATUS_OK;
 }
 
+static inline int zz9k_media_main_opcode_known(uint16_t opcode)
+{
+  return opcode == ZZ9K_OP_MEDIA_SESSION_BEGIN ||
+         opcode == ZZ9K_OP_MEDIA_SESSION_WRITE ||
+         opcode == ZZ9K_OP_MEDIA_SESSION_DECODE ||
+         opcode == ZZ9K_OP_MEDIA_SESSION_PRESENT ||
+         opcode == ZZ9K_OP_MEDIA_SESSION_DISCARD ||
+         opcode == ZZ9K_OP_MEDIA_SESSION_CLOSE;
+}
+
+static inline uint32_t zz9k_media_session_known_result_flags(void)
+{
+  return ZZ9K_MEDIA_SESSION_RESULT_HEADER_READY |
+         ZZ9K_MEDIA_SESSION_RESULT_NEED_INPUT |
+         ZZ9K_MEDIA_SESSION_RESULT_FRAME_HELD |
+         ZZ9K_MEDIA_SESSION_RESULT_DONE |
+         ZZ9K_MEDIA_SESSION_RESULT_DERIVED_TIME |
+         ZZ9K_MEDIA_SESSION_RESULT_DISCONTINUITY |
+         ZZ9K_MEDIA_SESSION_RESULT_REBASED |
+         ZZ9K_MEDIA_SESSION_RESULT_AUDIO_READY |
+         ZZ9K_MEDIA_SESSION_RESULT_BACKPRESSURE |
+         ZZ9K_MEDIA_SESSION_RESULT_PRESENTED |
+         ZZ9K_MEDIA_SESSION_RESULT_DISCARDED;
+}
+
+static inline int zz9k_reply_media_session_main(
+    const ZZ9KMailboxEntry *reply,
+    uint16_t opcode,
+    ZZ9KMediaSessionMainResult *result)
+{
+  const uint8_t *payload;
+  int status;
+
+  if (!result || !zz9k_media_main_opcode_known(opcode)) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+  memset(result, 0, sizeof(*result));
+  status = zz9k_reply_require(
+      reply, opcode, sizeof(ZZ9KMediaSessionMainResultPayload));
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  payload = reply->payload.inline_data;
+  result->session = zz9k_get_be32(&payload[0]);
+  result->state = zz9k_get_be32(&payload[4]);
+  result->width = zz9k_get_be32(&payload[8]);
+  result->height = zz9k_get_be32(&payload[12]);
+  result->frame_rate_num = zz9k_get_be32(&payload[16]);
+  result->frame_rate_den = zz9k_get_be32(&payload[20]);
+  result->frame_number = zz9k_get_be32(&payload[24]);
+  result->video_pts = zz9k_media_u64_from_be(&payload[28], &payload[32]);
+  result->bytes_accepted = zz9k_get_be32(&payload[36]);
+  result->bytes_written = zz9k_get_be32(&payload[40]);
+  result->flags = zz9k_get_be32(&payload[44]);
+
+  if (result->session == 0U ||
+      result->state < ZZ9K_MEDIA_SESSION_STATE_NEED_INPUT ||
+      result->state > ZZ9K_MEDIA_SESSION_STATE_ERROR ||
+      (result->flags & ~zz9k_media_session_known_result_flags()) != 0U) {
+    memset(result, 0, sizeof(*result));
+    return ZZ9K_STATUS_INTERNAL_ERROR;
+  }
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_reply_media_session_audio(
+    const ZZ9KMailboxEntry *reply,
+    uint16_t opcode,
+    ZZ9KMediaSessionAudioResult *result)
+{
+  const uint8_t *payload;
+  int status;
+
+  if (!result ||
+      (opcode != ZZ9K_OP_MEDIA_SESSION_AUDIO_READ &&
+       opcode != ZZ9K_OP_MEDIA_SESSION_AUDIO_BIND &&
+       opcode != ZZ9K_OP_MEDIA_SESSION_AUDIO_UNBIND)) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+  memset(result, 0, sizeof(*result));
+  status = zz9k_reply_require(
+      reply, opcode, sizeof(ZZ9KMediaSessionAudioResultPayload));
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  payload = reply->payload.inline_data;
+  result->session = zz9k_get_be32(&payload[0]);
+  result->state = zz9k_get_be32(&payload[4]);
+  result->sample_rate = zz9k_get_be32(&payload[8]);
+  result->channels = zz9k_get_be32(&payload[12]);
+  result->sample_format = zz9k_get_be32(&payload[16]);
+  result->pcm_produced = zz9k_media_u64_from_be(&payload[20], &payload[24]);
+  result->pcm_acknowledged =
+      zz9k_media_u64_from_be(&payload[28], &payload[32]);
+  result->audio_pts = zz9k_media_u64_from_be(&payload[36], &payload[40]);
+  result->flags = zz9k_get_be32(&payload[44]);
+  if (result->session == 0U ||
+      result->state < ZZ9K_MEDIA_SESSION_STATE_NEED_INPUT ||
+      result->state > ZZ9K_MEDIA_SESSION_STATE_ERROR ||
+      (result->flags & ~zz9k_media_session_known_result_flags()) != 0U) {
+    memset(result, 0, sizeof(*result));
+    return ZZ9K_STATUS_INTERNAL_ERROR;
+  }
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_reply_media_session_status(
+    const ZZ9KMailboxEntry *reply,
+    ZZ9KMediaSessionStatusResult *result)
+{
+  const uint8_t *payload;
+  int status;
+  uint32_t i;
+
+  if (!result) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+  memset(result, 0, sizeof(*result));
+  status = zz9k_reply_require(
+      reply, ZZ9K_OP_MEDIA_SESSION_STATUS,
+      sizeof(ZZ9KMediaSessionStatusResultPayload));
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  payload = reply->payload.inline_data;
+  result->session = zz9k_get_be32(&payload[0]);
+  result->state = zz9k_get_be32(&payload[4]);
+  result->page = zz9k_get_be32(&payload[8]);
+  result->flags = zz9k_get_be32(&payload[12]);
+  for (i = 0U; i < 4U; i++) {
+    result->value[i] =
+        zz9k_media_u64_from_be(&payload[16U + i * 8U],
+                               &payload[20U + i * 8U]);
+  }
+  if (result->session == 0U ||
+      result->state < ZZ9K_MEDIA_SESSION_STATE_NEED_INPUT ||
+      result->state > ZZ9K_MEDIA_SESSION_STATE_ERROR ||
+      result->page > ZZ9K_MEDIA_STATUS_COUNTERS ||
+      (result->flags & ~zz9k_media_session_known_result_flags()) != 0U) {
+    memset(result, 0, sizeof(*result));
+    return ZZ9K_STATUS_INTERNAL_ERROR;
+  }
+  return ZZ9K_STATUS_OK;
+}
+
 static inline int zz9k_reply_crypto_result(const ZZ9KMailboxEntry *reply,
                                            uint16_t opcode,
                                            ZZ9KCryptoResult *result)

@@ -459,6 +459,18 @@ target_include_directories(video_session_abi_test
 
 add_test(NAME video_session_abi_test COMMAND video_session_abi_test)
 
+add_executable(media_session_abi_test
+  tests/media_session_abi_test.c
+)
+
+target_include_directories(media_session_abi_test
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/host/include
+)
+
+add_test(NAME media_session_abi_test COMMAND media_session_abi_test)
+
 add_library(zzplay_core STATIC
   tools/zzplay-audio.c
   tools/zzplay-core.c
