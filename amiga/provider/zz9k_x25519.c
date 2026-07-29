@@ -334,7 +334,8 @@ static void *zz9k_x25519_gen_init(void *provctx, int selection,
   ZZ9K_X25519_GEN *gen;
 
   (void)params;
-  if ((selection & OSSL_KEYMGMT_SELECT_KEYPAIR) == 0) {
+  if ((selection & (OSSL_KEYMGMT_SELECT_KEYPAIR |
+                    OSSL_KEYMGMT_SELECT_ALL_PARAMETERS)) == 0) {
     return NULL;
   }
   gen = OPENSSL_zalloc(sizeof(*gen));
@@ -395,6 +396,13 @@ static void *zz9k_x25519_gen(void *genctx, OSSL_CALLBACK *cb, void *cbarg)
     return NULL;
   }
   key->provctx = gen->provctx;
+  /* TLS 1.2 creates a parameter-only X25519 object for the server's
+   * ephemeral key before installing its encoded public key via set_params().
+   * X25519 has no explicit domain parameters, so the correct representation
+   * is a blank provider key object, matching OpenSSL's default provider. */
+  if ((gen->selection & OSSL_KEYMGMT_SELECT_KEYPAIR) == 0) {
+    return key;
+  }
   /* Raw 32 random bytes; RFC 7748 clamping happens inside the scalar
    * multiplication, matching how OpenSSL stores X25519 private keys. */
   if (RAND_priv_bytes(key->priv, ZZ9K_X25519_KEYLEN) <= 0 ||
