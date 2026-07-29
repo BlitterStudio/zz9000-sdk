@@ -301,6 +301,10 @@ int main(void)
                   "TLS1.2 RSA aes-gcm P256", TLS1_2_VERSION, TLS1_2_VERSION,
                   rsa_key, rsa_cert, "P-256",
                   "ECDHE-RSA-AES128-GCM-SHA256", NULL);
+  rc |= !run_case(client_libctx, server_libctx,
+                  "TLS1.2 RSA aes-gcm x25519", TLS1_2_VERSION,
+                  TLS1_2_VERSION, rsa_key, rsa_cert, "X25519",
+                  "ECDHE-RSA-AES256-GCM-SHA384", NULL);
   /* Delegation regression: the client's EC KEYMGMT/ECDSA now own "EC" for
    * every curve, but only P-256 is accelerated. A P-384 server cert forces
    * our EC keymgmt to build a shadow EVP_PKEY (default provider) at import
