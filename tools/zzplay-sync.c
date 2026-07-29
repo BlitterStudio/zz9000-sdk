@@ -95,6 +95,17 @@ ZZPlaySyncDecision zzplay_sync_decide(
   return ZZPLAY_SYNC_PRESENT;
 }
 
+ZZPlaySyncDecision zzplay_sync_resolve_audio_starvation(
+    ZZPlaySyncDecision decision,
+    uint64_t queued_audio_frames)
+{
+  if (decision == ZZPLAY_SYNC_HOLD &&
+      queued_audio_frames == 0U) {
+    return ZZPLAY_SYNC_PRESENT;
+  }
+  return decision;
+}
+
 int zzplay_sync_audio_may_start(uint64_t video_pts,
                                 uint64_t audio_origin_pts,
                                 uint64_t allowed_lead_pts)

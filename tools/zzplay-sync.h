@@ -31,6 +31,9 @@ ZZPlaySyncDecision zzplay_sync_decide(
     uint64_t video_pts,
     uint64_t master_pts,
     int64_t *drift_pts);
+ZZPlaySyncDecision zzplay_sync_resolve_audio_starvation(
+    ZZPlaySyncDecision decision,
+    uint64_t queued_audio_frames);
 int zzplay_sync_audio_may_start(uint64_t video_pts,
                                 uint64_t audio_origin_pts,
                                 uint64_t allowed_lead_pts);

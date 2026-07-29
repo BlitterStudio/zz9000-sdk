@@ -545,6 +545,8 @@ static int zzplay_retire_held_frame(
     decision = zzplay_sync_decide(
         &runtime->sync_policy, result->video_pts, master_pts,
         &drift);
+    decision = zzplay_sync_resolve_audio_starvation(
+        decision, zzplay_ahi_queued_frames(&runtime->ahi));
     if (decision == ZZPLAY_SYNC_HOLD) {
       zzplay_stats_record_sync(
           &runtime->stats.core, decision, drift);

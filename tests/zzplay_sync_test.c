@@ -62,6 +62,18 @@ static int check_initial_offset(void)
              UINT64_MAX, 18000U, 3600U);
 }
 
+static int check_audio_starvation_recovery(void)
+{
+  return zzplay_sync_resolve_audio_starvation(
+             ZZPLAY_SYNC_HOLD, 0U) == ZZPLAY_SYNC_PRESENT &&
+         zzplay_sync_resolve_audio_starvation(
+             ZZPLAY_SYNC_HOLD, 1U) == ZZPLAY_SYNC_HOLD &&
+         zzplay_sync_resolve_audio_starvation(
+             ZZPLAY_SYNC_PRESENT, 0U) == ZZPLAY_SYNC_PRESENT &&
+         zzplay_sync_resolve_audio_starvation(
+             ZZPLAY_SYNC_DISCARD, 0U) == ZZPLAY_SYNC_DISCARD;
+}
+
 int main(void)
 {
   if (!check_periods()) {
@@ -75,6 +87,9 @@ int main(void)
   }
   if (!check_initial_offset()) {
     return 4;
+  }
+  if (!check_audio_starvation_recovery()) {
+    return 5;
   }
   return 0;
 }
