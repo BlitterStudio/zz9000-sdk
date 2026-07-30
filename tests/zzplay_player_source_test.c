@@ -67,9 +67,16 @@ int main(int argc, char **argv)
                 : 0;
   ok = retire && start_ensure && present_ensure && present &&
        strstr(source, "runtime.video_info = info;") &&
+       strstr(source, "IDCMP_VANILLAKEY") &&
+       strstr(source, "zzplay_audio_pause(runtime)") &&
+       strstr(source, "zzplay_audio_resume(runtime)") &&
+       strstr(source, "zzplay_core_pause(&runtime->core)") &&
+       strstr(source, "zzplay_core_resume(&runtime->core)") &&
+       strstr(source, "zzplay_restart_session(&runtime") &&
+       strstr(source, "zzplay_resource_release(") &&
        !strstr(source, "zzplay_open_pip(&info");
   if (!ok) {
-    printf("P96 PIP window must open from first-frame retirement\n");
+    printf("P96 first-frame and lifecycle wiring is incomplete\n");
   }
   free(source);
   return ok ? 0 : 1;

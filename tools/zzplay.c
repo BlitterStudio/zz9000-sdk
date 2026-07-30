@@ -90,6 +90,7 @@ struct ZZPlayRuntime {
   uint32_t session;
   uint32_t frames;
   uint32_t final_underruns;
+  uint32_t completed_loops;
   uint64_t audio_origin_pts;
   uint64_t final_audio_frames;
   ZZ9KMediaSessionAudioResult audio_result;
@@ -100,6 +101,7 @@ struct ZZPlayRuntime {
   uint8_t audio_started;
   uint8_t audio_status_known;
   uint8_t audio_refresh_needed;
+  uint8_t audio_totals_captured;
   uint8_t frame_held;
   uint8_t pip_open_failed;
 };
@@ -143,10 +145,13 @@ static void zzplay_usage(FILE *stream)
   fprintf(stream,
           "%s\n"
           "Usage: zzplay [--fps|--benchmark] "
+          "[--loop[=count]] "
           "[--audio=auto|ahi|mhi|ax|none] "
           "<mpeg1-program-stream>\n"
           "  --fps        rolling paced-playback and decode-call FPS\n"
           "  --benchmark  disable pacing and audio unless requested\n"
+          "  --loop       repeat forever; --loop=N repeats N times\n"
+          "  Space        pause/resume playback\n"
           "  --audio=...  select program-audio output "
           "(AUTO prefers card-local AX)\n",
           zzplay_version + 6);
@@ -333,21 +338,26 @@ static uint32_t zzplay_elapsed_us(const TimeVal_Type *start,
   return seconds * 1000000U + (uint32_t)micros;
 }
 
-static ZZPlayStopReason zzplay_poll_stop(struct Window *window)
+static ZZPlayControlAction zzplay_poll_control(struct Window *window)
 {
   struct IntuiMessage *message;
   int ctrl_c;
   int window_close = 0;
+  int toggle_pause = 0;
 
   ctrl_c = (SetSignal(0L, 0L) & SIGBREAKF_CTRL_C) != 0U;
   while (window &&
          (message = (struct IntuiMessage *)GetMsg(window->UserPort))) {
     if (message->Class == IDCMP_CLOSEWINDOW) {
       window_close = 1;
+    } else if (message->Class == IDCMP_VANILLAKEY &&
+               message->Code == (UWORD)' ') {
+      toggle_pause = 1;
     }
     ReplyMsg((struct Message *)message);
   }
-  return zzplay_control_stop_reason(ctrl_c, window_close);
+  return zzplay_control_action(
+      ctrl_c, window_close, toggle_pause);
 }
 
 static struct Window *zzplay_open_pip(const ZZPlayVideoInfo *info,
@@ -393,7 +403,8 @@ static struct Window *zzplay_open_pip(const ZZPlayVideoInfo *info,
   open_tags[i].ti_Tag = WA_SizeGadget;
   open_tags[i++].ti_Data = TRUE;
   open_tags[i].ti_Tag = WA_IDCMP;
-  open_tags[i++].ti_Data = IDCMP_CLOSEWINDOW;
+  open_tags[i++].ti_Data =
+      IDCMP_CLOSEWINDOW | IDCMP_VANILLAKEY;
   open_tags[i].ti_Tag = TAG_DONE;
   open_tags[i].ti_Data = 0U;
 
@@ -719,6 +730,70 @@ static int zzplay_audio_start(struct ZZPlayRuntime *runtime)
   return ZZ9K_STATUS_OK;
 }
 
+static int zzplay_audio_pause(struct ZZPlayRuntime *runtime)
+{
+  if (!runtime->audio_started) {
+    return ZZ9K_STATUS_OK;
+  }
+  if (runtime->audio_backend == ZZPLAY_AUDIO_AX) {
+    return zzplay_ax_pause(&runtime->ax);
+  }
+  zzplay_audio_clock_update_presentation(
+      &runtime->ahi.clock, zzplay_now_us());
+  return zzplay_ahi_pause(&runtime->ahi)
+             ? ZZ9K_STATUS_OK
+             : ZZ9K_STATUS_IO_ERROR;
+}
+
+static int zzplay_audio_resume(struct ZZPlayRuntime *runtime)
+{
+  int status;
+
+  if (!runtime->audio_started) {
+    return ZZ9K_STATUS_OK;
+  }
+  if (runtime->audio_backend == ZZPLAY_AUDIO_AX) {
+    return zzplay_ax_resume(&runtime->ax);
+  }
+  status = zzplay_ahi_resume(&runtime->ahi)
+               ? ZZ9K_STATUS_OK
+               : ZZ9K_STATUS_IO_ERROR;
+  if (status == ZZ9K_STATUS_OK) {
+    zzplay_audio_clock_start_presentation(
+        &runtime->ahi.clock, zzplay_now_us());
+  }
+  return status;
+}
+
+static int zzplay_toggle_pause(struct ZZPlayRuntime *runtime)
+{
+  int status;
+
+  if (runtime->core.state == ZZPLAY_STATE_PLAYING) {
+    status = zzplay_audio_pause(runtime);
+    if (status != ZZ9K_STATUS_OK) {
+      return status;
+    }
+    if (!zzplay_core_pause(&runtime->core)) {
+      return ZZ9K_STATUS_INTERNAL_ERROR;
+    }
+    printf("zzplay: paused\n");
+    return ZZ9K_STATUS_OK;
+  }
+  if (runtime->core.state == ZZPLAY_STATE_PAUSED) {
+    status = zzplay_audio_resume(runtime);
+    if (status != ZZ9K_STATUS_OK) {
+      return status;
+    }
+    if (!zzplay_core_resume(&runtime->core)) {
+      return ZZ9K_STATUS_INTERNAL_ERROR;
+    }
+    printf("zzplay: resumed\n");
+    return ZZ9K_STATUS_OK;
+  }
+  return ZZ9K_STATUS_BAD_REQUEST;
+}
+
 static int zzplay_audio_pump(struct ZZPlayRuntime *runtime,
                              int flush_tail,
                              int refresh_status)
@@ -997,7 +1072,8 @@ static int zzplay_drain_audio(struct ZZPlayRuntime *runtime)
           zzplay_ax_drained(&runtime->ax)) {
         return ZZ9K_STATUS_OK;
       }
-      stop_reason = zzplay_poll_stop(runtime->window);
+      stop_reason = zzplay_control_stop_reason_from_action(
+          zzplay_poll_control(runtime->window));
       if (stop_reason != ZZPLAY_STOP_NONE) {
         zzplay_core_stop(&runtime->core, stop_reason);
         return ZZ9K_STATUS_CANCELLED;
@@ -1050,7 +1126,8 @@ static int zzplay_drain_audio(struct ZZPlayRuntime *runtime)
     if (draining && zzplay_ahi_drained(&runtime->ahi)) {
       return ZZ9K_STATUS_OK;
     }
-    stop_reason = zzplay_poll_stop(runtime->window);
+    stop_reason = zzplay_control_stop_reason_from_action(
+        zzplay_poll_control(runtime->window));
     if (stop_reason != ZZPLAY_STOP_NONE) {
       zzplay_core_stop(&runtime->core, stop_reason);
       return ZZ9K_STATUS_CANCELLED;
@@ -1106,7 +1183,9 @@ static int zzplay_release_resource(void *user,
           status = zz9k_media_session_close(
               runtime->ctx, runtime->session, 0U, &result);
         }
-        runtime->session = 0U;
+        if (status == ZZ9K_STATUS_OK) {
+          runtime->session = 0U;
+        }
         return status;
       }
       break;
@@ -1154,6 +1233,102 @@ static int zzplay_release_resource(void *user,
   return ZZ9K_STATUS_OK;
 }
 
+static void zzplay_capture_audio_totals(
+    struct ZZPlayRuntime *runtime)
+{
+  uint32_t underruns;
+
+  if (!runtime->audio_prepared ||
+      runtime->audio_totals_captured) {
+    return;
+  }
+  runtime->final_audio_frames +=
+      zzplay_audio_played_frames(runtime);
+  underruns = zzplay_audio_underruns(runtime);
+  if (runtime->final_underruns > UINT32_MAX - underruns) {
+    runtime->final_underruns = UINT32_MAX;
+  } else {
+    runtime->final_underruns += underruns;
+  }
+  runtime->audio_totals_captured = 1U;
+}
+
+static int zzplay_begin_session(struct ZZPlayRuntime *runtime)
+{
+  ZZ9KMediaSessionBeginDesc begin;
+  ZZ9KMediaSessionMainResult result;
+  int status;
+
+  memset(&begin, 0, sizeof(begin));
+  memset(&result, 0, sizeof(result));
+  memset(&runtime->audio_result, 0, sizeof(runtime->audio_result));
+  runtime->audio_origin_pts = ZZ9K_MEDIA_NO_PTS;
+  runtime->audio_prepared = 0U;
+  runtime->audio_started = 0U;
+  runtime->audio_status_known = 0U;
+  runtime->audio_refresh_needed = runtime->audio_enabled;
+  runtime->audio_totals_captured = 0U;
+  runtime->frame_held = 0U;
+  if (runtime->audio_enabled) {
+    zzplay_pcm_ring_init(&runtime->pcm_ring, &runtime->pcm);
+  }
+
+  begin.video_codec = ZZ9K_VIDEO_CODEC_MPEG1;
+  begin.container = ZZ9K_VIDEO_CONTAINER_MPEG_PS;
+  begin.width = runtime->video_info.width;
+  begin.height = runtime->video_info.height;
+  begin.output_format = ZZ9K_VIDEO_OUTPUT_DIRECT_OVERLAY;
+  begin.audio_codec = runtime->audio_enabled
+                          ? ZZ9K_MEDIA_AUDIO_MP2
+                          : ZZ9K_MEDIA_AUDIO_NONE;
+  if (runtime->audio_enabled) {
+    begin.pcm_ring_handle = runtime->pcm.handle;
+    begin.pcm_ring_capacity = runtime->pcm.length;
+    begin.pcm_low_water_bytes = ZZPLAY_PCM_LOW_WATER;
+    begin.pcm_high_water_bytes = ZZPLAY_PCM_HIGH_WATER;
+  }
+  status = zz9k_media_session_begin(runtime->ctx, &begin, &result);
+  if (result.session != 0U) {
+    runtime->session = result.session;
+    (void)zzplay_resource_acquire(
+        &runtime->core.resources, ZZPLAY_RESOURCE_VIDEO_SESSION);
+  }
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  if (runtime->audio_backend == ZZPLAY_AUDIO_AX) {
+    zzplay_ax_init(
+        &runtime->ax, runtime->session,
+        &zzplay_ax_control_ops, runtime);
+  }
+  return ZZ9K_STATUS_OK;
+}
+
+static int zzplay_restart_session(struct ZZPlayRuntime *runtime,
+                                  ZZPlayTransport *transport)
+{
+  int status;
+
+  zzplay_capture_audio_totals(runtime);
+  status = zzplay_resource_release(
+      &runtime->core.resources, ZZPLAY_RESOURCE_AUDIO_SINK,
+      zzplay_release_resource, runtime);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  status = zzplay_resource_release(
+      &runtime->core.resources, ZZPLAY_RESOURCE_VIDEO_SESSION,
+      zzplay_release_resource, runtime);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  if (fseek(runtime->file, 0L, SEEK_SET) != 0) {
+    return ZZ9K_STATUS_IO_ERROR;
+  }
+  zzplay_transport_init(transport);
+  return zzplay_begin_session(runtime);
+}
+
 int main(int argc, char **argv)
 {
   struct ZZPlayRuntime runtime;
@@ -1163,7 +1338,6 @@ int main(int argc, char **argv)
   ZZ9KBoard board;
   ZZ9KCaps caps;
   ZZ9KServiceInfo service;
-  ZZ9KMediaSessionBeginDesc begin;
   ZZ9KMediaSessionWriteDesc write;
   ZZ9KMediaSessionMainResult result;
   ZZPlayBackendDecision audio_decision;
@@ -1175,6 +1349,7 @@ int main(int argc, char **argv)
   memset(&runtime, 0, sizeof(runtime));
   memset(&info, 0, sizeof(info));
   memset(&board, 0, sizeof(board));
+  memset(&result, 0, sizeof(result));
   runtime.audio_origin_pts = ZZ9K_MEDIA_NO_PTS;
   zzplay_core_init(&runtime.core);
   zzplay_transport_init(&transport);
@@ -1368,44 +1543,14 @@ int main(int argc, char **argv)
                   cleanup_status);
       goto cleanup;
     }
-    zzplay_pcm_ring_init(
-        &runtime.pcm_ring, &runtime.pcm);
   }
-  memset(&begin, 0, sizeof(begin));
-  begin.video_codec = ZZ9K_VIDEO_CODEC_MPEG1;
-  begin.container = ZZ9K_VIDEO_CONTAINER_MPEG_PS;
-  begin.width = info.width;
-  begin.height = info.height;
-  begin.output_format = ZZ9K_VIDEO_OUTPUT_DIRECT_OVERLAY;
-  begin.audio_codec = runtime.audio_enabled
-                          ? ZZ9K_MEDIA_AUDIO_MP2
-                          : ZZ9K_MEDIA_AUDIO_NONE;
-  if (runtime.audio_enabled) {
-    begin.pcm_ring_handle = runtime.pcm.handle;
-    begin.pcm_ring_capacity = runtime.pcm.length;
-    begin.pcm_low_water_bytes = ZZPLAY_PCM_LOW_WATER;
-    begin.pcm_high_water_bytes = ZZPLAY_PCM_HIGH_WATER;
-  }
-  memset(&result, 0, sizeof(result));
-  cleanup_status = zz9k_media_session_begin(
-      runtime.ctx, &begin, &result);
-  if (result.session != 0U) {
-    runtime.session = result.session;
-    (void)zzplay_resource_acquire(
-        &runtime.core.resources, ZZPLAY_RESOURCE_VIDEO_SESSION);
-  }
+  cleanup_status = zzplay_begin_session(&runtime);
   if (cleanup_status != ZZ9K_STATUS_OK) {
     fprintf(stderr, "zzplay: session begin failed: %s\n",
             zz9k_status_name(cleanup_status));
     zzplay_fail(&runtime, ZZPLAY_FAILURE_SESSION, cleanup_status);
     goto cleanup;
   }
-  if (runtime.audio_backend == ZZPLAY_AUDIO_AX) {
-    zzplay_ax_init(
-        &runtime.ax, runtime.session,
-        &zzplay_ax_control_ops, &runtime);
-  }
-  runtime.audio_refresh_needed = runtime.audio_enabled;
   if (!zzplay_timer_open(&runtime.timer)) {
     fprintf(stderr, "zzplay: cannot open timer.device\n");
     zzplay_fail(&runtime, ZZPLAY_FAILURE_TIMER, ZZ9K_STATUS_IO_ERROR);
@@ -1426,14 +1571,31 @@ int main(int argc, char **argv)
   (void)zzplay_core_begin_prebuffer(&runtime.core);
   (void)zzplay_core_start(&runtime.core);
 
-  while (runtime.core.state == ZZPLAY_STATE_PLAYING) {
+playback_session:
+  while (runtime.core.state == ZZPLAY_STATE_PLAYING ||
+         runtime.core.state == ZZPLAY_STATE_PAUSED) {
+    ZZPlayControlAction control;
     ZZPlayStopReason stop_reason;
     ZZPlayMediaAction action;
 
-    stop_reason = zzplay_poll_stop(runtime.window);
+    control = zzplay_poll_control(runtime.window);
+    stop_reason = zzplay_control_stop_reason_from_action(control);
     if (stop_reason != ZZPLAY_STOP_NONE) {
       zzplay_core_stop(&runtime.core, stop_reason);
       break;
+    }
+    if (control == ZZPLAY_CONTROL_TOGGLE_PAUSE) {
+      cleanup_status = zzplay_toggle_pause(&runtime);
+      if (cleanup_status != ZZ9K_STATUS_OK) {
+        fprintf(stderr, "zzplay: pause/resume failed: %s\n",
+                zz9k_status_name(cleanup_status));
+        zzplay_fail(&runtime, ZZPLAY_FAILURE_IO, cleanup_status);
+        break;
+      }
+    }
+    if (runtime.core.state == ZZPLAY_STATE_PAUSED) {
+      zzplay_wait_us(&runtime.timer, ZZPLAY_SYNC_POLL_US);
+      continue;
     }
     cleanup_status = zzplay_audio_pump(
         &runtime, 0, runtime.audio_refresh_needed);
@@ -1627,6 +1789,46 @@ int main(int argc, char **argv)
     (void)zzplay_core_begin_drain(&runtime.core);
     cleanup_status = zzplay_drain_audio(&runtime);
     if (cleanup_status == ZZ9K_STATUS_OK) {
+      if (runtime.options.loop_mode == ZZPLAY_LOOP_FOREVER ||
+          (runtime.options.loop_mode == ZZPLAY_LOOP_FINITE &&
+           runtime.options.loop_count != 0U)) {
+        if (!zzplay_core_begin_loop(&runtime.core)) {
+          zzplay_fail(
+              &runtime, ZZPLAY_FAILURE_PROTOCOL,
+              ZZ9K_STATUS_INTERNAL_ERROR);
+          goto cleanup;
+        }
+        cleanup_status =
+            zzplay_restart_session(&runtime, &transport);
+        if (cleanup_status != ZZ9K_STATUS_OK) {
+          fprintf(stderr, "zzplay: loop restart failed: %s\n",
+                  zz9k_status_name(cleanup_status));
+          zzplay_fail(
+              &runtime, ZZPLAY_FAILURE_SESSION, cleanup_status);
+          goto cleanup;
+        }
+        if (runtime.options.loop_mode == ZZPLAY_LOOP_FINITE) {
+          runtime.options.loop_count--;
+        }
+        runtime.completed_loops++;
+        media_done = 0;
+        held_decode_us = 0U;
+        memset(&result, 0, sizeof(result));
+        frame_period_us =
+            zzplay_frame_period_us(info.frame_rate_milli);
+        zzplay_sync_policy_init(
+            &runtime.sync_policy, info.frame_rate_milli, 1000U);
+        if (!zzplay_core_restart_loop(&runtime.core) ||
+            !zzplay_core_start(&runtime.core)) {
+          zzplay_fail(
+              &runtime, ZZPLAY_FAILURE_PROTOCOL,
+              ZZ9K_STATUS_INTERNAL_ERROR);
+          goto cleanup;
+        }
+        printf("zzplay: loop %lu\n",
+               (unsigned long)runtime.completed_loops);
+        goto playback_session;
+      }
       zzplay_core_stop(&runtime.core, ZZPLAY_STOP_EOF);
     } else if (cleanup_status != ZZ9K_STATUS_CANCELLED) {
       fprintf(stderr, "zzplay: audio drain failed: %s\n",
@@ -1639,12 +1841,7 @@ cleanup:
   if (runtime.options.show_fps) {
     zzplay_stats_stop(&runtime.stats);
   }
-  if (runtime.audio_prepared) {
-    runtime.final_audio_frames =
-        zzplay_audio_played_frames(&runtime);
-    runtime.final_underruns =
-        zzplay_audio_underruns(&runtime);
-  }
+  zzplay_capture_audio_totals(&runtime);
   cleanup_status = zzplay_resources_release_all(
       &runtime.core.resources, zzplay_release_resource, &runtime);
   if (runtime.core.state != ZZPLAY_STATE_ERROR &&
@@ -1661,6 +1858,10 @@ cleanup:
       printf(", %llu audio frames played, %lu underruns",
              (unsigned long long)runtime.final_audio_frames,
              (unsigned long)runtime.final_underruns);
+    }
+    if (runtime.completed_loops != 0U) {
+      printf(", %lu loops",
+             (unsigned long)runtime.completed_loops);
     }
     printf("\n");
     if (runtime.stats.core.max_abs_drift_pts != 0U) {

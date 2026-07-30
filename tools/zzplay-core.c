@@ -135,6 +135,31 @@ int zzplay_resource_is_acquired(const ZZPlayResources *resources,
           ((uint32_t)1U << (unsigned)resource)) != 0U;
 }
 
+int zzplay_resource_release(ZZPlayResources *resources,
+                            ZZPlayResource resource,
+                            ZZPlayReleaseResource release,
+                            void *user)
+{
+  uint32_t bit;
+  int status;
+
+  if (!resources || !release ||
+      resource < ZZPLAY_RESOURCE_INPUT_FILE ||
+      resource >= ZZPLAY_RESOURCE_COUNT) {
+    return -1;
+  }
+  bit = (uint32_t)1U << (unsigned)resource;
+  if ((resources->acquired & bit) == 0U) {
+    return 0;
+  }
+  status = release(user, resource);
+  if (status != 0) {
+    return status;
+  }
+  resources->acquired &= ~bit;
+  return 0;
+}
+
 int zzplay_resources_release_all(ZZPlayResources *resources,
                                  ZZPlayReleaseResource release,
                                  void *user)
@@ -162,13 +187,29 @@ int zzplay_resources_release_all(ZZPlayResources *resources,
   return first_error;
 }
 
-ZZPlayStopReason zzplay_control_stop_reason(int ctrl_c,
-                                            int window_close)
+ZZPlayControlAction zzplay_control_action(int ctrl_c,
+                                          int window_close,
+                                          int toggle_pause)
 {
   if (ctrl_c) {
-    return ZZPLAY_STOP_CTRL_C;
+    return ZZPLAY_CONTROL_STOP_CTRL_C;
   }
   if (window_close) {
+    return ZZPLAY_CONTROL_STOP_WINDOW;
+  }
+  if (toggle_pause) {
+    return ZZPLAY_CONTROL_TOGGLE_PAUSE;
+  }
+  return ZZPLAY_CONTROL_NONE;
+}
+
+ZZPlayStopReason zzplay_control_stop_reason_from_action(
+    ZZPlayControlAction action)
+{
+  if (action == ZZPLAY_CONTROL_STOP_CTRL_C) {
+    return ZZPLAY_STOP_CTRL_C;
+  }
+  if (action == ZZPLAY_CONTROL_STOP_WINDOW) {
     return ZZPLAY_STOP_WINDOW_CLOSE;
   }
   return ZZPLAY_STOP_NONE;

@@ -144,6 +144,31 @@ static int check_completion_reconciles_presentation(void)
          zzplay_audio_clock_presentation_pts(&clock, 0U) == 81000U;
 }
 
+static int check_pause_excludes_wall_time(void)
+{
+  ZZPlayAudioClock clock;
+
+  zzplay_audio_clock_prepare(&clock, 1000U, 1000U);
+  if (!zzplay_audio_clock_queue(&clock, 1000U) ||
+      !zzplay_audio_clock_play(&clock)) {
+    return 0;
+  }
+  zzplay_audio_clock_start_presentation(&clock, 1000000U);
+  zzplay_audio_clock_update_presentation(&clock, 1200000U);
+  if (clock.presentation_frames != 200U ||
+      !zzplay_audio_clock_pause(&clock)) {
+    return 0;
+  }
+  zzplay_audio_clock_update_presentation(&clock, 11200000U);
+  if (clock.presentation_frames != 200U ||
+      !zzplay_audio_clock_resume(&clock)) {
+    return 0;
+  }
+  zzplay_audio_clock_start_presentation(&clock, 11200000U);
+  zzplay_audio_clock_update_presentation(&clock, 11300000U);
+  return clock.presentation_frames == 300U;
+}
+
 int main(void)
 {
   if (!check_completion_clock()) {
@@ -163,6 +188,9 @@ int main(void)
   }
   if (!check_completion_reconciles_presentation()) {
     return 6;
+  }
+  if (!check_pause_excludes_wall_time()) {
+    return 7;
   }
   return 0;
 }

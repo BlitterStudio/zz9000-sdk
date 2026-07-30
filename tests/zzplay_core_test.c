@@ -13,6 +13,11 @@ struct ReleaseLog {
   unsigned count;
 };
 
+struct FailingReleaseLog {
+  struct ReleaseLog releases;
+  int fail_once;
+};
+
 static int record_release(void *user, ZZPlayResource resource)
 {
   struct ReleaseLog *log = (struct ReleaseLog *)user;
@@ -22,6 +27,18 @@ static int record_release(void *user, ZZPlayResource resource)
   }
   log->entries[log->count++] = resource;
   return 0;
+}
+
+static int fail_once_release(void *user, ZZPlayResource resource)
+{
+  struct FailingReleaseLog *log =
+      (struct FailingReleaseLog *)user;
+
+  if (log->fail_once) {
+    log->fail_once = 0;
+    return 17;
+  }
+  return record_release(&log->releases, resource);
 }
 
 static int check_options(void)
@@ -37,6 +54,18 @@ static int check_options(void)
   };
   char *audio_argv[] = {
     (char *)"zzplay", (char *)"--audio=ahi", (char *)"movie.mpg"
+  };
+  char *loop_argv[] = {
+    (char *)"zzplay", (char *)"--loop", (char *)"movie.mpg"
+  };
+  char *loops_argv[] = {
+    (char *)"zzplay", (char *)"--loop=20", (char *)"movie.mpg"
+  };
+  char *zero_loops_argv[] = {
+    (char *)"zzplay", (char *)"--loop=0", (char *)"movie.mpg"
+  };
+  char *bad_loops_argv[] = {
+    (char *)"zzplay", (char *)"--loop=many", (char *)"movie.mpg"
   };
   char *extra_argv[] = {
     (char *)"zzplay", (char *)"one.mpg", (char *)"two.mpg"
@@ -66,11 +95,29 @@ static int check_options(void)
       options.path != audio_argv[2]) {
     return 0;
   }
+  if (zzplay_options_parse_cli(3, loop_argv, &options) !=
+          ZZPLAY_OPTIONS_OK ||
+      options.loop_mode != ZZPLAY_LOOP_FOREVER ||
+      options.loop_count != 0U ||
+      options.path != loop_argv[2]) {
+    return 0;
+  }
+  if (zzplay_options_parse_cli(3, loops_argv, &options) !=
+          ZZPLAY_OPTIONS_OK ||
+      options.loop_mode != ZZPLAY_LOOP_FINITE ||
+      options.loop_count != 20U ||
+      options.path != loops_argv[2]) {
+    return 0;
+  }
   if (zzplay_options_parse_cli(2, help_argv, &options) !=
       ZZPLAY_OPTIONS_HELP) {
     return 0;
   }
   if (zzplay_options_parse_cli(3, extra_argv, &options) !=
+          ZZPLAY_OPTIONS_ERROR ||
+      zzplay_options_parse_cli(3, zero_loops_argv, &options) !=
+          ZZPLAY_OPTIONS_ERROR ||
+      zzplay_options_parse_cli(3, bad_loops_argv, &options) !=
           ZZPLAY_OPTIONS_ERROR ||
       zzplay_options_parse_cli(1, missing_argv, &options) !=
           ZZPLAY_OPTIONS_ERROR) {
@@ -153,11 +200,20 @@ static int check_extended_lifecycle(void)
 
 static int check_controls_and_sync(void)
 {
-  if (zzplay_control_stop_reason(0, 0) != ZZPLAY_STOP_NONE ||
-      zzplay_control_stop_reason(1, 0) != ZZPLAY_STOP_CTRL_C ||
-      zzplay_control_stop_reason(0, 1) !=
-          ZZPLAY_STOP_WINDOW_CLOSE ||
-      zzplay_control_stop_reason(1, 1) != ZZPLAY_STOP_CTRL_C) {
+  if (zzplay_control_action(0, 0, 0) != ZZPLAY_CONTROL_NONE ||
+      zzplay_control_action(0, 0, 1) !=
+          ZZPLAY_CONTROL_TOGGLE_PAUSE ||
+      zzplay_control_action(0, 1, 1) !=
+          ZZPLAY_CONTROL_STOP_WINDOW ||
+      zzplay_control_action(1, 1, 1) !=
+          ZZPLAY_CONTROL_STOP_CTRL_C ||
+      zzplay_control_stop_reason_from_action(
+          ZZPLAY_CONTROL_TOGGLE_PAUSE) != ZZPLAY_STOP_NONE ||
+      zzplay_control_stop_reason_from_action(
+          ZZPLAY_CONTROL_STOP_CTRL_C) != ZZPLAY_STOP_CTRL_C ||
+      zzplay_control_stop_reason_from_action(
+          ZZPLAY_CONTROL_STOP_WINDOW) !=
+          ZZPLAY_STOP_WINDOW_CLOSE) {
     return 0;
   }
   if (zzplay_frame_period_us(25000U) != 40000U ||
@@ -174,6 +230,7 @@ static int check_cleanup(void)
 {
   ZZPlayCore core;
   struct ReleaseLog log;
+  struct FailingReleaseLog failing;
   unsigned acquired;
 
   for (acquired = 0U; acquired <= ZZPLAY_RESOURCE_COUNT; acquired++) {
@@ -190,14 +247,18 @@ static int check_cleanup(void)
     if (acquired != ZZPLAY_RESOURCE_COUNT) {
       zzplay_core_fail(&core, ZZPLAY_FAILURE_ALLOCATION, 20);
     }
-    if (zzplay_resources_release_all(&core.resources,
-                                     record_release, &log) != 0 ||
-        log.count != acquired) {
-      return 0;
-    }
-    for (i = 0U; i < acquired; i++) {
-      if (log.entries[i] !=
-          (ZZPlayResource)(acquired - i - 1U)) {
+    if (acquired > 2U) {
+      if (zzplay_resource_release(
+              &core.resources, ZZPLAY_RESOURCE_P96_LIBRARY,
+              record_release, &log) != 0 ||
+          log.count != 1U ||
+          log.entries[0] != ZZPLAY_RESOURCE_P96_LIBRARY ||
+          zzplay_resource_is_acquired(
+              &core.resources, ZZPLAY_RESOURCE_P96_LIBRARY) ||
+          zzplay_resource_release(
+              &core.resources, ZZPLAY_RESOURCE_P96_LIBRARY,
+              record_release, &log) != 0 ||
+          log.count != 1U) {
         return 0;
       }
     }
@@ -206,6 +267,49 @@ static int check_cleanup(void)
         log.count != acquired) {
       return 0;
     }
+    {
+      int resource_index;
+      int targeted = acquired > 2U;
+
+      i = targeted ? 1U : 0U;
+      for (resource_index = (int)acquired - 1;
+           resource_index >= 0; resource_index--) {
+        ZZPlayResource expected =
+            (ZZPlayResource)resource_index;
+
+        if (targeted &&
+            expected == ZZPLAY_RESOURCE_P96_LIBRARY) {
+          continue;
+        }
+        if (log.entries[i++] != expected) {
+          return 0;
+        }
+      }
+    }
+    if (zzplay_resources_release_all(&core.resources,
+                                     record_release, &log) != 0 ||
+        log.count != acquired) {
+      return 0;
+    }
+  }
+  zzplay_core_init(&core);
+  failing.releases.count = 0U;
+  failing.fail_once = 1;
+  if (!zzplay_resource_acquire(
+          &core.resources, ZZPLAY_RESOURCE_AUDIO_SINK) ||
+      zzplay_resource_release(
+          &core.resources, ZZPLAY_RESOURCE_AUDIO_SINK,
+          fail_once_release, &failing) != 17 ||
+      !zzplay_resource_is_acquired(
+          &core.resources, ZZPLAY_RESOURCE_AUDIO_SINK) ||
+      zzplay_resource_release(
+          &core.resources, ZZPLAY_RESOURCE_AUDIO_SINK,
+          fail_once_release, &failing) != 0 ||
+      zzplay_resource_is_acquired(
+          &core.resources, ZZPLAY_RESOURCE_AUDIO_SINK) ||
+      failing.releases.count != 1U ||
+      failing.releases.entries[0] != ZZPLAY_RESOURCE_AUDIO_SINK) {
+    return 0;
   }
   return 1;
 }

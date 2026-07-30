@@ -82,6 +82,10 @@ int zzplay_resource_acquire(ZZPlayResources *resources,
                             ZZPlayResource resource);
 int zzplay_resource_is_acquired(const ZZPlayResources *resources,
                                 ZZPlayResource resource);
+int zzplay_resource_release(ZZPlayResources *resources,
+                            ZZPlayResource resource,
+                            ZZPlayReleaseResource release,
+                            void *user);
 int zzplay_resources_release_all(ZZPlayResources *resources,
                                  ZZPlayReleaseResource release,
                                  void *user);
