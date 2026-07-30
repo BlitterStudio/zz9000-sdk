@@ -551,6 +551,16 @@ add_test(
           ${CMAKE_CURRENT_SOURCE_DIR}/tools/zzplay-ahi.c
 )
 
+add_executable(zzplay_player_source_test
+  tests/zzplay_player_source_test.c
+)
+
+add_test(
+  NAME zzplay_player_source_test
+  COMMAND zzplay_player_source_test
+          ${CMAKE_CURRENT_SOURCE_DIR}/tools/zzplay.c
+)
+
 add_executable(module_manifest_test
   tests/module_manifest_test.c
 )

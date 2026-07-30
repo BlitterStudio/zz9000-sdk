@@ -1,5 +1,5 @@
 /*
- * Source guard for the completion-derived ahi.device clock.
+ * Source guard for opening the P96 PIP window at first presentation.
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
@@ -39,19 +39,14 @@ static char *read_file(const char *path)
   return source;
 }
 
-static int contains(const char *source, const char *needle)
-{
-  if (strstr(source, needle)) {
-    return 1;
-  }
-  printf("missing %s\n", needle);
-  return 0;
-}
-
 int main(int argc, char **argv)
 {
   char *source;
-  int ok = 1;
+  char *retire;
+  char *start_ensure;
+  char *present_ensure;
+  char *present;
+  int ok;
 
   if (argc != 2) {
     return 2;
@@ -60,16 +55,22 @@ int main(int argc, char **argv)
   if (!source) {
     return 2;
   }
-  ok &= contains(source, "CheckIO((struct IORequest *)request)");
-  ok &= contains(source, "(void)WaitIO((struct IORequest *)request)");
-  ok &= contains(source, "request->ahir_Std.io_Actual /");
-  ok &= contains(source, "zzplay_audio_clock_complete(");
-  ok &= contains(source, "zzplay_audio_clock_retract_underrun(");
-  ok &= contains(source, "sink->end_of_stream = 1U");
-  ok &= contains(source, "CMD_STOP");
-  ok &= contains(source, "CMD_START");
-  ok &= contains(source, "AbortIO((struct IORequest *)buffer->request)");
-  ok &= contains(source, "ahir_Link = zzplay_ahi_predecessor");
+  retire = strstr(source, "static int zzplay_retire_held_frame(");
+  start_ensure =
+      retire ? strstr(retire, "zzplay_ensure_pip(runtime)") : 0;
+  present_ensure =
+      start_ensure
+          ? strstr(start_ensure + 1, "zzplay_ensure_pip(runtime)")
+          : 0;
+  present = present_ensure
+                ? strstr(present_ensure, "zz9k_media_session_present(")
+                : 0;
+  ok = retire && start_ensure && present_ensure && present &&
+       strstr(source, "runtime.video_info = info;") &&
+       !strstr(source, "zzplay_open_pip(&info");
+  if (!ok) {
+    printf("P96 PIP window must open from first-frame retirement\n");
+  }
   free(source);
   return ok ? 0 : 1;
 }

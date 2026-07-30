@@ -20,13 +20,17 @@ execution: code
   firmware `b0e9967` and SDK `a75ff78`. The r9 fixture completed 300/300
   frames with zero presentation drops in 12.301 seconds at 24.424 fps; the
   post-run MHI ownership smoke passed.
-- U4 is not globally complete. The generic AHI path remains required for
-  systems without ZZ9000AX, and its current synchronous submission cost does
-  not meet the real-time playback contract. Long-run drift, pause/resume,
-  loop, abort/error cleanup, and resource-leak qualification also remain.
-- The recommended next implementation item is therefore the generic-AHI
-  scheduling/submission fix within U4, followed by the remaining U4 hardware
-  matrix. U5–U9 remain pending.
+- The focused generic-AHI path is hardware-passed on the matched local
+  firmware `4f0a2cf`, drivers `ecad92b`, and r15/r18 SDK checkpoint. Two
+  consecutive runs each completed 300/300 frames,
+  576000 played audio frames, zero underruns/late frames, 50 ms final and
+  89 ms maximum drift, and 24.553/24.554 fps average with correct synchronized
+  audio. First-frame PIP deferral reduced but did not eliminate the brief
+  startup cyan transition; Picasso96 has no supported hidden PIP-open state.
+- U4 is not globally complete. Long-run drift, pause/resume, loop, abort/error
+  cleanup, reopen/ownership, and resource-leak qualification remain.
+- The recommended next item is therefore the remaining U4 lifecycle/long-run
+  matrix, followed by U5 standalone MP3 integration. U6–U9 remain pending.
 
 ## Goal Capsule
 

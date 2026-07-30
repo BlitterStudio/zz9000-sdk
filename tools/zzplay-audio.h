@@ -65,5 +65,8 @@ ZZPlayBackendDecision zzplay_audio_select(
     ZZPlayMediaAudio media,
     ZZPlayAudioBackend requested,
     const ZZPlayAudioAvailability *availability);
+int zzplay_audio_start_ready(ZZPlayAudioBackend backend,
+                             uint64_t queued_frames,
+                             uint64_t prebuffer_target_frames);
 
 #endif /* ZZPLAY_AUDIO_H */

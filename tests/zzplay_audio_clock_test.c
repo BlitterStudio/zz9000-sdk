@@ -61,6 +61,11 @@ static int check_bounds_and_lifecycle(void)
   if (clock.underruns != 1U) {
     return 0;
   }
+  zzplay_audio_clock_retract_underrun(&clock);
+  zzplay_audio_clock_retract_underrun(&clock);
+  if (clock.underruns != 0U) {
+    return 0;
+  }
   zzplay_audio_clock_stop(&clock);
   if (clock.state != ZZPLAY_AUDIO_CLOCK_STOPPED ||
       clock.queued_frames != 0U ||
@@ -69,6 +74,74 @@ static int check_bounds_and_lifecycle(void)
   }
   zzplay_audio_clock_close(&clock);
   return clock.state == ZZPLAY_AUDIO_CLOCK_CLOSED;
+}
+
+static int check_smooth_bounded_presentation(void)
+{
+  ZZPlayAudioClock clock;
+
+  zzplay_audio_clock_prepare(&clock, 48000U, 9600U);
+  if (!zzplay_audio_clock_queue(&clock, 9600U) ||
+      !zzplay_audio_clock_play(&clock)) {
+    return 0;
+  }
+  zzplay_audio_clock_start_presentation(&clock, 1000000U);
+  zzplay_audio_clock_update_presentation(&clock, 1025000U);
+  if (clock.presentation_frames != 1200U ||
+      zzplay_audio_clock_presentation_pts(&clock, 9000U) != 11250U) {
+    return 0;
+  }
+  zzplay_audio_clock_update_presentation(&clock, 1100000U);
+  if (clock.presentation_frames != 4800U ||
+      !zzplay_audio_clock_complete(&clock, 4800U, 4800U) ||
+      clock.presentation_frames != 4800U) {
+    return 0;
+  }
+  zzplay_audio_clock_update_presentation(&clock, 1150000U);
+  return clock.presentation_frames == 7200U &&
+         zzplay_audio_clock_presentation_pts(&clock, 9000U) == 22500U;
+}
+
+static int check_presentation_discards_starved_time(void)
+{
+  ZZPlayAudioClock clock;
+
+  zzplay_audio_clock_prepare(&clock, 1000U, 200U);
+  if (!zzplay_audio_clock_queue(&clock, 100U) ||
+      !zzplay_audio_clock_play(&clock)) {
+    return 0;
+  }
+  zzplay_audio_clock_start_presentation(&clock, 0U);
+  zzplay_audio_clock_update_presentation(&clock, 200000U);
+  if (clock.presentation_frames != 100U ||
+      !zzplay_audio_clock_queue(&clock, 100U)) {
+    return 0;
+  }
+  zzplay_audio_clock_update_presentation(&clock, 250000U);
+  if (clock.presentation_frames != 150U) {
+    return 0;
+  }
+  zzplay_audio_clock_update_presentation(&clock, 400000U);
+  return clock.presentation_frames == 200U;
+}
+
+static int check_completion_reconciles_presentation(void)
+{
+  ZZPlayAudioClock clock;
+
+  zzplay_audio_clock_prepare(&clock, 1000U, 1000U);
+  if (!zzplay_audio_clock_queue(&clock, 1000U) ||
+      !zzplay_audio_clock_play(&clock)) {
+    return 0;
+  }
+  zzplay_audio_clock_start_presentation(&clock, 0U);
+  zzplay_audio_clock_update_presentation(&clock, 800000U);
+  if (clock.presentation_frames != 800U ||
+      !zzplay_audio_clock_complete(&clock, 1000U, 900U)) {
+    return 0;
+  }
+  return clock.presentation_frames == 900U &&
+         zzplay_audio_clock_presentation_pts(&clock, 0U) == 81000U;
 }
 
 int main(void)
@@ -81,6 +154,15 @@ int main(void)
   }
   if (!check_bounds_and_lifecycle()) {
     return 3;
+  }
+  if (!check_smooth_bounded_presentation()) {
+    return 4;
+  }
+  if (!check_presentation_discards_starved_time()) {
+    return 5;
+  }
+  if (!check_completion_reconciles_presentation()) {
+    return 6;
   }
   return 0;
 }

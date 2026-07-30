@@ -38,9 +38,14 @@
 
 #define ZZPLAY_INPUT_BYTES (64U * 1024U)
 #define ZZPLAY_PCM_BYTES (128U * 1024U)
-#define ZZPLAY_PCM_LOW_WATER (16U * 1024U)
+#define ZZPLAY_AHI_PERIODS_PER_SECOND 10U
+#define ZZPLAY_MEDIA_MAX_SAMPLE_RATE 48000U
+#define ZZPLAY_MEDIA_PCM_FRAME_BYTES 4U
+#define ZZPLAY_PCM_LOW_WATER                                      \
+  ((ZZPLAY_MEDIA_MAX_SAMPLE_RATE /                             \
+    ZZPLAY_AHI_PERIODS_PER_SECOND) *                           \
+   ZZPLAY_MEDIA_PCM_FRAME_BYTES * ZZPLAY_AHI_BUFFER_COUNT)
 #define ZZPLAY_PCM_HIGH_WATER (96U * 1024U)
-#define ZZPLAY_AHI_PERIODS_PER_SECOND 50U
 #define ZZPLAY_SYNC_POLL_US 2000U
 #define ZZPLAY_FPS_REPORT_US 2000000U
 
@@ -80,6 +85,8 @@ struct ZZPlayRuntime {
   struct ZZPlayStats stats;
   struct Window *window;
   struct BitMap *bitmap;
+  ZZPlayVideoInfo video_info;
+  LONG pip_error;
   uint32_t session;
   uint32_t frames;
   uint32_t final_underruns;
@@ -94,10 +101,19 @@ struct ZZPlayRuntime {
   uint8_t audio_status_known;
   uint8_t audio_refresh_needed;
   uint8_t frame_held;
+  uint8_t pip_open_failed;
 };
 
 static uint32_t zzplay_elapsed_us(const TimeVal_Type *start,
                                   const TimeVal_Type *end);
+
+static uint64_t zzplay_now_us(void)
+{
+  TimeVal_Type now;
+
+  GetSysTime(&now);
+  return (uint64_t)now.tv_secs * 1000000ULL + now.tv_micro;
+}
 
 static void zzplay_profile_begin(const struct ZZPlayRuntime *runtime,
                                  TimeVal_Type *started)
@@ -397,6 +413,25 @@ static struct Window *zzplay_open_pip(const ZZPlayVideoInfo *info,
   return window;
 }
 
+static int zzplay_ensure_pip(struct ZZPlayRuntime *runtime)
+{
+  if (runtime->window) {
+    return 1;
+  }
+  /* A visible memory-window PIP exposes its key color until the first
+   * formatter-backed frame arrives, so create it only at retirement. */
+  runtime->pip_error = 0;
+  runtime->window = zzplay_open_pip(
+      &runtime->video_info, &runtime->bitmap, &runtime->pip_error);
+  if (!runtime->window) {
+    runtime->pip_open_failed = 1U;
+    return 0;
+  }
+  (void)zzplay_resource_acquire(
+      &runtime->core.resources, ZZPLAY_RESOURCE_VIDEO_WINDOW);
+  return 1;
+}
+
 static int zzplay_decode_once(ZZ9KContext *ctx, uint32_t session,
                               ZZ9KMediaSessionMainResult *result)
 {
@@ -608,13 +643,15 @@ static uint64_t zzplay_audio_low_water_frames(
 }
 
 static uint64_t zzplay_audio_master_pts(
-    const struct ZZPlayRuntime *runtime)
+    struct ZZPlayRuntime *runtime)
 {
   if (runtime->audio_backend == ZZPLAY_AUDIO_AX) {
     return zzplay_ax_clock_pts(
         &runtime->ax, runtime->audio_origin_pts);
   }
-  return zzplay_audio_clock_pts(
+  zzplay_audio_clock_update_presentation(
+      &runtime->ahi.clock, zzplay_now_us());
+  return zzplay_audio_clock_presentation_pts(
       &runtime->ahi.clock, runtime->audio_origin_pts);
 }
 
@@ -676,6 +713,8 @@ static int zzplay_audio_start(struct ZZPlayRuntime *runtime)
   if (!zzplay_ahi_play(&runtime->ahi)) {
     return ZZ9K_STATUS_IO_ERROR;
   }
+  zzplay_audio_clock_start_presentation(
+      &runtime->ahi.clock, zzplay_now_us());
   runtime->audio_started = 1U;
   return ZZ9K_STATUS_OK;
 }
@@ -705,6 +744,8 @@ static int zzplay_audio_pump(struct ZZPlayRuntime *runtime,
     TimeVal_Type started;
     int poll_ok;
 
+    zzplay_audio_clock_update_presentation(
+        &runtime->ahi.clock, zzplay_now_us());
     zzplay_profile_begin(runtime, &started);
     poll_ok = zzplay_ahi_poll(&runtime->ahi);
     zzplay_profile_end(
@@ -825,15 +866,22 @@ static int zzplay_retire_held_frame(
     int *retired)
 {
   ZZPlaySyncDecision decision = ZZPLAY_SYNC_PRESENT;
+  uint64_t queued_audio_frames =
+      zzplay_audio_queued_frames(runtime);
   int64_t drift = 0;
   int status;
 
   *retired = 0;
   if (!runtime->audio_started && runtime->audio_prepared &&
-      zzplay_audio_queued_frames(runtime) != 0U) {
+      zzplay_audio_start_ready(
+          runtime->audio_backend, queued_audio_frames,
+          runtime->ahi.clock.queue_limit_frames)) {
     if (zzplay_sync_audio_may_start(
             result->video_pts, runtime->audio_origin_pts,
             runtime->sync_policy.drop_late_pts)) {
+      if (!zzplay_ensure_pip(runtime)) {
+        return ZZ9K_STATUS_UNSUPPORTED;
+      }
       status = zzplay_audio_start(runtime);
       if (status != ZZ9K_STATUS_OK) {
         return status;
@@ -874,6 +922,10 @@ static int zzplay_retire_held_frame(
             frame_period_us, decode_us, 0));
   }
 
+  if (decision != ZZPLAY_SYNC_DISCARD &&
+      !zzplay_ensure_pip(runtime)) {
+    return ZZ9K_STATUS_UNSUPPORTED;
+  }
   {
     TimeVal_Type started;
 
@@ -953,9 +1005,6 @@ static int zzplay_drain_audio(struct ZZPlayRuntime *runtime)
       zzplay_wait_us(&runtime->timer, ZZPLAY_SYNC_POLL_US);
     }
   }
-  if (runtime->audio_prepared) {
-    zzplay_ahi_mark_end_of_stream(&runtime->ahi);
-  }
   for (;;) {
     ZZPlayStopReason stop_reason;
     int status = zzplay_audio_pump(
@@ -965,7 +1014,9 @@ static int zzplay_drain_audio(struct ZZPlayRuntime *runtime)
       return status;
     }
     refresh_status = 0;
-    if (runtime->audio_prepared) {
+    if (runtime->audio_prepared &&
+        runtime->pcm_ring.acknowledged ==
+            runtime->audio_result.pcm_produced) {
       zzplay_ahi_mark_end_of_stream(&runtime->ahi);
     }
     if (!runtime->audio_started && runtime->audio_prepared &&
@@ -1119,7 +1170,6 @@ int main(int argc, char **argv)
   uint32_t frame_period_us;
   uint32_t held_decode_us = 0U;
   int media_done = 0;
-  LONG pip_error = 0;
   int cleanup_status;
 
   memset(&runtime, 0, sizeof(runtime));
@@ -1172,6 +1222,7 @@ int main(int argc, char **argv)
                 ZZ9K_STATUS_UNSUPPORTED);
     goto cleanup;
   }
+  runtime.video_info = info;
   if (info.has_audio_pes) {
     ZZPlayAudioAvailability availability;
 
@@ -1227,16 +1278,6 @@ int main(int argc, char **argv)
   }
   (void)zzplay_resource_acquire(
       &runtime.core.resources, ZZPLAY_RESOURCE_P96_LIBRARY);
-
-  runtime.window = zzplay_open_pip(&info, &runtime.bitmap, &pip_error);
-  if (!runtime.window) {
-    fprintf(stderr, "zzplay: cannot open P96 PIP window (error %ld)\n",
-            (long)pip_error);
-    zzplay_fail(&runtime, ZZPLAY_FAILURE_PIP, ZZ9K_STATUS_UNSUPPORTED);
-    goto cleanup;
-  }
-  (void)zzplay_resource_acquire(
-      &runtime.core.resources, ZZPLAY_RESOURCE_VIDEO_WINDOW);
 
   cleanup_status = zz9k_open(&runtime.ctx);
   if (runtime.ctx) {
@@ -1411,11 +1452,19 @@ int main(int argc, char **argv)
           &runtime, &result, frame_period_us, held_decode_us,
           &retired);
       if (cleanup_status != ZZ9K_STATUS_OK) {
-        fprintf(stderr,
-                "zzplay: frame presentation failed: %s\n",
-                zz9k_status_name(cleanup_status));
-        zzplay_fail(&runtime, ZZPLAY_FAILURE_SESSION,
-                    cleanup_status);
+        if (runtime.pip_open_failed) {
+          fprintf(stderr,
+                  "zzplay: cannot open P96 PIP window (error %ld)\n",
+                  (long)runtime.pip_error);
+          zzplay_fail(&runtime, ZZPLAY_FAILURE_PIP,
+                      ZZ9K_STATUS_UNSUPPORTED);
+        } else {
+          fprintf(stderr,
+                  "zzplay: frame presentation failed: %s\n",
+                  zz9k_status_name(cleanup_status));
+          zzplay_fail(&runtime, ZZPLAY_FAILURE_SESSION,
+                      cleanup_status);
+        }
         break;
       }
       if (retired) {

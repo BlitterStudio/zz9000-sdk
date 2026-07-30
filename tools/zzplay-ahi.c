@@ -313,9 +313,19 @@ int zzplay_ahi_begin_drain(ZZPlayAHISink *sink)
 
 void zzplay_ahi_mark_end_of_stream(ZZPlayAHISink *sink)
 {
-  if (sink) {
-    sink->end_of_stream = 1U;
+  if (!sink || sink->end_of_stream) {
+    return;
   }
+  /* AHI completion can be polled once after the final request empties but
+   * before the decoder reports EOF. That terminal empty queue is not a gap. */
+  if (sink->underrun_active &&
+      !zzplay_ahi_has_pending(sink) &&
+      !zzplay_ahi_has_ready(sink) &&
+      sink->clock.queued_frames == 0U) {
+    zzplay_audio_clock_retract_underrun(&sink->clock);
+    sink->underrun_active = 0U;
+  }
+  sink->end_of_stream = 1U;
 }
 
 int zzplay_ahi_drained(const ZZPlayAHISink *sink)

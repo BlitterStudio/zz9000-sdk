@@ -126,3 +126,17 @@ ZZPlayBackendDecision zzplay_audio_select(
   }
   return decision;
 }
+
+int zzplay_audio_start_ready(ZZPlayAudioBackend backend,
+                             uint64_t queued_frames,
+                             uint64_t prebuffer_target_frames)
+{
+  if (queued_frames == 0U) {
+    return 0;
+  }
+  if (backend != ZZPLAY_AUDIO_AHI) {
+    return 1;
+  }
+  return prebuffer_target_frames != 0U &&
+         queued_frames >= prebuffer_target_frames;
+}

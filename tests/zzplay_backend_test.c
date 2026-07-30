@@ -95,6 +95,25 @@ static int check_audio_policy(void)
   return 1;
 }
 
+static int check_audio_start_prebuffer(void)
+{
+  if (zzplay_audio_start_ready(
+          ZZPLAY_AUDIO_AHI, 0U, 9600U) ||
+      zzplay_audio_start_ready(
+          ZZPLAY_AUDIO_AHI, 4800U, 9600U) ||
+      zzplay_audio_start_ready(
+          ZZPLAY_AUDIO_AHI, 9600U, 0U) ||
+      !zzplay_audio_start_ready(
+          ZZPLAY_AUDIO_AHI, 9600U, 9600U) ||
+      !zzplay_audio_start_ready(
+          ZZPLAY_AUDIO_AHI, 12000U, 9600U) ||
+      !zzplay_audio_start_ready(
+          ZZPLAY_AUDIO_AX, 1U, 0U)) {
+    return 0;
+  }
+  return 1;
+}
+
 int main(void)
 {
   if (!check_video_preflight()) {
@@ -102,6 +121,9 @@ int main(void)
   }
   if (!check_audio_policy()) {
     return 2;
+  }
+  if (!check_audio_start_prebuffer()) {
+    return 3;
   }
   return 0;
 }
