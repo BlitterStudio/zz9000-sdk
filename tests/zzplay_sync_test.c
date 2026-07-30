@@ -65,13 +65,17 @@ static int check_initial_offset(void)
 static int check_audio_starvation_recovery(void)
 {
   return zzplay_sync_resolve_audio_starvation(
-             ZZPLAY_SYNC_HOLD, 0U) == ZZPLAY_SYNC_PRESENT &&
+             ZZPLAY_SYNC_HOLD, 0U, 0U) == ZZPLAY_SYNC_PRESENT &&
          zzplay_sync_resolve_audio_starvation(
-             ZZPLAY_SYNC_HOLD, 1U) == ZZPLAY_SYNC_HOLD &&
+             ZZPLAY_SYNC_HOLD, 1U, 0U) == ZZPLAY_SYNC_HOLD &&
          zzplay_sync_resolve_audio_starvation(
-             ZZPLAY_SYNC_PRESENT, 0U) == ZZPLAY_SYNC_PRESENT &&
+             ZZPLAY_SYNC_HOLD, 960U, 960U) == ZZPLAY_SYNC_PRESENT &&
          zzplay_sync_resolve_audio_starvation(
-             ZZPLAY_SYNC_DISCARD, 0U) == ZZPLAY_SYNC_DISCARD;
+             ZZPLAY_SYNC_HOLD, 961U, 960U) == ZZPLAY_SYNC_HOLD &&
+         zzplay_sync_resolve_audio_starvation(
+             ZZPLAY_SYNC_PRESENT, 0U, 960U) == ZZPLAY_SYNC_PRESENT &&
+         zzplay_sync_resolve_audio_starvation(
+             ZZPLAY_SYNC_DISCARD, 0U, 960U) == ZZPLAY_SYNC_DISCARD;
 }
 
 int main(void)

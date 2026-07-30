@@ -554,7 +554,11 @@ static inline uint32_t zz9k_media_session_known_result_flags(void)
          ZZ9K_MEDIA_SESSION_RESULT_AUDIO_READY |
          ZZ9K_MEDIA_SESSION_RESULT_BACKPRESSURE |
          ZZ9K_MEDIA_SESSION_RESULT_PRESENTED |
-         ZZ9K_MEDIA_SESSION_RESULT_DISCARDED;
+         ZZ9K_MEDIA_SESSION_RESULT_DISCARDED |
+         ZZ9K_MEDIA_SESSION_RESULT_AUDIO_BOUND |
+         ZZ9K_MEDIA_SESSION_RESULT_AUDIO_PLAYING |
+         ZZ9K_MEDIA_SESSION_RESULT_AUDIO_DRAINED |
+         ZZ9K_MEDIA_SESSION_RESULT_AUDIO_UNDERRUN;
 }
 
 static inline int zz9k_reply_media_session_main(
@@ -670,7 +674,7 @@ static inline int zz9k_reply_media_session_status(
   if (result->session == 0U ||
       result->state < ZZ9K_MEDIA_SESSION_STATE_NEED_INPUT ||
       result->state > ZZ9K_MEDIA_SESSION_STATE_ERROR ||
-      result->page > ZZ9K_MEDIA_STATUS_COUNTERS ||
+      result->page > ZZ9K_MEDIA_STATUS_AUDIO_OUTPUT ||
       (result->flags & ~zz9k_media_session_known_result_flags()) != 0U) {
     memset(result, 0, sizeof(*result));
     return ZZ9K_STATUS_INTERNAL_ERROR;

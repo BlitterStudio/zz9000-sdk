@@ -833,9 +833,13 @@ static inline int zz9k_request_media_session_command_value(
     uint64_t value, uint32_t flags)
 {
   ZZ9KMediaSessionCommandPayload *payload;
+  uint32_t allowed_flags =
+      opcode == ZZ9K_OP_MEDIA_SESSION_AUDIO_BIND
+          ? ZZ9K_MEDIA_AUDIO_BIND_PAUSE
+          : 0U;
 
   if (!request || !zz9k_media_command_opcode_known(opcode) ||
-      session == 0U || flags != 0U) {
+      session == 0U || (flags & ~allowed_flags) != 0U) {
     return ZZ9K_STATUS_BAD_REQUEST;
   }
   zz9k_request_init(request, opcode);
@@ -861,7 +865,8 @@ static inline int zz9k_request_media_session_status(
 {
   ZZ9KMediaSessionStatusPayload *payload;
 
-  if (!request || session == 0U || page > ZZ9K_MEDIA_STATUS_COUNTERS ||
+  if (!request || session == 0U ||
+      page > ZZ9K_MEDIA_STATUS_AUDIO_OUTPUT ||
       flags != 0U) {
     return ZZ9K_STATUS_BAD_REQUEST;
   }

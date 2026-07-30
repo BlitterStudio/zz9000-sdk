@@ -474,6 +474,7 @@ add_test(NAME media_session_abi_test COMMAND media_session_abi_test)
 add_library(zzplay_core STATIC
   tools/zzplay-audio.c
   tools/zzplay-audio-clock.c
+  tools/zzplay-ax.c
   tools/zzplay-core.c
   tools/zzplay-media.c
   tools/zzplay-options.c
@@ -487,6 +488,7 @@ add_library(zzplay_core STATIC
 target_include_directories(zzplay_core
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/host/include
     ${CMAKE_CURRENT_SOURCE_DIR}/tools
 )
 
@@ -517,6 +519,13 @@ add_executable(zzplay_audio_clock_test
 
 target_link_libraries(zzplay_audio_clock_test PRIVATE zzplay_core)
 add_test(NAME zzplay_audio_clock_test COMMAND zzplay_audio_clock_test)
+
+add_executable(zzplay_ax_test
+  tests/zzplay_ax_test.c
+)
+
+target_link_libraries(zzplay_ax_test PRIVATE zzplay_core)
+add_test(NAME zzplay_ax_test COMMAND zzplay_ax_test)
 
 add_executable(zzplay_sync_test
   tests/zzplay_sync_test.c

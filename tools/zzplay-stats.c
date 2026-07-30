@@ -62,6 +62,45 @@ void zzplay_stats_record_sync(ZZPlayStatsCore *stats,
   }
 }
 
+void zzplay_stats_record_profile(ZZPlayStatsCore *stats,
+                                 ZZPlayProfileCategory category,
+                                 uint32_t elapsed_us)
+{
+  if (!stats || category < 0 || category >= ZZPLAY_PROFILE_COUNT) {
+    return;
+  }
+  stats->profile[category].elapsed_us += elapsed_us;
+  stats->profile[category].calls++;
+}
+
+uint32_t zzplay_stats_profile_average_us(
+    const ZZPlayStatsCore *stats, ZZPlayProfileCategory category)
+{
+  uint64_t average;
+
+  if (!stats || category < 0 || category >= ZZPLAY_PROFILE_COUNT ||
+      stats->profile[category].calls == 0U) {
+    return 0U;
+  }
+  average = stats->profile[category].elapsed_us /
+            stats->profile[category].calls;
+  return average > 0xffffffffULL ? 0xffffffffU : (uint32_t)average;
+}
+
+uint64_t zzplay_stats_profile_total_us(const ZZPlayStatsCore *stats)
+{
+  uint64_t total = 0U;
+  int category;
+
+  if (!stats) {
+    return 0U;
+  }
+  for (category = 0; category < ZZPLAY_PROFILE_COUNT; category++) {
+    total += stats->profile[category].elapsed_us;
+  }
+  return total;
+}
+
 uint32_t zzplay_fps_milli(uint32_t frames, uint64_t elapsed_us)
 {
   uint64_t value;

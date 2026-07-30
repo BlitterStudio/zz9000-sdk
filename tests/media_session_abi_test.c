@@ -32,6 +32,12 @@ static int test_constants_and_layout(void)
   if (sizeof(ZZ9KMediaSessionAudioResultPayload) != 48U) return 17;
   if (sizeof(ZZ9KMediaSessionStatusResultPayload) != 48U) return 18;
   if (ZZ9K_MEDIA_NO_PTS != UINT64_MAX) return 19;
+  if (ZZ9K_MEDIA_AUDIO_BIND_PAUSE != (1U << 0)) return 20;
+  if (ZZ9K_MEDIA_SESSION_RESULT_AUDIO_BOUND != (1U << 11)) return 21;
+  if (ZZ9K_MEDIA_SESSION_RESULT_AUDIO_PLAYING != (1U << 12)) return 22;
+  if (ZZ9K_MEDIA_SESSION_RESULT_AUDIO_DRAINED != (1U << 13)) return 23;
+  if (ZZ9K_MEDIA_SESSION_RESULT_AUDIO_UNDERRUN != (1U << 14)) return 24;
+  if (ZZ9K_MEDIA_STATUS_AUDIO_OUTPUT != 3U) return 25;
   return 0;
 }
 
@@ -164,14 +170,26 @@ static int test_request_builders(void)
           &request, ZZ9K_OP_VIDEO_SESSION_CLOSE, 9U, 0U) !=
       ZZ9K_STATUS_BAD_REQUEST)
     return 14;
+  if (zz9k_request_media_session_command(
+          &request, ZZ9K_OP_MEDIA_SESSION_AUDIO_BIND, 9U,
+          ZZ9K_MEDIA_AUDIO_BIND_PAUSE) != ZZ9K_STATUS_OK)
+    return 15;
+  if (zz9k_request_media_session_command(
+          &request, ZZ9K_OP_MEDIA_SESSION_AUDIO_UNBIND, 9U,
+          ZZ9K_MEDIA_AUDIO_BIND_PAUSE) != ZZ9K_STATUS_BAD_REQUEST)
+    return 16;
   if (zz9k_request_media_session_status(&request, 9U,
                                         ZZ9K_MEDIA_STATUS_TIMING, 0U) !=
       ZZ9K_STATUS_OK)
-    return 15;
+    return 17;
   if (zz9k_request_media_session_status(
-          &request, 9U, ZZ9K_MEDIA_STATUS_COUNTERS + 1U, 0U) !=
+          &request, 9U, ZZ9K_MEDIA_STATUS_AUDIO_OUTPUT, 0U) !=
+      ZZ9K_STATUS_OK)
+    return 18;
+  if (zz9k_request_media_session_status(
+          &request, 9U, ZZ9K_MEDIA_STATUS_AUDIO_OUTPUT + 1U, 0U) !=
       ZZ9K_STATUS_BAD_REQUEST)
-    return 16;
+    return 19;
   return 0;
 }
 
@@ -259,12 +277,20 @@ static int test_reply_decoders(void)
       audio_result.session != 0U)
     return 9;
   zz9k_put_be32(&reply.payload.inline_data[44],
-                ZZ9K_MEDIA_SESSION_RESULT_AUDIO_READY);
+                ZZ9K_MEDIA_SESSION_RESULT_AUDIO_READY |
+                ZZ9K_MEDIA_SESSION_RESULT_AUDIO_BOUND |
+                ZZ9K_MEDIA_SESSION_RESULT_AUDIO_PLAYING |
+                ZZ9K_MEDIA_SESSION_RESULT_AUDIO_UNDERRUN);
   reply.opcode = ZZ9K_OP_MEDIA_SESSION_AUDIO_BIND;
+  if (zz9k_reply_media_session_audio(
+          &reply, ZZ9K_OP_MEDIA_SESSION_AUDIO_BIND, &audio_result) !=
+          ZZ9K_STATUS_OK ||
+      (audio_result.flags & ZZ9K_MEDIA_SESSION_RESULT_AUDIO_BOUND) == 0U)
+    return 10;
   if (zz9k_reply_media_session_audio(
           &reply, ZZ9K_OP_MEDIA_SESSION_AUDIO_READ, &audio_result) !=
       ZZ9K_STATUS_INTERNAL_ERROR)
-    return 10;
+    return 11;
 
   memset(&reply, 0, sizeof(reply));
   reply.opcode = ZZ9K_OP_MEDIA_SESSION_STATUS;
@@ -280,29 +306,29 @@ static int test_reply_decoders(void)
   zz9k_put_be32(&reply.payload.inline_data[20], 0xffffffffU);
   if (zz9k_reply_media_session_status(&reply, &status_result) !=
       ZZ9K_STATUS_OK)
-    return 11;
-  if (status_result.value[0] != ZZ9K_MEDIA_NO_PTS) return 12;
+    return 12;
+  if (status_result.value[0] != ZZ9K_MEDIA_NO_PTS) return 13;
   reply.payload_len = 44U;
   if (zz9k_reply_media_session_status(&reply, &status_result) !=
       ZZ9K_STATUS_INTERNAL_ERROR)
-    return 13;
+    return 14;
   reply.payload_len = 48U;
   zz9k_put_be32(&reply.payload.inline_data[12], 1U << 31);
   if (zz9k_reply_media_session_status(&reply, &status_result) !=
           ZZ9K_STATUS_INTERNAL_ERROR ||
       status_result.session != 0U)
-    return 14;
+    return 15;
   zz9k_put_be32(&reply.payload.inline_data[12], 0U);
   reply.opcode = ZZ9K_OP_MEDIA_SESSION_DECODE;
   if (zz9k_reply_media_session_status(&reply, &status_result) !=
       ZZ9K_STATUS_INTERNAL_ERROR)
-    return 15;
+    return 16;
   reply.opcode = ZZ9K_OP_MEDIA_SESSION_STATUS;
   zz9k_put_be32(&reply.payload.inline_data[8],
-                ZZ9K_MEDIA_STATUS_COUNTERS + 1U);
+                ZZ9K_MEDIA_STATUS_AUDIO_OUTPUT + 1U);
   if (zz9k_reply_media_session_status(&reply, &status_result) !=
       ZZ9K_STATUS_INTERNAL_ERROR)
-    return 16;
+    return 17;
   return 0;
 }
 

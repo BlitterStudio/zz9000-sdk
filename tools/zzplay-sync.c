@@ -97,10 +97,11 @@ ZZPlaySyncDecision zzplay_sync_decide(
 
 ZZPlaySyncDecision zzplay_sync_resolve_audio_starvation(
     ZZPlaySyncDecision decision,
-    uint64_t queued_audio_frames)
+    uint64_t queued_audio_frames,
+    uint64_t low_water_frames)
 {
   if (decision == ZZPLAY_SYNC_HOLD &&
-      queued_audio_frames == 0U) {
+      queued_audio_frames <= low_water_frames) {
     return ZZPLAY_SYNC_PRESENT;
   }
   return decision;

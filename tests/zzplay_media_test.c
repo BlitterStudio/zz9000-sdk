@@ -9,6 +9,7 @@ static int check_linear_and_alignment(void)
 {
   uint8_t source[16];
   uint8_t destination[16];
+  ZZ9KSharedBuffer shared;
   ZZPlayPCMRing ring;
   unsigned i;
 
@@ -16,7 +17,11 @@ static int check_linear_and_alignment(void)
     source[i] = (uint8_t)i;
   }
   memset(destination, 0xff, sizeof(destination));
-  zzplay_pcm_ring_init(&ring, source, sizeof(source));
+  memset(&shared, 0, sizeof(shared));
+  shared.handle = 1U;
+  shared.length = sizeof(source);
+  shared.data = source;
+  zzplay_pcm_ring_init(&ring, &shared);
   if (zzplay_pcm_ring_copy(
           &ring, 10U, destination, 9U, 4U) != 8U ||
       memcmp(source, destination, 8U) != 0 ||
@@ -34,9 +39,14 @@ static int check_wrap_and_invalid_progress(void)
   uint8_t destination[8];
   static const uint8_t expected[8] =
       { 4U, 5U, 6U, 7U, 8U, 9U, 10U, 11U };
+  ZZ9KSharedBuffer shared;
   ZZPlayPCMRing ring;
 
-  zzplay_pcm_ring_init(&ring, source, sizeof(source));
+  memset(&shared, 0, sizeof(shared));
+  shared.handle = 2U;
+  shared.length = sizeof(source);
+  shared.data = source;
+  zzplay_pcm_ring_init(&ring, &shared);
   ring.acknowledged = 4U;
   if (zzplay_pcm_ring_copy(
           &ring, 12U, destination, sizeof(destination), 4U) !=

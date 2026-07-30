@@ -97,6 +97,28 @@ static int check_stats_and_transport(void)
       stats.max_abs_drift_pts != 4000U) {
     return 0;
   }
+  zzplay_stats_record_profile(
+      &stats, ZZPLAY_PROFILE_AUDIO_READ, 6000U);
+  zzplay_stats_record_profile(
+      &stats, ZZPLAY_PROFILE_AUDIO_READ, 4000U);
+  zzplay_stats_record_profile(
+      &stats, ZZPLAY_PROFILE_PCM_COPY, 1250U);
+  zzplay_stats_record_profile(
+      &stats, ZZPLAY_PROFILE_FILE_READ, 7000U);
+  zzplay_stats_record_profile(
+      &stats, ZZPLAY_PROFILE_INPUT_COPY, 2000U);
+  zzplay_stats_record_profile(
+      &stats, ZZPLAY_PROFILE_AHI_SUBMIT, 3000U);
+  if (stats.profile[ZZPLAY_PROFILE_AUDIO_READ].calls != 2U ||
+      stats.profile[ZZPLAY_PROFILE_AUDIO_READ].elapsed_us != 10000U ||
+      zzplay_stats_profile_average_us(
+          &stats, ZZPLAY_PROFILE_AUDIO_READ) != 5000U ||
+      stats.profile[ZZPLAY_PROFILE_FILE_READ].calls != 1U ||
+      stats.profile[ZZPLAY_PROFILE_INPUT_COPY].calls != 1U ||
+      stats.profile[ZZPLAY_PROFILE_AHI_SUBMIT].calls != 1U ||
+      zzplay_stats_profile_total_us(&stats) != 23250U) {
+    return 0;
+  }
 
   zzplay_transport_init(&transport);
   zzplay_transport_set_chunk(&transport, 4096U, 0);

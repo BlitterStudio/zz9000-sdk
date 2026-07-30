@@ -2,15 +2,21 @@
 
 #include "zzplay-media.h"
 
+#include <string.h>
+
 void zzplay_pcm_ring_init(ZZPlayPCMRing *ring,
-                          const volatile void *data,
-                          uint32_t capacity)
+                          const ZZ9KSharedBuffer *shared)
 {
   if (!ring) {
     return;
   }
-  ring->data = (const volatile uint8_t *)data;
-  ring->capacity = capacity;
+  if (shared) {
+    ring->shared = *shared;
+    ring->capacity = shared->length;
+  } else {
+    memset(&ring->shared, 0, sizeof(ring->shared));
+    ring->capacity = 0U;
+  }
   ring->acknowledged = 0U;
 }
 
@@ -19,24 +25,12 @@ uint64_t zzplay_pcm_ring_available(const ZZPlayPCMRing *ring,
 {
   uint64_t available;
 
-  if (!ring || !ring->data || ring->capacity == 0U ||
+  if (!ring || !ring->shared.data || ring->capacity == 0U ||
       produced < ring->acknowledged) {
     return 0U;
   }
   available = produced - ring->acknowledged;
   return available <= ring->capacity ? available : 0U;
-}
-
-static void zzplay_copy_from_volatile(
-    uint8_t *destination,
-    const volatile uint8_t *source,
-    size_t bytes)
-{
-  size_t i;
-
-  for (i = 0U; i < bytes; i++) {
-    destination[i] = source[i];
-  }
 }
 
 size_t zzplay_pcm_ring_copy(const ZZPlayPCMRing *ring,
@@ -66,12 +60,15 @@ size_t zzplay_pcm_ring_copy(const ZZPlayPCMRing *ring,
   if (first > ring->capacity - offset) {
     first = ring->capacity - offset;
   }
-  zzplay_copy_from_volatile(
-      (uint8_t *)destination, ring->data + offset, first);
-  if (first < bytes) {
-    zzplay_copy_from_volatile(
-        (uint8_t *)destination + first, ring->data,
-        bytes - first);
+  if (!zz9k_shared_copy_from(
+          destination, &ring->shared, offset, (uint32_t)first)) {
+    return 0U;
+  }
+  if (first < bytes &&
+      !zz9k_shared_copy_from(
+          (uint8_t *)destination + first, &ring->shared, 0U,
+          (uint32_t)(bytes - first))) {
+    return 0U;
   }
   return bytes;
 }

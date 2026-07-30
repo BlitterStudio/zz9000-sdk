@@ -7,12 +7,13 @@
 #define ZZPLAY_MEDIA_H
 
 #include "zz9k/abi.h"
+#include "zz9k/shared.h"
 
 #include <stddef.h>
 #include <stdint.h>
 
 typedef struct ZZPlayPCMRing {
-  const volatile uint8_t *data;
+  ZZ9KSharedBuffer shared;
   uint32_t capacity;
   uint64_t acknowledged;
 } ZZPlayPCMRing;
@@ -26,8 +27,7 @@ typedef enum ZZPlayMediaAction {
 } ZZPlayMediaAction;
 
 void zzplay_pcm_ring_init(ZZPlayPCMRing *ring,
-                          const volatile void *data,
-                          uint32_t capacity);
+                          const ZZ9KSharedBuffer *shared);
 uint64_t zzplay_pcm_ring_available(const ZZPlayPCMRing *ring,
                                    uint64_t produced);
 size_t zzplay_pcm_ring_copy(const ZZPlayPCMRing *ring,
