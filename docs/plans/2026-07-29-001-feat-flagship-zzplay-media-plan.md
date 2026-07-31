@@ -11,26 +11,20 @@ execution: code
 
 # Flagship `zzplay` Media Player
 
-## Execution status — 2026-07-30
+## Execution status — 2026-07-31
 
-- U1–U3 are implemented on `feat/zzplay-media`: the player has testable
-  seams, the additive media-session ABI is in place, and MPEG-1 Program
-  Stream MP2/timeline decoding is integrated.
-- The direct-AX portion of U4 is hardware-passed on default Zorro III with
-  firmware `b0e9967` and SDK `a75ff78`. The r9 fixture completed 300/300
-  frames with zero presentation drops in 12.301 seconds at 24.424 fps; the
-  post-run MHI ownership smoke passed.
-- The focused generic-AHI path is hardware-passed on the matched local
-  firmware `4f0a2cf`, drivers `ecad92b`, and r15/r18 SDK checkpoint. Two
-  consecutive runs each completed 300/300 frames,
-  576000 played audio frames, zero underruns/late frames, 50 ms final and
-  89 ms maximum drift, and 24.553/24.554 fps average with correct synchronized
-  audio. First-frame PIP deferral reduced but did not eliminate the brief
-  startup cyan transition; Picasso96 has no supported hidden PIP-open state.
-- U4 is not globally complete. Long-run drift, pause/resume, loop, abort/error
-  cleanup, reopen/ownership, and resource-leak qualification remain.
-- The recommended next item is therefore the remaining U4 lifecycle/long-run
-  matrix, followed by U5 standalone MP3 integration. U6–U9 remain pending.
+- U1-U4 are implemented and hardware-qualified on default Zorro III at
+  firmware `00982fe`, SDK `cb977b0`, and drivers `35b1180`.
+- R24 passed clean Ctrl-C/PIP teardown, immediate direct-AX reopen, soft
+  reboot, explicit AHI, and a full post-AHI AUTO/direct-AX run. The long run
+  completed 4,405 decoded, 4,378 presented, 27 discarded, 6,476,544 audio
+  frames, 11 underruns, 40 ms final/133 ms maximum drift, and 29.915 fps.
+- The durable r20 corruption cause was the Z3 AHI DMA scratch window
+  overlapping the firmware heap. Firmware `297c5d4` separates the owners;
+  SDK `cb977b0` normalizes libnix Ctrl-C cleanup; firmware `00982fe` takes
+  coherent snapshots of ISR-owned direct-AX counters.
+- The recommended next item is U5 standalone MP3 integration. U6-U9 remain
+  pending; versions and downstream pins stay unchanged until U5-U8 stabilize.
 
 ## Goal Capsule
 
