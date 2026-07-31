@@ -23,8 +23,18 @@ execution: code
   overlapping the firmware heap. Firmware `297c5d4` separates the owners;
   SDK `cb977b0` normalizes libnix Ctrl-C cleanup; firmware `00982fe` takes
   coherent snapshots of ISR-owned direct-AX counters.
-- The recommended next item is U5 standalone MP3 integration. U6-U9 remain
-  pending; versions and downstream pins stay unchanged until U5-U8 stabilize.
+- U5 standalone MP3 integration is implemented and software-qualified at SDK
+  `7e35660`. It adds accelerated decode plus AHI, optional runtime MHI, AUTO
+  pre-play fallback, bounded MHI streaming, clean EOF/loop/stop handling, and
+  preserves `zz9k-mp3` as the low-level diagnostic. The host suite passes
+  104/104, the AmigaOS 3 cross-build and package pass, and drivers MHI/AHI
+  builds remain green.
+- The U5 default-Z3/AX hardware gate is staged at
+  `Z:\bench-zzplay-mp3-u5-r1`; it must pass before U5 closes. Standalone-MP3
+  pause/resume remains an end-to-end U6 control-surface test, while the U5 MHI
+  adapter already provides the public lifecycle operations.
+- U6-U9 remain pending; versions and downstream pins stay unchanged until
+  U5-U8 stabilize.
 
 ## Goal Capsule
 
