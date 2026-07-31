@@ -8,6 +8,7 @@
 #include "zz9k/caps.h"
 #include "zz9k/host.h"
 #include "zz9k/shared.h"
+#include "zzplay-mp3-transport.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -225,89 +226,38 @@ static void mp3_stats_add(ZZ9KMP3Tick *dst, ZZ9KMP3Tick start,
 
 static uint32_t mp3_stream_pcm_ack_batch_bytes(uint32_t pcm_capacity)
 {
-  if (pcm_capacity < 2U) {
-    return 0U;
-  }
-  if (pcm_capacity < DEFAULT_STREAM_PCM_CAPACITY) {
-    return (pcm_capacity / 2U) & ~1UL;
-  }
-  return STREAM_PCM_ACK_BATCH_BYTES;
+  return zzplay_mp3_pcm_ack_batch_bytes(pcm_capacity);
 }
 
 static int mp3_stream_pcm_ack_due(uint32_t pending_ack,
                                   uint32_t pcm_capacity,
                                   int force)
 {
-  if (pending_ack == 0U) {
-    return 0;
-  }
-  if (force) {
-    return 1;
-  }
-  return pending_ack >= mp3_stream_pcm_ack_batch_bytes(pcm_capacity);
+  return zzplay_mp3_pcm_ack_due(pending_ack, pcm_capacity, force);
 }
 
 static uint32_t mp3_stream_decode_quantum_bytes(uint32_t requested,
                                                 uint32_t pcm_capacity)
 {
-  uint32_t quantum;
-
-  if (pcm_capacity < 2U) {
-    return 0U;
-  }
-  if (requested == 0U) {
-    return 0U;
-  } else {
-    quantum = requested & ~1UL;
-  }
-  if (quantum == 0U || quantum >= pcm_capacity) {
-    return 0U;
-  }
-  return quantum;
+  return zzplay_mp3_decode_quantum_bytes(requested, pcm_capacity);
 }
 
 static uint32_t mp3_stream_feed_chunk_bytes(uint32_t requested,
                                             uint32_t decode_quantum)
 {
-  uint32_t chunk;
-
-  if (requested != 0U) {
-    chunk = requested & ~1UL;
-  } else if (decode_quantum == 0U) {
-    chunk = STREAM_CHUNK_BYTES;
-  } else {
-    chunk = (decode_quantum / 4U) & ~1UL;
-    if (chunk < STREAM_MIN_FEED_CHUNK_BYTES) {
-      chunk = STREAM_MIN_FEED_CHUNK_BYTES;
-    }
-  }
-
-  if (chunk == 0U || chunk > STREAM_CHUNK_BYTES) {
-    return 0U;
-  }
-  return chunk;
+  return zzplay_mp3_feed_chunk_bytes(requested, decode_quantum);
 }
 
 static uint32_t mp3_stream_ring_advance(uint32_t offset, uint32_t bytes,
                                         uint32_t capacity)
 {
-  if (capacity == 0U) {
-    return offset;
-  }
-  bytes %= capacity;
-  if (bytes >= capacity - offset) {
-    return bytes - (capacity - offset);
-  }
-  return offset + bytes;
+  return zzplay_mp3_ring_advance(offset, bytes, capacity);
 }
 
 static uint32_t mp3_stream_input_buffered(uint32_t bytes_fed,
                                           uint32_t bytes_consumed)
 {
-  if (bytes_consumed >= bytes_fed) {
-    return 0U;
-  }
-  return bytes_fed - bytes_consumed;
+  return zzplay_mp3_input_buffered(bytes_fed, bytes_consumed);
 }
 
 static int mp3_stream_input_room_low(uint32_t bytes_fed,
@@ -315,14 +265,8 @@ static int mp3_stream_input_room_low(uint32_t bytes_fed,
                                      uint32_t input_capacity,
                                      uint32_t next_feed_bytes)
 {
-  uint32_t buffered;
-
-  if (input_capacity == 0U || next_feed_bytes == 0U ||
-      next_feed_bytes > input_capacity) {
-    return 0;
-  }
-  buffered = mp3_stream_input_buffered(bytes_fed, bytes_consumed);
-  return buffered > input_capacity - next_feed_bytes;
+  return zzplay_mp3_input_room_low(bytes_fed, bytes_consumed,
+                                   input_capacity, next_feed_bytes);
 }
 
 static int parse_u32(const char *text, uint32_t *value)

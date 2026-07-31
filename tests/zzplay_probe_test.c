@@ -70,6 +70,75 @@ static int check_program_probe(void)
          info.has_audio_pes;
 }
 
+static int check_mp3_probe(void)
+{
+  /* MPEG-1 Layer III, 128 kbps, 44.1 kHz. Channel mode is the only
+   * difference between the two valid headers. */
+  static const uint8_t stereo[] = {0xffU, 0xfbU, 0x90U, 0x00U};
+  static const uint8_t mono[] = {0xffU, 0xfbU, 0x90U, 0xc0U};
+  static const uint8_t vbr_second[] = {0xffU, 0xfbU, 0xb0U, 0x00U};
+  static const uint8_t mpeg2[] = {0xffU, 0xf3U, 0x80U, 0x00U};
+  static const uint8_t mpeg25[] = {0xffU, 0xe3U, 0x80U, 0xc0U};
+  static const uint8_t invalid_layer[] = {0xffU, 0xfdU, 0x90U, 0x00U};
+  static const uint8_t free_format[] = {0xffU, 0xfbU, 0x00U, 0x00U};
+  uint8_t tagged[24];
+  ZZPlayMP3Info info;
+
+  memset(&info, 0, sizeof(info));
+  if (!zzplay_probe_mp3_frame(stereo, sizeof(stereo), &info) ||
+      info.sample_rate != 44100U || info.channels != 2U ||
+      info.bitrate_kbps != 128U || info.frame_bytes != 417U) {
+    return 0;
+  }
+  if (!zzplay_probe_mp3_frame(mono, sizeof(mono), &info) ||
+      info.channels != 1U ||
+      !zzplay_probe_mp3_frame(vbr_second, sizeof(vbr_second), &info) ||
+      info.bitrate_kbps != 192U ||
+      !zzplay_probe_mp3_frame(mpeg2, sizeof(mpeg2), &info) ||
+      info.sample_rate != 22050U || info.mpeg_version != 2U ||
+      !zzplay_probe_mp3_frame(mpeg25, sizeof(mpeg25), &info) ||
+      info.sample_rate != 11025U || info.mpeg_version != 25U ||
+      info.channels != 1U ||
+      zzplay_probe_mp3_frame(invalid_layer, sizeof(invalid_layer), &info) ||
+      zzplay_probe_mp3_frame(free_format, sizeof(free_format), &info) ||
+      zzplay_probe_mp3_frame(stereo, 3U, &info)) {
+    return 0;
+  }
+
+  memset(tagged, 0, sizeof(tagged));
+  memcpy(tagged, "ID3\004\000\000\000\000\000\006", 10U);
+  memcpy(tagged + 16U, stereo, sizeof(stereo));
+  return zzplay_probe_mp3(tagged, sizeof(tagged), &info) &&
+         info.sample_rate == 44100U && info.channels == 2U;
+}
+
+static int check_mp3_file_probe(void)
+{
+  static const uint8_t header[] = {0xffU, 0xfbU, 0x90U, 0x00U};
+  uint8_t frames[834];
+  ZZPlayProbeInfo probe;
+  FILE *file;
+
+  memset(frames, 0, sizeof(frames));
+  memcpy(frames, header, sizeof(header));
+  memcpy(frames + 417U, header, sizeof(header));
+  file = tmpfile();
+  if (!file || fwrite(frames, 1U, sizeof(frames), file) !=
+                   sizeof(frames) || fflush(file) != 0) {
+    if (file) fclose(file);
+    return 0;
+  }
+  memset(&probe, 0, sizeof(probe));
+  if (!zzplay_probe_media_file(file, &probe) || ftell(file) != 0L ||
+      probe.kind != ZZPLAY_MEDIA_KIND_MP3 ||
+      probe.mp3.sample_rate != 44100U || probe.mp3.channels != 2U) {
+    fclose(file);
+    return 0;
+  }
+  fclose(file);
+  return 1;
+}
+
 static int check_stats_and_transport(void)
 {
   ZZPlayStatsCore stats;
@@ -216,6 +285,12 @@ int main(void)
   }
   if (!check_program_probe()) {
     return 12;
+  }
+  if (!check_mp3_probe()) {
+    return 13;
+  }
+  if (!check_mp3_file_probe()) {
+    return 14;
   }
   return 0;
 }

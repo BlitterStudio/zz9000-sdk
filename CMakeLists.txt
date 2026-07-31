@@ -477,6 +477,7 @@ add_library(zzplay_core STATIC
   tools/zzplay-ax.c
   tools/zzplay-core.c
   tools/zzplay-media.c
+  tools/zzplay-mp3-transport.c
   tools/zzplay-options.c
   tools/zzplay-probe.c
   tools/zzplay-stats.c
@@ -559,6 +560,26 @@ add_test(
   NAME zzplay_player_source_test
   COMMAND zzplay_player_source_test
           ${CMAKE_CURRENT_SOURCE_DIR}/tools/zzplay.c
+)
+
+add_executable(zzplay_mhi_source_test
+  tests/zzplay_mhi_source_test.c
+)
+
+add_test(
+  NAME zzplay_mhi_source_test
+  COMMAND zzplay_mhi_source_test
+          ${CMAKE_CURRENT_SOURCE_DIR}/tools/zzplay-mhi.c
+)
+
+add_executable(zzplay_mp3_source_test
+  tests/zzplay_mp3_source_test.c
+)
+
+add_test(
+  NAME zzplay_mp3_source_test
+  COMMAND zzplay_mp3_source_test
+          ${CMAKE_CURRENT_SOURCE_DIR}/tools/zzplay-mp3.c
 )
 
 add_executable(module_manifest_test
@@ -1289,6 +1310,7 @@ add_test(
 
 add_executable(mp3_tool_logic_test
   tests/mp3_tool_logic_test.c
+  tools/zzplay-mp3-transport.c
 )
 
 target_include_directories(mp3_tool_logic_test
@@ -1395,6 +1417,7 @@ target_link_libraries(zz9k_aead PRIVATE zz9k_host)
 
 add_executable(zz9k_mp3
   tools/zz9k-mp3.c
+  tools/zzplay-mp3-transport.c
 )
 
 target_link_libraries(zz9k_mp3 PRIVATE zz9k_host)

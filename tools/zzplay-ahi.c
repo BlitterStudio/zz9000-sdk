@@ -111,6 +111,7 @@ int zzplay_ahi_prepare(ZZPlayAHISink *sink,
 {
   size_t period_bytes;
   unsigned i;
+  int failure = -1;
 
   if (!sink || sample_rate == 0U ||
       (channels != 1U && channels != 2U) ||
@@ -137,6 +138,7 @@ int zzplay_ahi_prepare(ZZPlayAHISink *sink,
   sink->control->ahir_Version = ZZPLAY_AHI_VERSION;
   if (OpenDevice((CONST_STRPTR)AHINAME, AHI_DEFAULT_UNIT,
                  (struct IORequest *)sink->control, 0U) != 0) {
+    failure = sink->control->ahir_Std.io_Error;
     goto fail;
   }
   sink->device_open = 1U;
@@ -165,6 +167,7 @@ int zzplay_ahi_prepare(ZZPlayAHISink *sink,
 
 fail:
   zzplay_ahi_close(sink);
+  sink->last_error = failure;
   return 0;
 }
 

@@ -46,6 +46,15 @@ int main(int argc, char **argv)
   char *start_ensure;
   char *present_ensure;
   char *present;
+  char *media_probe;
+  char *mp3_run;
+  char *mpeg_backend_select;
+  char *board_probe;
+  char *mp3_stop;
+  char *mp3_stop_end;
+  char *mp3_latched_check;
+  char *mp3_raw_break;
+  char *mp3_stop_latch;
   int ok;
 
   if (argc != 2) {
@@ -65,7 +74,37 @@ int main(int argc, char **argv)
   present = present_ensure
                 ? strstr(present_ensure, "zz9k_media_session_present(")
                 : 0;
+  media_probe = strstr(source, "zzplay_probe_media_file(");
+  mp3_run = media_probe ? strstr(media_probe, "zzplay_mp3_run(") : 0;
+  mpeg_backend_select = mp3_run
+                            ? strstr(mp3_run,
+                                     "audio_decision = zzplay_audio_select(")
+                            : 0;
+  board_probe = mpeg_backend_select
+                    ? strstr(mpeg_backend_select, "zz9k_find_board(")
+                    : 0;
+  mp3_stop = strstr(source, "static int zzplay_mp3_stop_requested(");
+  mp3_stop_end = mp3_stop ? strstr(mp3_stop, "\n}\n") : 0;
+  mp3_latched_check =
+      mp3_stop
+          ? strstr(mp3_stop, "if (zzplay_ctrl_c_requested != 0)")
+          : 0;
+  mp3_raw_break =
+      mp3_stop ? strstr(mp3_stop,
+                        "SetSignal(0L, SIGBREAKF_CTRL_C)")
+               : 0;
+  mp3_stop_latch =
+      mp3_raw_break
+          ? strstr(mp3_raw_break, "zzplay_ctrl_c_requested = 1;")
+          : 0;
   ok = retire && start_ensure && present_ensure && present &&
+       media_probe && mp3_run && mpeg_backend_select && board_probe &&
+       mp3_stop && mp3_stop_end && mp3_latched_check &&
+       mp3_raw_break && mp3_stop_latch &&
+       mp3_latched_check < mp3_raw_break &&
+       mp3_stop_latch < mp3_stop_end &&
+       media_probe < mp3_run && mp3_run < mpeg_backend_select &&
+       mpeg_backend_select < board_probe &&
        strstr(source, "runtime.video_info = info;") &&
        strstr(source, "signal(SIGINT, zzplay_sigint_handler)") &&
        strstr(source, "SetSignal(0L, SIGBREAKF_CTRL_C)") &&
@@ -75,6 +114,9 @@ int main(int argc, char **argv)
        strstr(source, "zzplay_core_pause(&runtime->core)") &&
        strstr(source, "zzplay_core_resume(&runtime->core)") &&
        strstr(source, "zzplay_restart_session(&runtime") &&
+       strstr(source, "zzplay_probe_media_file(") &&
+       strstr(source, "zzplay_mp3_run(") &&
+       strstr(source, "ZZPLAY_MEDIA_KIND_MP3") &&
        strstr(source, "zzplay_resource_release(") &&
        !strstr(source, "zzplay_open_pip(&info");
   if (!ok) {

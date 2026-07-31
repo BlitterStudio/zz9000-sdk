@@ -177,6 +177,11 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "ZZ9KAudioStreamFeed()");
   ok &= expect_contains(source, "ZZ9KAudioStreamRead()");
   ok &= expect_contains(source, "ZZ9KAudioStreamClose()");
+  ok &= expect_contains(source,
+                        "zzplay --audio=mhi Work:Audio/test.mp3");
+  ok &= expect_contains(source,
+                        "`zz9k-mp3` remains the low-level");
+  ok &= expect_not_contains(source, "This prototype is\nvideo-only");
   ok &= expect_contains(source, "`--skip-existing`");
   ok &= expect_contains(source, "reported with an `s` line");
   ok &= expect_contains(source, "`--dry-run`");

@@ -8,6 +8,120 @@
 #define ZZPLAY_PROBE_BYTES (256U * 1024U)
 #define ZZPLAY_PROBE_CHUNK 4096U
 #define ZZPLAY_PROBE_CARRY 7U
+#define ZZPLAY_MP3_PROBE_BYTES 4096U
+
+static uint32_t zzplay_synchsafe_u28(const uint8_t *data)
+{
+  if ((data[0] | data[1] | data[2] | data[3]) & 0x80U) {
+    return UINT32_MAX;
+  }
+  return ((uint32_t)data[0] << 21) |
+         ((uint32_t)data[1] << 14) |
+         ((uint32_t)data[2] << 7) |
+         (uint32_t)data[3];
+}
+
+int zzplay_probe_mp3_frame(const uint8_t *data,
+                           size_t length,
+                           ZZPlayMP3Info *info)
+{
+  static const uint16_t mpeg1_bitrates[16] = {
+    0U, 32U, 40U, 48U, 56U, 64U, 80U, 96U,
+    112U, 128U, 160U, 192U, 224U, 256U, 320U, 0U
+  };
+  static const uint16_t mpeg2_bitrates[16] = {
+    0U, 8U, 16U, 24U, 32U, 40U, 48U, 56U,
+    64U, 80U, 96U, 112U, 128U, 144U, 160U, 0U
+  };
+  static const uint32_t sample_rates[3] = {44100U, 48000U, 32000U};
+  uint32_t version_bits;
+  uint32_t bitrate_index;
+  uint32_t sample_index;
+  uint32_t bitrate;
+  uint32_t sample_rate;
+  uint32_t coefficient;
+
+  if (!data || !info || length < 4U || data[0] != 0xffU ||
+      (data[1] & 0xe0U) != 0xe0U) {
+    return 0;
+  }
+  version_bits = (data[1] >> 3) & 3U;
+  if (version_bits == 1U || ((data[1] >> 1) & 3U) != 1U) {
+    return 0;
+  }
+  bitrate_index = (data[2] >> 4) & 0x0fU;
+  sample_index = (data[2] >> 2) & 3U;
+  if (sample_index == 3U) {
+    return 0;
+  }
+  bitrate = version_bits == 3U
+                ? mpeg1_bitrates[bitrate_index]
+                : mpeg2_bitrates[bitrate_index];
+  if (bitrate == 0U) {
+    return 0;
+  }
+  sample_rate = sample_rates[sample_index];
+  if (version_bits == 2U) {
+    sample_rate /= 2U;
+  } else if (version_bits == 0U) {
+    sample_rate /= 4U;
+  }
+  coefficient = version_bits == 3U ? 144000U : 72000U;
+  memset(info, 0, sizeof(*info));
+  info->sample_rate = sample_rate;
+  info->channels = (data[3] & 0xc0U) == 0xc0U ? 1U : 2U;
+  info->bitrate_kbps = bitrate;
+  info->frame_bytes =
+      coefficient * bitrate / sample_rate + ((data[2] >> 1) & 1U);
+  info->mpeg_version = version_bits == 3U ? 1U
+                       : version_bits == 2U ? 2U : 25U;
+  return info->frame_bytes >= 4U;
+}
+
+int zzplay_probe_mp3(const uint8_t *data,
+                     size_t length,
+                     ZZPlayMP3Info *info)
+{
+  size_t offset = 0U;
+
+  if (!data || !info) {
+    return 0;
+  }
+  if (length >= 10U && memcmp(data, "ID3", 3U) == 0) {
+    uint32_t tag_bytes = zzplay_synchsafe_u28(data + 6U);
+    if (tag_bytes == UINT32_MAX || tag_bytes > length - 10U) {
+      return 0;
+    }
+    offset = 10U + tag_bytes;
+    if ((data[5] & 0x10U) != 0U) {
+      if (offset > length - 10U) {
+        return 0;
+      }
+      offset += 10U;
+    }
+  }
+  for (; offset + 4U <= length; offset++) {
+    ZZPlayMP3Info candidate;
+
+    if (!zzplay_probe_mp3_frame(data + offset, length - offset,
+                                &candidate)) {
+      continue;
+    }
+    /* If another complete frame header is in the probe, require it to be
+     * Layer III too. This rejects most sync-like byte sequences in junk. */
+    if (candidate.frame_bytes <= length - offset - 4U) {
+      ZZPlayMP3Info next;
+      if (!zzplay_probe_mp3_frame(data + offset + candidate.frame_bytes,
+                                  length - offset - candidate.frame_bytes,
+                                  &next)) {
+        continue;
+      }
+    }
+    *info = candidate;
+    return 1;
+  }
+  return 0;
+}
 
 uint32_t zzplay_mpeg_frame_rate_milli(uint8_t code)
 {
@@ -126,6 +240,51 @@ int zzplay_probe_file(FILE *file, ZZPlayVideoInfo *info)
   }
   clearerr(file);
   return found;
+}
+
+int zzplay_probe_media_file(FILE *file, ZZPlayProbeInfo *info)
+{
+  static uint8_t buffer[ZZPLAY_MP3_PROBE_BYTES];
+  uint8_t id3[10];
+  long audio_offset = 0L;
+  size_t got;
+
+  if (!file || !info) {
+    return 0;
+  }
+  memset(info, 0, sizeof(*info));
+  if (zzplay_probe_file(file, &info->video) &&
+      info->video.is_program_stream &&
+      info->video.has_video_pes) {
+    info->kind = ZZPLAY_MEDIA_KIND_MPEG_PS;
+    return 1;
+  }
+  if (fread(id3, 1U, sizeof(id3), file) == sizeof(id3) &&
+      memcmp(id3, "ID3", 3U) == 0) {
+    uint32_t tag_bytes = zzplay_synchsafe_u28(id3 + 6U);
+
+    if (tag_bytes == UINT32_MAX) {
+      goto done;
+    }
+    audio_offset = (long)(10U + tag_bytes +
+                          ((id3[5] & 0x10U) != 0U ? 10U : 0U));
+  }
+  clearerr(file);
+  if (fseek(file, audio_offset, SEEK_SET) != 0) {
+    goto done;
+  }
+  got = fread(buffer, 1U, sizeof(buffer), file);
+  if (!ferror(file) && zzplay_probe_mp3(buffer, got, &info->mp3)) {
+    info->kind = ZZPLAY_MEDIA_KIND_MP3;
+  }
+
+done:
+  clearerr(file);
+  if (fseek(file, 0L, SEEK_SET) != 0) {
+    clearerr(file);
+    return 0;
+  }
+  return info->kind != ZZPLAY_MEDIA_KIND_UNSUPPORTED;
 }
 
 int zzplay_video_info_supported(const ZZPlayVideoInfo *info)

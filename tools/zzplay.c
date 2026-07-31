@@ -15,6 +15,7 @@
 #include "zzplay-controls.h"
 #include "zzplay-core.h"
 #include "zzplay-media.h"
+#include "zzplay-mp3.h"
 #include "zzplay-options.h"
 #include "zzplay-probe.h"
 #include "zzplay-stats.h"
@@ -117,6 +118,20 @@ static void zzplay_sigint_handler(int signal_number)
   zzplay_ctrl_c_requested = 1;
 }
 
+static int zzplay_mp3_stop_requested(void *user)
+{
+  (void)user;
+  if (zzplay_ctrl_c_requested != 0) {
+    return 1;
+  }
+  if ((SetSignal(0L, SIGBREAKF_CTRL_C) &
+       SIGBREAKF_CTRL_C) != 0U) {
+    zzplay_ctrl_c_requested = 1;
+    return 1;
+  }
+  return 0;
+}
+
 static uint64_t zzplay_now_us(void)
 {
   TimeVal_Type now;
@@ -155,13 +170,13 @@ static void zzplay_usage(FILE *stream)
           "Usage: zzplay [--fps|--benchmark] "
           "[--loop[=count]] "
           "[--audio=auto|ahi|mhi|ax|none] "
-          "<mpeg1-program-stream>\n"
+          "<mpeg1-program-stream|mp3>\n"
           "  --fps        rolling paced-playback and decode-call FPS\n"
           "  --benchmark  disable pacing and audio unless requested\n"
           "  --loop       repeat forever; --loop=N repeats N times\n"
           "  Space        pause/resume playback\n"
-          "  --audio=...  select program-audio output "
-          "(AUTO prefers card-local AX)\n",
+          "  --audio=...  select MPEG/MP3 audio output "
+          "(MP3 AUTO tries MHI, then accelerated decode + AHI)\n",
           zzplay_version + 6);
 }
 
@@ -1347,6 +1362,7 @@ int main(int argc, char **argv)
 {
   struct ZZPlayRuntime runtime;
   ZZPlayOptionsResult options_result;
+  ZZPlayProbeInfo probe;
   ZZPlayVideoInfo info;
   ZZPlayTransport transport;
   ZZ9KBoard board;
@@ -1363,6 +1379,7 @@ int main(int argc, char **argv)
   zzplay_ctrl_c_requested = 0;
   (void)signal(SIGINT, zzplay_sigint_handler);
   memset(&runtime, 0, sizeof(runtime));
+  memset(&probe, 0, sizeof(probe));
   memset(&info, 0, sizeof(info));
   memset(&board, 0, sizeof(board));
   memset(&result, 0, sizeof(result));
@@ -1389,9 +1406,34 @@ int main(int argc, char **argv)
   (void)zzplay_resource_acquire(
       &runtime.core.resources, ZZPLAY_RESOURCE_INPUT_FILE);
 
-  if (!zzplay_probe_file(runtime.file, &info) ||
-      !zzplay_video_info_supported(&info)) {
-    fprintf(stderr, "zzplay: no supported MPEG sequence header found\n");
+  if (!zzplay_probe_media_file(runtime.file, &probe)) {
+    fprintf(stderr,
+            "zzplay: input is not a supported MPEG-1 Program Stream "
+            "or Layer III file\n");
+    zzplay_fail(&runtime, ZZPLAY_FAILURE_INVALID_INPUT,
+                ZZ9K_STATUS_UNSUPPORTED);
+    goto cleanup;
+  }
+  if (probe.kind == ZZPLAY_MEDIA_KIND_MP3) {
+    int mp3_ok;
+
+    printf("zzplay: standalone MP3, %lu Hz, %lu channel%s, "
+           "first frame %lu kbps\n",
+           (unsigned long)probe.mp3.sample_rate,
+           (unsigned long)probe.mp3.channels,
+           probe.mp3.channels == 1U ? "" : "s",
+           (unsigned long)probe.mp3.bitrate_kbps);
+    (void)zzplay_resource_release(
+        &runtime.core.resources, ZZPLAY_RESOURCE_INPUT_FILE,
+        zzplay_release_resource, &runtime);
+    mp3_ok = zzplay_mp3_run(
+        runtime.options.path, &probe.mp3, &runtime.options,
+        zzplay_mp3_stop_requested, 0);
+    return mp3_ok ? 0 : 20;
+  }
+  info = probe.video;
+  if (!zzplay_video_info_supported(&info)) {
+    fprintf(stderr, "zzplay: unsupported MPEG-1 video geometry\n");
     zzplay_fail(&runtime, ZZPLAY_FAILURE_INVALID_INPUT,
                 ZZ9K_STATUS_UNSUPPORTED);
     goto cleanup;

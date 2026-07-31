@@ -86,6 +86,22 @@ static int check_audio_policy(void)
                        ZZPLAY_BACKEND_FREE, ZZPLAY_BACKEND_MISSING,
                        ZZPLAY_BACKEND_MISSING, ZZPLAY_BACKEND_MISSING_RESULT,
                        ZZPLAY_AUDIO_NONE, 0) ||
+      !check_selection(ZZPLAY_MEDIA_AUDIO_MP3, ZZPLAY_AUDIO_AHI,
+                       ZZPLAY_BACKEND_BUSY, ZZPLAY_BACKEND_FREE,
+                       ZZPLAY_BACKEND_FREE, ZZPLAY_BACKEND_BUSY_RESULT,
+                       ZZPLAY_AUDIO_NONE, 0) ||
+      !check_selection(ZZPLAY_MEDIA_AUDIO_MP3, ZZPLAY_AUDIO_AHI,
+                       ZZPLAY_BACKEND_MISSING, ZZPLAY_BACKEND_FREE,
+                       ZZPLAY_BACKEND_FREE, ZZPLAY_BACKEND_MISSING_RESULT,
+                       ZZPLAY_AUDIO_NONE, 0) ||
+      !check_selection(ZZPLAY_MEDIA_AUDIO_MP3, ZZPLAY_AUDIO_AX,
+                       ZZPLAY_BACKEND_FREE, ZZPLAY_BACKEND_FREE,
+                       ZZPLAY_BACKEND_FREE, ZZPLAY_BACKEND_UNSUPPORTED,
+                       ZZPLAY_AUDIO_NONE, 0) ||
+      !check_selection(ZZPLAY_MEDIA_AUDIO_MP3, ZZPLAY_AUDIO_AUTO,
+                       ZZPLAY_BACKEND_MISSING, ZZPLAY_BACKEND_BUSY,
+                       ZZPLAY_BACKEND_FREE, ZZPLAY_BACKEND_MISSING_RESULT,
+                       ZZPLAY_AUDIO_NONE, 0) ||
       !check_selection(ZZPLAY_MEDIA_AUDIO_MP3, ZZPLAY_AUDIO_NONE,
                        ZZPLAY_BACKEND_FREE, ZZPLAY_BACKEND_FREE,
                        ZZPLAY_BACKEND_FREE, ZZPLAY_BACKEND_OK,
