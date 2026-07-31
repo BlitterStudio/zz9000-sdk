@@ -67,6 +67,8 @@ int main(int argc, char **argv)
                 : 0;
   ok = retire && start_ensure && present_ensure && present &&
        strstr(source, "runtime.video_info = info;") &&
+       strstr(source, "signal(SIGINT, zzplay_sigint_handler)") &&
+       strstr(source, "SetSignal(0L, SIGBREAKF_CTRL_C)") &&
        strstr(source, "IDCMP_VANILLAKEY") &&
        strstr(source, "zzplay_audio_pause(runtime)") &&
        strstr(source, "zzplay_audio_resume(runtime)") &&

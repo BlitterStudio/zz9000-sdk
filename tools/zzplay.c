@@ -32,6 +32,7 @@
 #include <proto/timer.h>
 #include <utility/tagitem.h>
 
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -54,6 +55,7 @@ struct Device *TimerBase;
 
 static uint32_t zzplay_input_staging[
     ZZPLAY_INPUT_BYTES / sizeof(uint32_t)];
+static volatile sig_atomic_t zzplay_ctrl_c_requested;
 
 static const char zzplay_version[] = "$VER: zzplay 0.2 (10.07.2026)";
 
@@ -108,6 +110,12 @@ struct ZZPlayRuntime {
 
 static uint32_t zzplay_elapsed_us(const TimeVal_Type *start,
                                   const TimeVal_Type *end);
+
+static void zzplay_sigint_handler(int signal_number)
+{
+  (void)signal_number;
+  zzplay_ctrl_c_requested = 1;
+}
 
 static uint64_t zzplay_now_us(void)
 {
@@ -345,7 +353,13 @@ static ZZPlayControlAction zzplay_poll_control(struct Window *window)
   int window_close = 0;
   int toggle_pause = 0;
 
-  ctrl_c = (SetSignal(0L, 0L) & SIGBREAKF_CTRL_C) != 0U;
+  /* libnix checks SIGBREAKF_CTRL_C from stdio read/write and raises SIGINT.
+   * Keep the handler as the durable request bit, and consume a break seen
+   * here so later cleanup printf/fclose calls cannot see it as an uncaught
+   * abort and bypass the resource stack. */
+  ctrl_c = zzplay_ctrl_c_requested != 0 ||
+           (SetSignal(0L, SIGBREAKF_CTRL_C) &
+            SIGBREAKF_CTRL_C) != 0U;
   while (window &&
          (message = (struct IntuiMessage *)GetMsg(window->UserPort))) {
     if (message->Class == IDCMP_CLOSEWINDOW) {
@@ -1346,6 +1360,8 @@ int main(int argc, char **argv)
   int media_done = 0;
   int cleanup_status;
 
+  zzplay_ctrl_c_requested = 0;
+  (void)signal(SIGINT, zzplay_sigint_handler);
   memset(&runtime, 0, sizeof(runtime));
   memset(&info, 0, sizeof(info));
   memset(&board, 0, sizeof(board));
