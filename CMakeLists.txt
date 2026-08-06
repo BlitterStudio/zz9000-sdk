@@ -550,6 +550,13 @@ add_executable(zzplay_path_test
 target_link_libraries(zzplay_path_test PRIVATE zzplay_core)
 add_test(NAME zzplay_path_test COMMAND zzplay_path_test)
 
+add_executable(zzplay_options_test
+  tests/zzplay_options_test.c
+)
+
+target_link_libraries(zzplay_options_test PRIVATE zzplay_core)
+add_test(NAME zzplay_options_test COMMAND zzplay_options_test)
+
 add_executable(zzplay_ahi_source_test
   tests/zzplay_ahi_source_test.c
 )

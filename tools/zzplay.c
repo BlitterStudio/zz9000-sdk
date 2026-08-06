@@ -14,6 +14,7 @@
 #include "zzplay-ax.h"
 #include "zzplay-controls.h"
 #include "zzplay-core.h"
+#include "zzplay-launch.h"
 #include "zzplay-media.h"
 #include "zzplay-mp3.h"
 #include "zzplay-options.h"
@@ -34,6 +35,7 @@
 #include <utility/tagitem.h>
 
 #include <signal.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -163,20 +165,57 @@ static void zzplay_profile_end(struct ZZPlayRuntime *runtime,
       zzplay_elapsed_us(started, &ended));
 }
 
+/* Route a failure to whichever surface the user can see. A CLI launch keeps
+ * byte-identical stderr output; a Workbench launch has no console at all, so
+ * the same text goes to a requester with the redundant "zzplay: " prefix and
+ * trailing newline trimmed. */
+static void zzplay_error(const struct ZZPlayRuntime *runtime,
+                         const char *format, ...)
+{
+  va_list args;
+  char message[320];
+  char *text = message;
+  size_t length;
+
+  if (!runtime || runtime->options.launch != ZZPLAY_LAUNCH_WORKBENCH) {
+    va_start(args, format);
+    (void)vfprintf(stderr, format, args);
+    va_end(args);
+    return;
+  }
+  va_start(args, format);
+  (void)vsprintf(message, format, args);
+  va_end(args);
+  if (strncmp(text, "zzplay: ", 8U) == 0) {
+    text += 8;
+  }
+  length = strlen(text);
+  while (length > 0U && text[length - 1U] == '\n') {
+    length--;
+    text[length] = '\0';
+  }
+  zzplay_launch_report(&runtime->options, text);
+}
+
 static void zzplay_usage(FILE *stream)
 {
   fprintf(stream,
           "%s\n"
           "Usage: zzplay [--fps|--benchmark] "
           "[--loop[=count]] "
+          "[--fullscreen] "
           "[--audio=auto|ahi|mhi|ax|none] "
           "<mpeg1-program-stream|mp3>\n"
-          "  --fps        rolling paced-playback and decode-call FPS\n"
-          "  --benchmark  disable pacing and audio unless requested\n"
-          "  --loop       repeat forever; --loop=N repeats N times\n"
-          "  Space        pause/resume playback\n"
-          "  --audio=...  select MPEG/MP3 audio output "
-          "(MP3 AUTO tries MHI, then accelerated decode + AHI)\n",
+          "  --fps         rolling paced-playback and decode-call FPS\n"
+          "  --benchmark   disable pacing and audio unless requested\n"
+          "  --loop        repeat forever; --loop=N repeats N times\n"
+          "  --fullscreen  start filling the screen, aspect preserved\n"
+          "  --audio=...   select MPEG/MP3 audio output "
+          "(MP3 AUTO tries MHI, then accelerated decode + AHI)\n"
+          "\n"
+          "Workbench: drop a file on the zzplay icon, or start zzplay to be\n"
+          "asked for one. ToolTypes FPS, BENCHMARK, LOOP[=N], FULLSCREEN\n"
+          "and AUDIO=<backend> match the options above.\n",
           zzplay_version + 6);
 }
 
@@ -1362,6 +1401,7 @@ int main(int argc, char **argv)
 {
   struct ZZPlayRuntime runtime;
   ZZPlayOptionsResult options_result;
+  ZZPlayLaunch launch;
   ZZPlayProbeInfo probe;
   ZZPlayVideoInfo info;
   ZZPlayTransport transport;
@@ -1387,27 +1427,40 @@ int main(int argc, char **argv)
   zzplay_core_init(&runtime.core);
   zzplay_transport_init(&transport);
 
-  options_result = zzplay_options_parse_cli(
-      argc, argv, &runtime.options);
+  options_result = zzplay_launch_begin(
+      argc, argv, &runtime.options, &launch);
   if (options_result == ZZPLAY_OPTIONS_HELP) {
     zzplay_usage(stdout);
+    zzplay_launch_end(&launch);
     return 0;
   }
   if (options_result != ZZPLAY_OPTIONS_OK) {
-    zzplay_usage(stderr);
+    /* A Workbench launch has no console: the requester is the only place
+     * the user will ever see this. A cancelled file requester lands here
+     * too, which is why the text has to suit both. */
+    if (runtime.options.launch == ZZPLAY_LAUNCH_WORKBENCH) {
+      zzplay_launch_report(&runtime.options,
+                           "No playable file was selected, or an icon "
+                           "ToolType is invalid.");
+    } else {
+      zzplay_usage(stderr);
+    }
+    zzplay_launch_end(&launch);
     return 20;
   }
 
   runtime.file = fopen(runtime.options.path, "rb");
   if (!runtime.file) {
-    fprintf(stderr, "zzplay: cannot open %s\n", runtime.options.path);
+    zzplay_error(&runtime, "zzplay: cannot open %s\n",
+                 runtime.options.path);
+    zzplay_launch_end(&launch);
     return 20;
   }
   (void)zzplay_resource_acquire(
       &runtime.core.resources, ZZPLAY_RESOURCE_INPUT_FILE);
 
   if (!zzplay_probe_media_file(runtime.file, &probe)) {
-    fprintf(stderr,
+    zzplay_error(&runtime,
             "zzplay: input is not a supported MPEG-1 Program Stream "
             "or Layer III file\n");
     zzplay_fail(&runtime, ZZPLAY_FAILURE_INVALID_INPUT,
@@ -1429,17 +1482,18 @@ int main(int argc, char **argv)
     mp3_ok = zzplay_mp3_run(
         runtime.options.path, &probe.mp3, &runtime.options,
         zzplay_mp3_stop_requested, 0);
+    zzplay_launch_end(&launch);
     return mp3_ok ? 0 : 20;
   }
   info = probe.video;
   if (!zzplay_video_info_supported(&info)) {
-    fprintf(stderr, "zzplay: unsupported MPEG-1 video geometry\n");
+    zzplay_error(&runtime, "zzplay: unsupported MPEG-1 video geometry\n");
     zzplay_fail(&runtime, ZZPLAY_FAILURE_INVALID_INPUT,
                 ZZ9K_STATUS_UNSUPPORTED);
     goto cleanup;
   }
   if (!info.is_program_stream || !info.has_video_pes) {
-    fprintf(stderr,
+    zzplay_error(&runtime,
             "zzplay: MPEG-1 elementary streams are not supported; "
             "a Program Stream is required\n");
     zzplay_fail(&runtime, ZZPLAY_FAILURE_INVALID_INPUT,
@@ -1449,7 +1503,7 @@ int main(int argc, char **argv)
   if (!info.has_audio_pes &&
       runtime.options.audio_backend != ZZPLAY_AUDIO_AUTO &&
       runtime.options.audio_backend != ZZPLAY_AUDIO_NONE) {
-    fprintf(stderr,
+    zzplay_error(&runtime,
             "zzplay: the Program Stream has no supported MP2 audio\n");
     zzplay_fail(&runtime, ZZPLAY_FAILURE_INVALID_INPUT,
                 ZZ9K_STATUS_UNSUPPORTED);
@@ -1467,7 +1521,7 @@ int main(int argc, char **argv)
         ZZPLAY_MEDIA_AUDIO_MP2, runtime.options.audio_backend,
         &availability);
     if (audio_decision.status != ZZPLAY_BACKEND_OK) {
-      fprintf(stderr,
+      zzplay_error(&runtime,
               "zzplay: audio backend %s cannot play Program "
               "Stream MP2 (status %u)\n",
               zzplay_audio_backend_name(
@@ -1496,7 +1550,7 @@ int main(int argc, char **argv)
 
   if (zz9k_find_board(&board) != ZZ9K_STATUS_OK ||
       board.zorro_version != 3U) {
-    fprintf(stderr,
+    zzplay_error(&runtime,
             "zzplay: the P96 video window currently requires Zorro 3\n");
     zzplay_fail(&runtime, ZZPLAY_FAILURE_UNSUPPORTED_BOARD,
                 ZZ9K_STATUS_UNSUPPORTED);
@@ -1505,7 +1559,7 @@ int main(int argc, char **argv)
 
   P96Base = OpenLibrary((CONST_STRPTR)"Picasso96API.library", 2U);
   if (!P96Base) {
-    fprintf(stderr, "zzplay: cannot open Picasso96API.library\n");
+    zzplay_error(&runtime, "zzplay: cannot open Picasso96API.library\n");
     zzplay_fail(&runtime, ZZPLAY_FAILURE_P96, ZZ9K_STATUS_UNSUPPORTED);
     goto cleanup;
   }
@@ -1518,7 +1572,7 @@ int main(int argc, char **argv)
         &runtime.core.resources, ZZPLAY_RESOURCE_SDK_CONTEXT);
   }
   if (cleanup_status != ZZ9K_STATUS_OK) {
-    fprintf(stderr, "zzplay: SDK open failed: %s\n",
+    zzplay_error(&runtime, "zzplay: SDK open failed: %s\n",
             zz9k_status_name(cleanup_status));
     zzplay_fail(&runtime, ZZPLAY_FAILURE_SDK, cleanup_status);
     goto cleanup;
@@ -1530,7 +1584,7 @@ int main(int argc, char **argv)
           (ZZ9K_CAP_VIDEO_DECODE | ZZ9K_CAP_MEDIA_SESSION) ||
       (runtime.audio_enabled &&
        (caps.capability_bits & ZZ9K_CAP_AUDIO_DECODE) == 0U)) {
-    fprintf(stderr,
+    zzplay_error(&runtime,
             "zzplay: firmware does not advertise the required "
             "media decode services\n");
     zzplay_fail(&runtime, ZZPLAY_FAILURE_CAPABILITY,
@@ -1544,7 +1598,7 @@ int main(int argc, char **argv)
       (service.flags & ZZ9K_SERVICE_FLAG_VIDEO_MEDIA_SESSION) == 0U ||
       (runtime.audio_enabled &&
        (service.flags & ZZ9K_SERVICE_FLAG_VIDEO_MEDIA_MP2) == 0U)) {
-    fprintf(stderr,
+    zzplay_error(&runtime,
             "zzplay: required MPEG-1/PS direct-overlay backend "
             "is unavailable\n");
     zzplay_fail(&runtime, ZZPLAY_FAILURE_CAPABILITY,
@@ -1560,7 +1614,7 @@ int main(int argc, char **argv)
       printf("zzplay: card-local AX media output unavailable; "
              "AUTO falling back to AHI\n");
     } else {
-      fprintf(stderr,
+      zzplay_error(&runtime,
               "zzplay: firmware or hardware does not advertise "
               "card-local AX media output\n");
       zzplay_fail(&runtime, ZZPLAY_FAILURE_CAPABILITY,
@@ -1580,7 +1634,7 @@ int main(int argc, char **argv)
         &runtime.core.resources, ZZPLAY_RESOURCE_INPUT_BUFFER);
   }
   if (cleanup_status != ZZ9K_STATUS_OK || !runtime.input.data) {
-    fprintf(stderr, "zzplay: input buffer allocation failed: %s\n",
+    zzplay_error(&runtime, "zzplay: input buffer allocation failed: %s\n",
             zz9k_status_name(cleanup_status));
     zzplay_fail(&runtime, ZZPLAY_FAILURE_ALLOCATION, cleanup_status);
     goto cleanup;
@@ -1594,7 +1648,7 @@ int main(int argc, char **argv)
           &runtime.core.resources, ZZPLAY_RESOURCE_PCM_BUFFER);
     }
     if (cleanup_status != ZZ9K_STATUS_OK || !runtime.pcm.data) {
-      fprintf(stderr,
+      zzplay_error(&runtime,
               "zzplay: PCM ring allocation failed: %s\n",
               zz9k_status_name(cleanup_status));
       zzplay_fail(&runtime, ZZPLAY_FAILURE_ALLOCATION,
@@ -1604,13 +1658,13 @@ int main(int argc, char **argv)
   }
   cleanup_status = zzplay_begin_session(&runtime);
   if (cleanup_status != ZZ9K_STATUS_OK) {
-    fprintf(stderr, "zzplay: session begin failed: %s\n",
+    zzplay_error(&runtime, "zzplay: session begin failed: %s\n",
             zz9k_status_name(cleanup_status));
     zzplay_fail(&runtime, ZZPLAY_FAILURE_SESSION, cleanup_status);
     goto cleanup;
   }
   if (!zzplay_timer_open(&runtime.timer)) {
-    fprintf(stderr, "zzplay: cannot open timer.device\n");
+    zzplay_error(&runtime, "zzplay: cannot open timer.device\n");
     zzplay_fail(&runtime, ZZPLAY_FAILURE_TIMER, ZZ9K_STATUS_IO_ERROR);
     goto cleanup;
   }
@@ -1645,7 +1699,7 @@ playback_session:
     if (control == ZZPLAY_CONTROL_TOGGLE_PAUSE) {
       cleanup_status = zzplay_toggle_pause(&runtime);
       if (cleanup_status != ZZ9K_STATUS_OK) {
-        fprintf(stderr, "zzplay: pause/resume failed: %s\n",
+        zzplay_error(&runtime, "zzplay: pause/resume failed: %s\n",
                 zz9k_status_name(cleanup_status));
         zzplay_fail(&runtime, ZZPLAY_FAILURE_IO, cleanup_status);
         break;
@@ -1658,7 +1712,7 @@ playback_session:
     cleanup_status = zzplay_audio_pump(
         &runtime, 0, runtime.audio_refresh_needed);
     if (cleanup_status != ZZ9K_STATUS_OK) {
-      fprintf(stderr, "zzplay: audio output failed: %s\n",
+      zzplay_error(&runtime, "zzplay: audio output failed: %s\n",
               zz9k_status_name(cleanup_status));
       zzplay_fail(&runtime, ZZPLAY_FAILURE_IO, cleanup_status);
       break;
@@ -1673,13 +1727,13 @@ playback_session:
           &retired);
       if (cleanup_status != ZZ9K_STATUS_OK) {
         if (runtime.pip_open_failed) {
-          fprintf(stderr,
+          zzplay_error(&runtime,
                   "zzplay: cannot open P96 PIP window (error %ld)\n",
                   (long)runtime.pip_error);
           zzplay_fail(&runtime, ZZPLAY_FAILURE_PIP,
                       ZZ9K_STATUS_UNSUPPORTED);
         } else {
-          fprintf(stderr,
+          zzplay_error(&runtime,
                   "zzplay: frame presentation failed: %s\n",
                   zz9k_status_name(cleanup_status));
           zzplay_fail(&runtime, ZZPLAY_FAILURE_SESSION,
@@ -1714,7 +1768,7 @@ playback_session:
           &runtime, &started, ZZPLAY_PROFILE_FILE_READ);
 
       if (ferror(runtime.file)) {
-        fprintf(stderr, "zzplay: input read failed\n");
+        zzplay_error(&runtime, "zzplay: input read failed\n");
         zzplay_fail(&runtime, ZZPLAY_FAILURE_IO, ZZ9K_STATUS_IO_ERROR);
         break;
       }
@@ -1728,7 +1782,7 @@ playback_session:
         zzplay_profile_end(
             &runtime, &started, ZZPLAY_PROFILE_INPUT_COPY);
         if (!copied) {
-          fprintf(stderr, "zzplay: input staging copy failed\n");
+          zzplay_error(&runtime, "zzplay: input staging copy failed\n");
           zzplay_fail(
               &runtime, ZZPLAY_FAILURE_IO,
               ZZ9K_STATUS_INTERNAL_ERROR);
@@ -1761,7 +1815,7 @@ playback_session:
       }
       if (cleanup_status != ZZ9K_STATUS_OK &&
           cleanup_status != ZZ9K_STATUS_BUSY) {
-        fprintf(stderr, "zzplay: stream write failed: %s\n",
+        zzplay_error(&runtime, "zzplay: stream write failed: %s\n",
                 zz9k_status_name(cleanup_status));
         zzplay_fail(&runtime, ZZPLAY_FAILURE_IO,
                     cleanup_status);
@@ -1771,7 +1825,7 @@ playback_session:
         if (write.src_length != 0U) {
           if (!zzplay_transport_advance(
                   &transport, result.bytes_accepted)) {
-            fprintf(stderr,
+            zzplay_error(&runtime,
                     "zzplay: firmware reported invalid input "
                     "progress\n");
             zzplay_fail(&runtime, ZZPLAY_FAILURE_PROTOCOL,
@@ -1805,7 +1859,7 @@ playback_session:
       continue;
     }
     if (cleanup_status != ZZ9K_STATUS_OK) {
-      fprintf(stderr, "zzplay: media decode failed: %s\n",
+      zzplay_error(&runtime, "zzplay: media decode failed: %s\n",
               zz9k_status_name(cleanup_status));
       zzplay_fail(&runtime, ZZPLAY_FAILURE_SESSION,
                   cleanup_status);
@@ -1836,7 +1890,7 @@ playback_session:
     if (action == ZZPLAY_MEDIA_NEED_INPUT &&
         transport.eof && transport.eof_sent &&
         transport.pending_length == 0U) {
-      fprintf(stderr, "zzplay: truncated stream at end of input\n");
+      zzplay_error(&runtime, "zzplay: truncated stream at end of input\n");
       zzplay_fail(&runtime, ZZPLAY_FAILURE_IO,
                   ZZ9K_STATUS_IO_ERROR);
       break;
@@ -1859,7 +1913,7 @@ playback_session:
         cleanup_status =
             zzplay_restart_session(&runtime, &transport);
         if (cleanup_status != ZZ9K_STATUS_OK) {
-          fprintf(stderr, "zzplay: loop restart failed: %s\n",
+          zzplay_error(&runtime, "zzplay: loop restart failed: %s\n",
                   zz9k_status_name(cleanup_status));
           zzplay_fail(
               &runtime, ZZPLAY_FAILURE_SESSION, cleanup_status);
@@ -1889,7 +1943,7 @@ playback_session:
       }
       zzplay_core_stop(&runtime.core, ZZPLAY_STOP_EOF);
     } else if (cleanup_status != ZZ9K_STATUS_CANCELLED) {
-      fprintf(stderr, "zzplay: audio drain failed: %s\n",
+      zzplay_error(&runtime, "zzplay: audio drain failed: %s\n",
               zz9k_status_name(cleanup_status));
       zzplay_fail(&runtime, ZZPLAY_FAILURE_IO, cleanup_status);
     }
@@ -1934,7 +1988,9 @@ cleanup:
     if (runtime.options.show_fps) {
       zzplay_stats_finish(&runtime.stats);
     }
+    zzplay_launch_end(&launch);
     return 0;
   }
+  zzplay_launch_end(&launch);
   return 20;
 }
