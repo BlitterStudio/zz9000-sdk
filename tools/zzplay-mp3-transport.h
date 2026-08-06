@@ -15,6 +15,11 @@ uint32_t zzplay_mp3_pcm_ack_batch_bytes(uint32_t pcm_capacity);
 int zzplay_mp3_pcm_ack_due(uint32_t pending_ack,
                            uint32_t pcm_capacity,
                            int force);
+int zzplay_mp3_pcm_read_due(uint32_t pending_ack,
+                            uint32_t pcm_capacity,
+                            int force);
+uint32_t zzplay_mp3_ahi_period_frames(uint32_t sample_rate,
+                                      uint32_t buffer_count);
 uint32_t zzplay_mp3_decode_quantum_bytes(uint32_t requested,
                                          uint32_t pcm_capacity);
 uint32_t zzplay_mp3_feed_chunk_bytes(uint32_t requested,

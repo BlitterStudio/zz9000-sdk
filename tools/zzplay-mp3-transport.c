@@ -24,6 +24,40 @@ int zzplay_mp3_pcm_ack_due(uint32_t pending_ack,
                       zzplay_mp3_pcm_ack_batch_bytes(pcm_capacity);
 }
 
+/* Batching decides when PCM credit is worth returning, but a forced read is
+ * also the client's only way to make a backpressured firmware consume
+ * compressed input: it skips decoding on the rejected feed, so nothing moves
+ * until a read arrives. Send that read even with no credit pending. */
+int zzplay_mp3_pcm_read_due(uint32_t pending_ack,
+                            uint32_t pcm_capacity,
+                            int force)
+{
+  return force || zzplay_mp3_pcm_ack_due(pending_ack, pcm_capacity, 0);
+}
+
+/* Standalone MP3 hands PCM to AHI from the same thread that reads the next
+ * file chunk, stages it across the bus and waits out a synchronous decode
+ * call. None of that services AHI, so whatever is already queued is the only
+ * thing covering those stalls, and the queue has to outlast the longest of
+ * them rather than the average. 400 ms across the buffers is double what the
+ * hardware-qualified MPEG/AHI path queues, which is the right side to err on:
+ * the only cost is start-up latency and a little MEMF_PUBLIC, and standalone
+ * MP3 has no interactive control surface to make that latency visible. */
+#define ZZPLAY_MP3_AHI_QUEUE_MS 400U
+
+uint32_t zzplay_mp3_ahi_period_frames(uint32_t sample_rate,
+                                      uint32_t buffer_count)
+{
+  uint32_t frames;
+
+  if (sample_rate == 0U || buffer_count == 0U) {
+    return 0U;
+  }
+  frames = (uint32_t)(((uint64_t)sample_rate * ZZPLAY_MP3_AHI_QUEUE_MS) /
+                      (1000U * (uint64_t)buffer_count));
+  return frames != 0U ? frames : 1U;
+}
+
 uint32_t zzplay_mp3_decode_quantum_bytes(uint32_t requested,
                                          uint32_t pcm_capacity)
 {

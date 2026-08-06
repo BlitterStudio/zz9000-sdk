@@ -20,7 +20,6 @@
 #include <string.h>
 
 #define ZZPLAY_MP3_PCM_CAPACITY ZZPLAY_MP3_DEFAULT_PCM_CAPACITY
-#define ZZPLAY_MP3_PERIODS_PER_SECOND 20U
 #define ZZPLAY_MP3_DRAIN_GUARD 128U
 
 typedef struct ZZPlayMP3Decode {
@@ -81,8 +80,8 @@ static int zzplay_mp3_ack(ZZPlayMP3Decode *decode, int force)
 {
   int status;
 
-  if (!zzplay_mp3_pcm_ack_due(decode->pending_ack,
-                              decode->pcm.length, force)) {
+  if (!zzplay_mp3_pcm_read_due(decode->pending_ack,
+                               decode->pcm.length, force)) {
     return 1;
   }
   status = zz9k_audio_stream_read(
@@ -126,11 +125,16 @@ static void *zzplay_mp3_acquire_ahi(ZZPlayMP3Decode *decode,
   while ((buffer = zzplay_ahi_acquire_buffer(
               decode->ahi, capacity)) == 0) {
     if (zzplay_mp3_should_stop(decode) ||
-        !zzplay_mp3_start_ahi(decode, 0) ||
-        !zzplay_ahi_poll(decode->ahi)) {
+        !zzplay_mp3_start_ahi(decode, 0)) {
       return 0;
     }
+    /* Reap immediately before retrying, not immediately after: Delay's
+     * resolution is a 20 ms tick, and polling first spent that whole tick
+     * sitting on a buffer AHI had already returned. */
     Delay(1U);
+    if (!zzplay_ahi_poll(decode->ahi)) {
+      return 0;
+    }
   }
   return buffer;
 }
@@ -239,10 +243,13 @@ static int zzplay_mp3_decode_once(ZZPlayMP3Decode *decode)
                         16U, 0U, &decode->staging) != ZZ9K_STATUS_OK) {
     return 0;
   }
+  /* The stream decoder has no rate or channel conversion, so the firmware
+   * rejects a non-zero output geometry outright. Ask for the file's native
+   * rate/channels; zzplay_mp3_result_valid then holds the decoded stream to
+   * the geometry the probe already reported. */
   if (!zz9k_audio_build_stream_begin_desc(
           &begin, decode->compressed.handle, decode->compressed.length,
-          decode->pcm.handle, decode->pcm.length,
-          decode->probe->sample_rate, decode->probe->channels,
+          decode->pcm.handle, decode->pcm.length, 0U, 0U,
           ZZ9K_AUDIO_SAMPLE_FORMAT_S16BE, 0U,
           ZZPLAY_MP3_FEED_MAX_BYTES, 0U)) {
     return 0;
@@ -380,8 +387,8 @@ static int zzplay_mp3_accelerated(
       goto done;
     }
     if (options->audio_backend != ZZPLAY_AUDIO_NONE) {
-      uint32_t period = info->sample_rate /
-                        ZZPLAY_MP3_PERIODS_PER_SECOND;
+      uint32_t period = zzplay_mp3_ahi_period_frames(
+          info->sample_rate, ZZPLAY_AHI_BUFFER_COUNT);
 
       if (period == 0U ||
           !zzplay_ahi_prepare(&ahi, info->sample_rate,

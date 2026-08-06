@@ -11,7 +11,7 @@ execution: code
 
 # Flagship `zzplay` Media Player
 
-## Execution status — 2026-07-31
+## Execution status — 2026-08-01
 
 - U1-U4 are implemented and hardware-qualified on default Zorro III at
   firmware `00982fe`, SDK `cb977b0`, and drivers `35b1180`.
@@ -26,13 +26,51 @@ execution: code
 - U5 standalone MP3 integration is implemented and software-qualified at SDK
   `7e35660`. It adds accelerated decode plus AHI, optional runtime MHI, AUTO
   pre-play fallback, bounded MHI streaming, clean EOF/loop/stop handling, and
-  preserves `zz9k-mp3` as the low-level diagnostic. The host suite passes
-  104/104, the AmigaOS 3 cross-build and package pass, and drivers MHI/AHI
-  builds remain green.
-- The U5 default-Z3/AX hardware gate is staged at
-  `Z:\bench-zzplay-mp3-u5-r1`; it must pass before U5 closes. Standalone-MP3
-  pause/resume remains an end-to-end U6 control-surface test, while the U5 MHI
-  adapter already provides the public lifecycle operations.
+  preserves `zz9k-mp3` as the low-level diagnostic. The current matched r6
+  worktrees retain zzplay's explicit EOF extension, add capability-gated
+  resumable public-MHI starvation drain, and bump `zz9k.library` to revision
+  27 so request validation accepts that flag. The host suite passes 112/112,
+  the AmigaOS 3 and firmware Docker builds pass, and both MHI builds remain
+  green. HippoPlayer's separate EOF/repeat correction is physically qualified
+  for Module once, Module repeatedly, and List once at commit `6376d6e` on PR
+  #36.
+- **U5 is CLOSED. Its default-Z3/AX hardware gate passed on 2026-08-06** at
+  `Z:\bench-zzplay-mp3-u5-final-r3-20260806`, stages 00-09. Three host-side
+  defects in the standalone-MP3 AHI path were found and fixed across r1-r3, all
+  in `tools/zzplay-mp3.c` and its shared transport module; no firmware or
+  driver source changed, and `zz9k.library` rebuilt byte-identical to the r6
+  artifact on every pass.
+  1. `AUDIO_STREAM_BEGIN` asked for a non-zero `output_hz`/`output_channels`.
+     The firmware's stream decoder has no rate or channel conversion and
+     rejects that with `UNSUPPORTED`, so the session never opened and playback
+     aborted before a sample was decoded. `zz9k-mp3` and the MPEGA/MHI resident
+     already passed `0/0` — which is exactly why every MHI stage passed while
+     the first AHI stage did not. Now requests the file's native geometry.
+  2. A forced PCM acknowledgement issued no `AUDIO_STREAM_READ` when nothing
+     was pending. A backpressured feed is answered *without decoding*, and READ
+     is the only call that lets the firmware consume compressed input, so the
+     retry loop could spin to its 64-attempt guard. Fixed by
+     `zzplay_mp3_pcm_read_due`.
+  3. The AHI queue was too shallow to cover the producer's own stalls — 100 ms
+     across two buffers, half the qualified MPEG/AHI path, while the loop
+     blocks on a 64 KiB file read, a 64 KiB staging copy and a synchronous
+     decode call that never service AHI. Now 400 ms via
+     `zzplay_mp3_ahi_period_frames`; that is the ceiling, because one period
+     must stay under the firmware's 64 KiB `high_water` per-pass decode cap.
+     A companion fix stopped the buffer-wait loop burning a 20 ms DOS tick
+     *after* each reap.
+  Each fix carries a regression test confirmed to fail against the pre-fix
+  source (`zzplay_mp3_source_test`, and two in `mp3_tool_logic_test`); the host
+  suite passes 112/112. Gate evidence: CBR AHI 8,032,896 audio frames; AHI
+  repeats identical at 8,898,048 frames per pass; MPEG/AHI 261 decoded / 260
+  presented / 0 discarded, 383,670 audio frames, 0 underruns, 0 late frames.
+  Standalone-MP3 pause/resume remains an end-to-end U6 control-surface test,
+  while the U5 MHI adapter already provides the public lifecycle operations.
+- One behaviour is tracked outside the gate: an MHI client taking the card
+  after a Ctrl-C'd MHI session played extremely slowly, seen once. No U5 stage
+  covers a second MHI client after an *interrupted* MHI session. Focused
+  diagnostic kit: `Z:\bench-zzplay-mhi-handoff-r1-20260806`. It does not block
+  U5.
 - U6-U9 remain pending; versions and downstream pins stay unchanged until
   U5-U8 stabilize.
 
@@ -892,6 +930,11 @@ an optional lowest-copy MHI path on ZZ9000AX.
 - Load MHI at runtime, validate Layer III support, and map player
   pause/resume/stop/loop to the public MHI lifecycle. Keep drivers-internal
   headers out of SDK product sources.
+- Keep known file EOF explicit and self-detecting for `zzplay`. Treat generic
+  public-MHI queue starvation as resumable: drain complete decoder/PCM/AX work,
+  retain a partial compressed frame, and resume when new input arrives. Do not
+  synthesize player-specific completion wakes in the generic driver; clients
+  such as HippoPlayer must wait for `MHIF_OUT_OF_DATA` themselves.
 - Apply the backend matrix before playback. Log selection and fallback reason;
   never have MHI and AHI/direct AX open concurrently.
 - Preserve MP3 CBR/VBR, mono/stereo, corrupt input, EOF tail, and bounded
