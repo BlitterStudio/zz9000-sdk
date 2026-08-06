@@ -170,6 +170,9 @@ static inline uint32_t zz9k_known_service_flag_count(uint32_t service_id)
   if (service_id == ZZ9K_SERVICE_VIDEO) {
     return 15U;
   }
+  if (service_id == ZZ9K_SERVICE_SURFACE) {
+    return 5U;
+  }
   return 4U;
 }
 
@@ -279,6 +282,16 @@ static inline uint32_t zz9k_known_service_flag(uint32_t service_id,
     default:
       return 0U;
     }
+  }
+
+  if (service_id == ZZ9K_SERVICE_SURFACE) {
+    switch (index) {
+    case 4:
+      return ZZ9K_SERVICE_FLAG_SURFACE_PALETTE_QUERY;
+    default:
+      break;
+    }
+    return 0U;
   }
 
   if (service_id == ZZ9K_SERVICE_VIDEO) {
@@ -475,6 +488,16 @@ static inline const char *zz9k_service_flag_name(uint32_t service_id,
     default:
       return 0;
     }
+  }
+
+  if (service_id == ZZ9K_SERVICE_SURFACE) {
+    switch (service_flag) {
+    case ZZ9K_SERVICE_FLAG_SURFACE_PALETTE_QUERY:
+      return "palette-query";
+    default:
+      break;
+    }
+    return 0;
   }
 
   if (service_id == ZZ9K_SERVICE_VIDEO) {
