@@ -115,6 +115,20 @@ int zzplay_options_apply(ZZPlayOptions *options, ZZPlayOptionKey key,
     }
     options->fullscreen = 1;
     return 1;
+  case ZZPLAY_OPT_QUIET:
+    if (value) {
+      return 0;
+    }
+    options->quiet = 1;
+    options->quiet_explicit = 1;
+    return 1;
+  case ZZPLAY_OPT_VERBOSE:
+    if (value) {
+      return 0;
+    }
+    options->quiet = 0;
+    options->quiet_explicit = 1;
+    return 1;
   case ZZPLAY_OPT_LOOP:
     if (!value) {
       options->loop_mode = ZZPLAY_LOOP_FOREVER;
@@ -157,6 +171,12 @@ ZZPlayOptionKey zzplay_options_key_from_cli(const char *token,
   }
   if (strcmp(token, "fullscreen") == 0) {
     return ZZPLAY_OPT_FULLSCREEN;
+  }
+  if (strcmp(token, "quiet") == 0) {
+    return ZZPLAY_OPT_QUIET;
+  }
+  if (strcmp(token, "verbose") == 0) {
+    return ZZPLAY_OPT_VERBOSE;
   }
   if (strcmp(token, "help") == 0) {
     return ZZPLAY_OPT_HELP;
@@ -208,6 +228,8 @@ ZZPlayOptionKey zzplay_options_key_from_tooltype(const char *tooltype,
       { "FPS", ZZPLAY_OPT_FPS },
       { "BENCHMARK", ZZPLAY_OPT_BENCHMARK },
       { "FULLSCREEN", ZZPLAY_OPT_FULLSCREEN },
+      { "QUIET", ZZPLAY_OPT_QUIET },
+      { "VERBOSE", ZZPLAY_OPT_VERBOSE },
       { "LOOP", ZZPLAY_OPT_LOOP },
       { "AUDIO", ZZPLAY_OPT_AUDIO }
     };
@@ -268,6 +290,15 @@ ZZPlayOptionsResult zzplay_options_finish(ZZPlayOptions *options)
    * but never overrides a backend the user actually asked for. */
   if (options->uncapped && !options->audio_explicit) {
     options->audio_backend = ZZPLAY_AUDIO_NONE;
+  }
+  /* A Workbench launch has nowhere to print, so stay quiet unless the user
+   * said otherwise. --benchmark is about measuring, so its numbers are
+   * worth a console even from Workbench. */
+  if (!options->quiet_explicit) {
+    options->quiet = (options->launch == ZZPLAY_LAUNCH_WORKBENCH &&
+                      !options->show_fps)
+                         ? 1
+                         : 0;
   }
   return options->path ? ZZPLAY_OPTIONS_OK : ZZPLAY_OPTIONS_ERROR;
 }

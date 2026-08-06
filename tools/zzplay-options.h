@@ -40,6 +40,8 @@ typedef enum ZZPlayOptionKey {
   ZZPLAY_OPT_LOOP,
   ZZPLAY_OPT_AUDIO,
   ZZPLAY_OPT_FULLSCREEN,
+  ZZPLAY_OPT_QUIET,
+  ZZPLAY_OPT_VERBOSE,
   ZZPLAY_OPT_HELP
 } ZZPlayOptionKey;
 
@@ -51,6 +53,11 @@ typedef struct ZZPlayOptions {
   int show_fps;
   int uncapped;
   int fullscreen;
+  /* Suppress informational output. Defaults on for a Workbench launch,
+   * which has no console: printing there makes AmigaDOS open an output
+   * window that never closes. */
+  int quiet;
+  int quiet_explicit;
   /* Set when the user named a backend. Only an unspecified backend may be
    * silently replaced by --benchmark, and only AUTO may fall back (R4). */
   int audio_explicit;

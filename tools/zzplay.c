@@ -116,6 +116,8 @@ struct ZZPlayRuntime {
   /* Runtime UX state (U6). */
   ZZPlayWindowGeometry saved_geometry;
   ZZPlayPresentInfo present;
+  uint16_t screen_w;
+  uint16_t screen_h;
   uint8_t fullscreen;
   uint8_t present_known;
   uint8_t present_recheck;
@@ -145,6 +147,12 @@ static int zzplay_mp3_paused(void *user)
 static void zzplay_mp3_backend(void *user, const char *name)
 {
   zzplay_statuswin_set_backend((ZZPlayStatusWindow *)user, name);
+}
+
+static void zzplay_mp3_progress(void *user, uint32_t elapsed_ms, int exact)
+{
+  zzplay_statuswin_set_position((ZZPlayStatusWindow *)user, elapsed_ms,
+                                exact);
 }
 
 static int zzplay_mp3_stop_requested(void *user)
@@ -249,19 +257,23 @@ static void zzplay_usage(FILE *stream)
           "  --benchmark   disable pacing and audio unless requested\n"
           "  --loop        repeat forever; --loop=N repeats N times\n"
           "  --fullscreen  start filling the screen, aspect preserved\n"
+          "  --quiet       no progress output (the default from Workbench)\n"
+          "  --verbose     force progress output even from Workbench\n"
           "  --audio=...   select MPEG/MP3 audio output "
           "(MP3 AUTO tries MHI, then accelerated decode + AHI)\n"
           "\n"
           "Workbench: drop a file on the zzplay icon, or start zzplay to be\n"
-          "asked for one. ToolTypes FPS, BENCHMARK, LOOP[=N], FULLSCREEN\n"
-          "and AUDIO=<backend> match the options above.\n",
+          "asked for one. ToolTypes FPS, BENCHMARK, LOOP[=N], FULLSCREEN,\n"
+          "QUIET, VERBOSE and AUDIO=<backend> match the options above.\n"
+          "A Workbench launch is quiet by default, because printing there\n"
+          "makes AmigaDOS open an output window that never closes.\n",
           zzplay_version + 6);
 }
 
 static void zzplay_print_fps(const char *label, uint32_t playback_milli,
                              uint32_t decode_milli)
 {
-  printf("zzplay: %s %lu.%03lu fps playback, "
+  zzplay_info("zzplay: %s %lu.%03lu fps playback, "
          "%lu.%03lu fps decode-call\n",
          label,
          (unsigned long)(playback_milli / 1000U),
@@ -334,7 +346,7 @@ static void zzplay_stats_finish(const struct ZZPlayStats *stats)
   int category;
 
   if (stats->core.total_frames == 0U || stats->core.wall_us == 0U) {
-    printf("zzplay: average fps unavailable\n");
+    zzplay_info("zzplay: average fps unavailable\n");
   } else {
     zzplay_print_fps(
         "average",
@@ -344,7 +356,7 @@ static void zzplay_stats_finish(const struct ZZPlayStats *stats)
   for (category = 0; category < ZZPLAY_PROFILE_COUNT; category++) {
     const ZZPlayProfileMetric *metric = &stats->core.profile[category];
 
-    printf("zzplay: profile %-14s %lu calls, %llu ms total, "
+    zzplay_info("zzplay: profile %-14s %lu calls, %llu ms total, "
            "%lu us average\n",
            profile_name[category],
            (unsigned long)metric->calls,
@@ -356,7 +368,7 @@ static void zzplay_stats_finish(const struct ZZPlayStats *stats)
   other_us = stats->profile_wall_us > accounted_us
                  ? stats->profile_wall_us - accounted_us
                  : 0U;
-  printf("zzplay: profile wall %lu ms, accounted %llu ms, "
+  zzplay_info("zzplay: profile wall %lu ms, accounted %llu ms, "
          "other %llu ms\n",
          (unsigned long)(stats->profile_wall_us / 1000U),
          (unsigned long long)(accounted_us / 1000U),
@@ -488,25 +500,40 @@ static ZZPlayControlAction zzplay_poll_control(
  * when there is one; otherwise from the public screen. This runs in the
  * application, not inside a P96 driver callback, so LockPubScreen is safe
  * here (the deadlock noted in the P96 contract is a CreateFeature hazard). */
+/* Cache the screen dimensions whenever a window exists. The fullscreen
+ * toggle has to close the PIP before reopening it, and at that moment
+ * WScreen is gone; relying on LockPubScreen there was the reason the first
+ * bench round went borderless at the source size instead of scaling up. */
+static void zzplay_cache_screen(struct ZZPlayRuntime *runtime)
+{
+  if (runtime->window && runtime->window->WScreen) {
+    runtime->screen_w = (uint16_t)runtime->window->WScreen->Width;
+    runtime->screen_h = (uint16_t)runtime->window->WScreen->Height;
+  }
+}
+
 static void zzplay_screen_size(struct ZZPlayRuntime *runtime,
                                uint16_t *width, uint16_t *height)
 {
   struct Screen *screen;
 
-  *width = 0U;
-  *height = 0U;
-  if (runtime->window && runtime->window->WScreen) {
-    *width = (uint16_t)runtime->window->WScreen->Width;
-    *height = (uint16_t)runtime->window->WScreen->Height;
+  zzplay_cache_screen(runtime);
+  if (runtime->screen_w != 0U && runtime->screen_h != 0U) {
+    *width = runtime->screen_w;
+    *height = runtime->screen_h;
     return;
   }
+  *width = 0U;
+  *height = 0U;
   screen = LockPubScreen(0);
   if (!screen) {
     return;
   }
-  *width = (uint16_t)screen->Width;
-  *height = (uint16_t)screen->Height;
+  runtime->screen_w = (uint16_t)screen->Width;
+  runtime->screen_h = (uint16_t)screen->Height;
   UnlockPubScreen(0, screen);
+  *width = runtime->screen_w;
+  *height = runtime->screen_h;
 }
 
 static struct Window *zzplay_open_pip(const ZZPlayVideoInfo *info,
@@ -630,7 +657,21 @@ static void zzplay_close_pip(struct ZZPlayRuntime *runtime)
 static int zzplay_open_pip_mode(struct ZZPlayRuntime *runtime,
                                 int fullscreen)
 {
-  ZZPlayRect placement = zzplay_pip_placement(runtime, fullscreen);
+  ZZPlayRect placement;
+
+  if (fullscreen) {
+    uint16_t screen_w;
+    uint16_t screen_h;
+
+    zzplay_screen_size(runtime, &screen_w, &screen_h);
+    if (screen_w == 0U || screen_h == 0U) {
+      /* Without the screen size a "fullscreen" window would silently be a
+       * borderless source-size window, which is worse than saying so. */
+      zzplay_info("zzplay: screen size unavailable; staying windowed\n");
+      fullscreen = 0;
+    }
+  }
+  placement = zzplay_pip_placement(runtime, fullscreen);
 
   runtime->pip_error = 0;
   runtime->window = zzplay_open_pip(
@@ -640,6 +681,7 @@ static int zzplay_open_pip_mode(struct ZZPlayRuntime *runtime,
     runtime->pip_open_failed = 1U;
     return 0;
   }
+  zzplay_cache_screen(runtime);
   runtime->fullscreen = fullscreen ? 1U : 0U;
   runtime->present_recheck = 1U;
   runtime->title_dirty = 1U;
@@ -689,6 +731,8 @@ static int zzplay_toggle_fullscreen(struct ZZPlayRuntime *runtime)
     return 1;
   }
   target = runtime->fullscreen ? 0 : 1;
+  /* Read the screen before the window that describes it is destroyed. */
+  zzplay_cache_screen(runtime);
   zzplay_remember_window(runtime);
   zzplay_close_pip(runtime);
   if (zzplay_open_pip_mode(runtime, target)) {
@@ -698,7 +742,7 @@ static int zzplay_toggle_fullscreen(struct ZZPlayRuntime *runtime)
    * before rather than continuing with no window at all. */
   runtime->pip_open_failed = 0U;
   if (zzplay_open_pip_mode(runtime, runtime->fullscreen ? 1 : 0)) {
-    printf("zzplay: could not switch to %s\n",
+    zzplay_info("zzplay: could not switch to %s\n",
            target ? "fullscreen" : "windowed");
     return 1;
   }
@@ -762,13 +806,13 @@ static void zzplay_update_presentation(struct ZZPlayRuntime *runtime)
   if (info.path != ZZPLAY_PATH_UNKNOWN &&
       (!runtime->present_known ||
        runtime->present.path != info.path)) {
-    printf("zzplay: presentation path %s (%ux%u source, %ux%u shown)\n",
+    zzplay_info("zzplay: presentation path %s (%ux%u source, %ux%u shown)\n",
            zzplay_present_path_name(info.path),
            (unsigned)info.src_w, (unsigned)info.src_h,
            (unsigned)info.dst_w, (unsigned)info.dst_h);
   } else if (!runtime->present_known &&
              info.path == ZZPLAY_PATH_UNKNOWN) {
-    printf("zzplay: presentation path unavailable "
+    zzplay_info("zzplay: presentation path unavailable "
            "(firmware predates path reporting)\n");
   }
   runtime->present = info;
@@ -892,7 +936,7 @@ static int zzplay_audio_prepare_from_result(
     runtime->audio_prepared = 1U;
     (void)zzplay_resource_acquire(
         &runtime->core.resources, ZZPLAY_RESOURCE_AUDIO_SINK);
-    printf("zzplay: audio path MP2 decode -> card-local AX DMA, "
+    zzplay_info("zzplay: audio path MP2 decode -> card-local AX DMA, "
            "%lu Hz, %lu channel%s\n",
            (unsigned long)audio->sample_rate,
            (unsigned long)audio->channels,
@@ -915,7 +959,7 @@ static int zzplay_audio_prepare_from_result(
   runtime->audio_prepared = 1U;
   (void)zzplay_resource_acquire(
       &runtime->core.resources, ZZPLAY_RESOURCE_AUDIO_SINK);
-  printf("zzplay: audio path MP2 decode -> AHI S16BE, "
+  zzplay_info("zzplay: audio path MP2 decode -> AHI S16BE, "
          "%lu Hz, %lu channel%s\n",
          (unsigned long)audio->sample_rate,
          (unsigned long)audio->channels,
@@ -1058,7 +1102,7 @@ static int zzplay_audio_fallback_to_ahi(
   runtime->pcm_ring.acknowledged =
       runtime->audio_result.pcm_acknowledged;
   memset(&runtime->ahi, 0, sizeof(runtime->ahi));
-  printf("zzplay: direct AX unavailable (%s); "
+  zzplay_info("zzplay: direct AX unavailable (%s); "
          "AUTO falling back to AHI\n",
          zz9k_status_name(ax_status));
   return zzplay_audio_prepare_from_result(
@@ -1134,7 +1178,7 @@ static int zzplay_toggle_pause(struct ZZPlayRuntime *runtime)
     if (!zzplay_core_pause(&runtime->core)) {
       return ZZ9K_STATUS_INTERNAL_ERROR;
     }
-    printf("zzplay: paused\n");
+    zzplay_info("zzplay: paused\n");
     return ZZ9K_STATUS_OK;
   }
   if (runtime->core.state == ZZPLAY_STATE_PAUSED) {
@@ -1145,7 +1189,7 @@ static int zzplay_toggle_pause(struct ZZPlayRuntime *runtime)
     if (!zzplay_core_resume(&runtime->core)) {
       return ZZ9K_STATUS_INTERNAL_ERROR;
     }
-    printf("zzplay: resumed\n");
+    zzplay_info("zzplay: resumed\n");
     return ZZ9K_STATUS_OK;
   }
   return ZZ9K_STATUS_BAD_REQUEST;
@@ -1741,6 +1785,8 @@ int main(int argc, char **argv)
     return 20;
   }
 
+  zzplay_set_quiet(runtime.options.quiet);
+
   runtime.file = fopen(runtime.options.path, "rb");
   if (!runtime.file) {
     zzplay_error(&runtime, "zzplay: cannot open %s\n",
@@ -1762,7 +1808,7 @@ int main(int argc, char **argv)
   if (probe.kind == ZZPLAY_MEDIA_KIND_MP3) {
     int mp3_ok;
 
-    printf("zzplay: standalone MP3, %lu Hz, %lu channel%s, "
+    zzplay_info("zzplay: standalone MP3, %lu Hz, %lu channel%s, "
            "first frame %lu kbps\n",
            (unsigned long)probe.mp3.sample_rate,
            (unsigned long)probe.mp3.channels,
@@ -1774,14 +1820,18 @@ int main(int argc, char **argv)
     /* Standalone MP3 has no PIP window, so give it its own control surface
      * (U6 D3). Playback must still work if the window cannot open. */
     memset(&status_window, 0, sizeof(status_window));
-    have_status_window =
-        zzplay_statuswin_open(&status_window, runtime.options.path);
+    have_status_window = zzplay_statuswin_open(
+        &status_window, runtime.options.path, probe.mp3.sample_rate,
+        probe.mp3.channels, probe.mp3.bitrate_kbps,
+        zzplay_statuswin_duration_ms(runtime.options.path,
+                                     probe.mp3.bitrate_kbps));
     status_window.loop =
         runtime.options.loop_mode != ZZPLAY_LOOP_NONE ? 1 : 0;
     memset(&mp3_controls, 0, sizeof(mp3_controls));
     mp3_controls.stop_requested = zzplay_mp3_stop_requested;
     mp3_controls.paused = zzplay_mp3_paused;
     mp3_controls.backend = zzplay_mp3_backend;
+    mp3_controls.progress = zzplay_mp3_progress;
     mp3_controls.user = have_status_window ? &status_window : 0;
     mp3_ok = zzplay_mp3_run(
         runtime.options.path, &probe.mp3, &runtime.options,
@@ -1846,9 +1896,9 @@ int main(int argc, char **argv)
     audio_decision.status = ZZPLAY_BACKEND_OK;
     audio_decision.selected = ZZPLAY_AUDIO_NONE;
     runtime.audio_backend = ZZPLAY_AUDIO_NONE;
-    printf("zzplay: warning: video-only Program Stream\n");
+    zzplay_info("zzplay: warning: video-only Program Stream\n");
   }
-  printf("zzplay: MPEG-1/PS %lux%lu, %lu.%03lu fps, "
+  zzplay_info("zzplay: MPEG-1/PS %lux%lu, %lu.%03lu fps, "
          "program audio %s\n",
          (unsigned long)info.width, (unsigned long)info.height,
          (unsigned long)(info.frame_rate_milli / 1000U),
@@ -1918,7 +1968,7 @@ int main(int argc, char **argv)
       runtime.audio_backend = ZZPLAY_AUDIO_AHI;
       audio_decision.selected = ZZPLAY_AUDIO_AHI;
       audio_decision.fell_back = 1;
-      printf("zzplay: card-local AX media output unavailable; "
+      zzplay_info("zzplay: card-local AX media output unavailable; "
              "AUTO falling back to AHI\n");
     } else {
       zzplay_error(&runtime,
@@ -1929,7 +1979,7 @@ int main(int argc, char **argv)
       goto cleanup;
     }
   }
-  printf("zzplay: selected audio backend %s%s\n",
+  zzplay_info("zzplay: selected audio backend %s%s\n",
          zzplay_audio_backend_name(runtime.audio_backend),
          audio_decision.fell_back ? " (AUTO fallback)" : "");
 
@@ -1982,11 +2032,11 @@ int main(int argc, char **argv)
   zzplay_sync_policy_init(
       &runtime.sync_policy, info.frame_rate_milli, 1000U);
   if (runtime.options.show_fps) {
-    printf("zzplay: FPS reporting enabled%s\n",
+    zzplay_info("zzplay: FPS reporting enabled%s\n",
            runtime.options.uncapped ? " (uncapped benchmark)" : "");
     zzplay_stats_start(&runtime.stats);
   }
-  printf("zzplay: frame path direct planar overlay\n");
+  zzplay_info("zzplay: frame path direct planar overlay\n");
   (void)zzplay_core_begin_prebuffer(&runtime.core);
   (void)zzplay_core_start(&runtime.core);
 
@@ -2035,7 +2085,7 @@ playback_session:
         runtime.options.loop_mode = ZZPLAY_LOOP_NONE;
         runtime.options.loop_count = 0U;
       }
-      printf("zzplay: loop %s\n",
+      zzplay_info("zzplay: loop %s\n",
              runtime.options.loop_mode == ZZPLAY_LOOP_NONE ? "off"
                                                            : "on");
       runtime.title_dirty = 1U;
@@ -2281,7 +2331,7 @@ playback_session:
               ZZ9K_STATUS_INTERNAL_ERROR);
           goto cleanup;
         }
-        printf("zzplay: loop %lu\n",
+        zzplay_info("zzplay: loop %lu\n",
                (unsigned long)runtime.completed_loops);
         goto playback_session;
       }
@@ -2305,23 +2355,23 @@ cleanup:
     zzplay_fail(&runtime, ZZPLAY_FAILURE_SESSION, cleanup_status);
   }
   if (runtime.core.state != ZZPLAY_STATE_ERROR) {
-    printf("zzplay: %lu decoded, %lu presented, %lu discarded "
+    zzplay_info("zzplay: %lu decoded, %lu presented, %lu discarded "
            "frames",
            (unsigned long)runtime.frames,
            (unsigned long)runtime.stats.core.presented_frames,
            (unsigned long)runtime.stats.core.discarded_frames);
     if (runtime.audio_enabled) {
-      printf(", %llu audio frames played, %lu underruns",
+      zzplay_info(", %llu audio frames played, %lu underruns",
              (unsigned long long)runtime.final_audio_frames,
              (unsigned long)runtime.final_underruns);
     }
     if (runtime.completed_loops != 0U) {
-      printf(", %lu loops",
+      zzplay_info(", %lu loops",
              (unsigned long)runtime.completed_loops);
     }
-    printf("\n");
+    zzplay_info("\n");
     if (runtime.stats.core.max_abs_drift_pts != 0U) {
-      printf("zzplay: A/V drift current %ld ms, max %lu ms, "
+      zzplay_info("zzplay: A/V drift current %ld ms, max %lu ms, "
              "%lu hold polls, %lu late frames\n",
              (long)(runtime.stats.core.current_drift_pts / 90),
              (unsigned long)(

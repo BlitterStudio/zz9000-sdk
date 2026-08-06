@@ -20,6 +20,7 @@ static int same_options(const ZZPlayOptions *a, const ZZPlayOptions *b)
   if (a->uncapped != b->uncapped) return 0;
   if (a->fullscreen != b->fullscreen) return 0;
   if (a->audio_explicit != b->audio_explicit) return 0;
+  if (a->quiet != b->quiet) return 0;
   if (!a->path != !b->path) return 0;
   if (a->path && b->path && strcmp(a->path, b->path) != 0) return 0;
   return 1;
@@ -177,6 +178,52 @@ static int test_path_supplied_late(void)
   return 0;
 }
 
+/* A Workbench launch has no console; printing there makes AmigaDOS open an
+ * output window that never closes, which is what the first bench round hit. */
+static int test_quiet_defaults(void)
+{
+  ZZPlayOptions options;
+  char *cli[] = { "zzplay", "m.mpg" };
+  char *quiet[] = { "zzplay", "--quiet", "m.mpg" };
+
+  if (zzplay_options_parse_cli(2, cli, &options) != ZZPLAY_OPTIONS_OK)
+    return 1;
+  if (options.quiet) return 2;
+
+  if (zzplay_options_parse_cli(3, quiet, &options) != ZZPLAY_OPTIONS_OK)
+    return 3;
+  if (!options.quiet) return 4;
+
+  /* Workbench defaults to quiet... */
+  zzplay_options_init(&options, ZZPLAY_LAUNCH_WORKBENCH);
+  options.path = "m.mpg";
+  if (zzplay_options_finish(&options) != ZZPLAY_OPTIONS_OK) return 5;
+  if (!options.quiet) return 6;
+
+  /* ...but VERBOSE overrides it. */
+  zzplay_options_init(&options, ZZPLAY_LAUNCH_WORKBENCH);
+  if (!zzplay_options_apply_tooltype(&options, "VERBOSE")) return 7;
+  options.path = "m.mpg";
+  if (zzplay_options_finish(&options) != ZZPLAY_OPTIONS_OK) return 8;
+  if (options.quiet) return 9;
+
+  /* An explicit QUIET from the shell stays quiet. */
+  zzplay_options_init(&options, ZZPLAY_LAUNCH_CLI);
+  if (!zzplay_options_apply_tooltype(&options, "QUIET")) return 10;
+  options.path = "m.mpg";
+  if (zzplay_options_finish(&options) != ZZPLAY_OPTIONS_OK) return 11;
+  if (!options.quiet) return 12;
+
+  /* Benchmark output is the point of benchmarking, so it is not silenced
+   * merely because it was started from Workbench. */
+  zzplay_options_init(&options, ZZPLAY_LAUNCH_WORKBENCH);
+  if (!zzplay_options_apply_tooltype(&options, "BENCHMARK")) return 13;
+  options.path = "m.mpg";
+  if (zzplay_options_finish(&options) != ZZPLAY_OPTIONS_OK) return 14;
+  if (options.quiet) return 15;
+  return 0;
+}
+
 static int test_defaults(void)
 {
   ZZPlayOptions options;
@@ -187,6 +234,7 @@ static int test_defaults(void)
   if (options.show_fps || options.uncapped || options.fullscreen) return 3;
   if (options.audio_explicit) return 4;
   if (options.path) return 5;
+  if (options.quiet || options.quiet_explicit) return 6;
   return 0;
 }
 

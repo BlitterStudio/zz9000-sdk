@@ -67,6 +67,14 @@ typedef struct ZZPlayCore {
 typedef int (*ZZPlayReleaseResource)(void *user,
                                      ZZPlayResource resource);
 
+/* Informational output. Workbench launches have no console, so printing
+ * from one makes AmigaDOS pop an output window that never closes; QUIET is
+ * therefore the default there and can be turned off explicitly. Errors are
+ * never suppressed - they go to stderr or a requester. */
+void zzplay_set_quiet(int quiet);
+int zzplay_is_quiet(void);
+void zzplay_info(const char *format, ...);
+
 void zzplay_core_init(ZZPlayCore *core);
 int zzplay_core_begin_prebuffer(ZZPlayCore *core);
 int zzplay_core_start(ZZPlayCore *core);

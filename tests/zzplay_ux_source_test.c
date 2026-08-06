@@ -86,9 +86,21 @@ static int check_player(const char *path)
     goto done;
   }
 
+  /* The screen must be read while the window that describes it still
+   * exists. Reading it after the close made the first bench round go
+   * borderless at the source size instead of scaling to the display. */
+  if (find(s, "zzplay_cache_screen(runtime);\n  zzplay_remember_window") <
+      0L) {
+    rc = 11;
+    goto done;
+  }
+  /* And a fullscreen request with no known screen must say so rather than
+   * silently opening a borderless source-size window. */
+  if (find(s, "staying windowed") < 0L) { rc = 12; goto done; }
+
   /* Fullscreen must not paint a title bar it does not have. */
   if (find(s, "runtime->fullscreen) {\n    runtime->title_dirty = 0U;") < 0L) {
-    rc = 10;
+    rc = 13;
     goto done;
   }
 

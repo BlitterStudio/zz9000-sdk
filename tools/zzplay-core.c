@@ -1,9 +1,36 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "zzplay-core.h"
+
+#include <stdarg.h>
+#include <stdio.h>
 #include "zzplay-controls.h"
 
 #include <string.h>
+
+static int zzplay_quiet_output;
+
+void zzplay_set_quiet(int quiet)
+{
+  zzplay_quiet_output = quiet ? 1 : 0;
+}
+
+int zzplay_is_quiet(void)
+{
+  return zzplay_quiet_output;
+}
+
+void zzplay_info(const char *format, ...)
+{
+  va_list args;
+
+  if (zzplay_quiet_output) {
+    return;
+  }
+  va_start(args, format);
+  (void)vprintf(format, args);
+  va_end(args);
+}
 
 void zzplay_core_init(ZZPlayCore *core)
 {

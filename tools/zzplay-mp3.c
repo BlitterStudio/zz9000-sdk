@@ -65,6 +65,14 @@ static int zzplay_mp3_controls_paused(const ZZPlayMP3Controls *controls)
          controls->paused(controls->user);
 }
 
+static void zzplay_mp3_report_progress(const ZZPlayMP3Controls *controls,
+                                       uint32_t elapsed_ms, int exact)
+{
+  if (controls && controls->progress) {
+    controls->progress(controls->user, elapsed_ms, exact);
+  }
+}
+
 static void zzplay_mp3_report_backend(const ZZPlayMP3Controls *controls,
                                       const char *name)
 {
@@ -73,16 +81,39 @@ static void zzplay_mp3_report_backend(const ZZPlayMP3Controls *controls,
   }
 }
 
-/* zzplay_mhi_play_file() carries one opaque pointer, so pass the controls
- * block itself and unwrap it here. */
+/* zzplay_mhi_play_file() carries one opaque pointer, so bundle everything
+ * the callbacks need behind it. */
+typedef struct ZZPlayMHIBridge {
+  const ZZPlayMP3Controls *controls;
+  const ZZPlayMHISink *sink;
+  uint32_t bitrate_kbps;
+} ZZPlayMHIBridge;
+
 static int zzplay_mp3_controls_stop_thunk(void *user)
 {
-  return zzplay_mp3_controls_stop((const ZZPlayMP3Controls *)user);
+  const ZZPlayMHIBridge *bridge = (const ZZPlayMHIBridge *)user;
+
+  if (!bridge) {
+    return 0;
+  }
+  /* MHI reports only bytes handed to the decoder, which run ahead of what
+   * has actually been heard by however much is queued - reported as
+   * approximate rather than pretending to a sample-accurate position. */
+  if (bridge->sink && bridge->bitrate_kbps != 0U) {
+    zzplay_mp3_report_progress(
+        bridge->controls,
+        (uint32_t)((bridge->sink->input_bytes * 8ULL) /
+                   bridge->bitrate_kbps),
+        0);
+  }
+  return zzplay_mp3_controls_stop(bridge->controls);
 }
 
 static int zzplay_mp3_controls_paused_thunk(void *user)
 {
-  return zzplay_mp3_controls_paused((const ZZPlayMP3Controls *)user);
+  const ZZPlayMHIBridge *bridge = (const ZZPlayMHIBridge *)user;
+
+  return bridge ? zzplay_mp3_controls_paused(bridge->controls) : 0;
 }
 
 static int zzplay_mp3_service_ready(ZZ9KContext *ctx)
@@ -321,6 +352,13 @@ static int zzplay_mp3_decode_once(ZZPlayMP3Decode *decode)
       }
       Delay(1U);
     }
+    if (decode->probe->sample_rate != 0U) {
+      zzplay_mp3_report_progress(
+          decode->controls,
+          (uint32_t)((decode->output_frames * 1000ULL) /
+                     decode->probe->sample_rate),
+          1);
+    }
     got = fread(chunk, 1U, sizeof(chunk), decode->file);
     if (got == 0U && ferror(decode->file)) {
       return 0;
@@ -463,7 +501,7 @@ static int zzplay_mp3_accelerated(
       }
       goto done;
     }
-    printf("zzplay: MP3 loop %lu: %lu input bytes, %llu audio frames\n",
+    zzplay_info("zzplay: MP3 loop %lu: %lu input bytes, %llu audio frames\n",
            (unsigned long)completed,
            (unsigned long)decode.input_bytes,
            (unsigned long long)decode.output_frames);
@@ -490,22 +528,27 @@ done:
 
 static int zzplay_mp3_mhi(
     const char *path,
+    const ZZPlayMP3Info *info,
     const ZZPlayOptions *options,
     const ZZPlayMP3Controls *controls,
     ZZPlayMHIStatus *open_status)
 {
+  ZZPlayMHIBridge bridge;
   ZZPlayMHISink sink;
   ZZPlayMHIStatus status;
   uint32_t repeats = options->loop_count;
   uint32_t completed = 0U;
   int ok = 0;
 
+  bridge.controls = controls;
+  bridge.sink = &sink;
+  bridge.bitrate_kbps = info ? info->bitrate_kbps : 0U;
   status = zzplay_mhi_acquire(&sink);
   *open_status = status;
   if (status != ZZPLAY_MHI_OK) {
     return 0;
   }
-  printf("zzplay: selected audio backend MHI (card-local Layer III)\n");
+  zzplay_info("zzplay: selected audio backend MHI (card-local Layer III)\n");
   for (;;) {
     FILE *file = fopen(path, "rb");
 
@@ -515,13 +558,13 @@ static int zzplay_mp3_mhi(
     }
     status = zzplay_mhi_play_file(
         &sink, file, zzplay_mp3_controls_stop_thunk,
-        zzplay_mp3_controls_paused_thunk, (void *)controls);
+        zzplay_mp3_controls_paused_thunk, &bridge);
     fclose(file);
     if (status != ZZPLAY_MHI_OK) {
       *open_status = status;
       goto done;
     }
-    printf("zzplay: MP3 MHI loop %lu: %llu input bytes\n",
+    zzplay_info("zzplay: MP3 MHI loop %lu: %llu input bytes\n",
            (unsigned long)completed,
            (unsigned long long)sink.input_bytes);
     if (options->loop_mode == ZZPLAY_LOOP_FOREVER) {
@@ -533,7 +576,7 @@ static int zzplay_mp3_mhi(
       completed++;
       continue;
     }
-    printf("zzplay: MP3 MHI playback complete, %lu loops\n",
+    zzplay_info("zzplay: MP3 MHI playback complete, %lu loops\n",
            (unsigned long)completed);
     ok = 1;
     break;
@@ -562,7 +605,7 @@ int zzplay_mp3_run(const char *path,
   }
   if (options->audio_backend == ZZPLAY_AUDIO_MHI ||
       options->audio_backend == ZZPLAY_AUDIO_AUTO) {
-    if (zzplay_mp3_mhi(path, options, controls, &mhi_status)) {
+    if (zzplay_mp3_mhi(path, info, options, controls, &mhi_status)) {
       return 1;
     }
     if (mhi_status == ZZPLAY_MHI_STOPPED) {
@@ -574,15 +617,15 @@ int zzplay_mp3_run(const char *path,
               zzplay_mhi_status_name(mhi_status));
       return 0;
     }
-    printf("zzplay: MHI unavailable before playback (%s); "
+    zzplay_info("zzplay: MHI unavailable before playback (%s); "
            "AUTO falling back to accelerated decode + AHI\n",
            zzplay_mhi_status_name(mhi_status));
   }
   if (options->audio_backend != ZZPLAY_AUDIO_NONE) {
-    printf("zzplay: selected audio backend AHI "
+    zzplay_info("zzplay: selected audio backend AHI "
            "(accelerated Layer III decode, S16BE)\n");
   } else {
-    printf("zzplay: selected audio backend NONE "
+    zzplay_info("zzplay: selected audio backend NONE "
            "(accelerated Layer III decode benchmark)\n");
   }
   zzplay_mp3_report_backend(

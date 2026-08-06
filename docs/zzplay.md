@@ -35,6 +35,11 @@ it, copy it next to your media file and rename it to match — for example, for
 Errors go to the shell when started from the shell, and to a requester when
 started from Workbench, which has no console.
 
+A Workbench launch is **quiet by default**: printing progress from Workbench
+makes AmigaDOS open an output window that stays open, so every playback would
+leave another one behind. Use `VERBOSE` if you want that output anyway.
+`BENCHMARK` stays verbose regardless, since its numbers are the point.
+
 ## Options
 
 Every option has a Workbench ToolType with the same name and meaning. The
@@ -51,6 +56,8 @@ parentheses in Workbench's *Information* window to enable one.
 | `--loop` | `LOOP` | Repeat forever |
 | `--loop=N` | `LOOP=N` | Repeat N times after the first play |
 | `--fullscreen` | `FULLSCREEN` | Start filling the screen, aspect preserved |
+| `--quiet` | `QUIET` | No progress output. The default from Workbench |
+| `--verbose` | `VERBOSE` | Force progress output even from Workbench |
 | `--fps` | `FPS` | Rolling playback and decode-call frame rates |
 | `--benchmark` | `BENCHMARK` | Remove pacing; implies `--fps`, and mutes audio unless a backend was named |
 | `--help` | — | Print usage |
@@ -78,9 +85,30 @@ stealing it, and `AUTO` falls back and says so.
 | --- | --- |
 | Space | Pause / resume |
 | Escape, Q, close gadget | Stop |
-| F | Toggle fullscreen and window |
+| F | Toggle fullscreen and window (video only) |
 | L | Toggle looping |
 | Ctrl-C | Stop (shell) |
+
+### Fullscreen
+
+Fullscreen scales the video up to fill the display, preserving aspect: a
+640x480 clip on a 1280x1024 screen becomes 1280x960 with the remainder left
+as a border. The scaling is done by the FPGA overlay, so the frame rate is
+unaffected. Pressing F again restores the exact window position and size you
+had before.
+
+### Standalone MP3
+
+MP3 playback has no video window, so it opens a small player window instead,
+showing the file name, sample rate, channel mode and bitrate, the selected
+backend, elapsed and total time with a position bar, and the same controls.
+The duration is estimated from the file size, so for a VBR file both it and
+the elapsed time are approximate; an approximate position is shown with a
+leading `~`.
+
+Pause through MHI stops essentially instantly. Through AHI it stops after the
+already-queued audio finishes, up to about 0.4 seconds, because that queue is
+what keeps playback gap-free.
 
 ## Presentation path
 

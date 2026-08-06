@@ -18,6 +18,10 @@ typedef struct ZZPlayMP3Controls {
   int (*paused)(void *user);
   /* Called when the backend is known, so the window can show it. */
   void (*backend)(void *user, const char *name);
+  /* Playback position. Exact on the AHI path (decoded output frames);
+   * on MHI it is derived from bytes handed to the decoder and therefore
+   * runs slightly ahead, which the UI marks as approximate. */
+  void (*progress)(void *user, uint32_t elapsed_ms, int exact);
   void *user;
 } ZZPlayMP3Controls;
 

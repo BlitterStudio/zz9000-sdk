@@ -169,6 +169,8 @@ TOOLTYPES = [
     "(AUDIO=AUTO)",
     "(FULLSCREEN)",
     "(LOOP)",
+    "(QUIET)",
+    "(VERBOSE)",
     "(FPS)",
     "(BENCHMARK)",
 ]
