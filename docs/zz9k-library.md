@@ -8,7 +8,7 @@ The current library identity is:
 ```c
 #define ZZ9K_LIBRARY_NAME "zz9k.library"
 #define ZZ9K_LIBRARY_VERSION 2
-#define ZZ9K_LIBRARY_REVISION 25
+#define ZZ9K_LIBRARY_REVISION 27
 ```
 
 Open the library with at least version 2:
@@ -684,22 +684,36 @@ Compressed input is supplied in bounded shared-buffer chunks with
 `ZZ9K_VIDEO_SESSION_WRITE_EOF`. `NEED_INPUT`, `FRAME_READY`, and `DONE` result
 flags drive the client loop without exposing backend-specific state.
 
-`build/zzplay` is the first standalone AmigaOS client:
+`build/zzplay` is the standalone AmigaOS media player:
 
 ```text
 zzplay Work:Video/test.mpg
 zzplay --fps Work:Video/test.mpg
 zzplay --benchmark Work:Video/test.mpg
+zzplay Work:Audio/test.mp3
+zzplay --audio=ahi Work:Audio/test.mp3
+zzplay --audio=mhi Work:Audio/test.mp3
+zzplay --audio=none --benchmark Work:Audio/test.mp3
 ```
 
-It currently accepts MPEG-1 Program Streams, opens a P96 overlay window,
-publishes decoder-owned planar frames directly, and paces through `timer.device`.
+It accepts MPEG-1 Program Streams and standalone Layer III files. MPEG video
+opens a P96 overlay window, publishes decoder-owned planar frames directly,
+and paces through `timer.device`. Standalone MP3 playback uses the accelerated
+audio-stream service and generic AHI output, or the optional runtime
+`mhizz9000.library` path when ZZ9000AX is available.
+
+For standalone MP3, `--audio=auto` tries to acquire MHI before playback and
+falls back to accelerated decode plus AHI only when that pre-play acquisition
+is unavailable. Explicit `--audio=mhi` never falls back. Direct
+`--audio=ax` is not a standalone-MP3 backend, and MHI is not a Program Stream
+MP2 backend. Only one AHI, MHI, or direct-AX owner is held at a time.
+
 `--fps` prints rolling and final playback FPS plus `decode-call` FPS, which
 excludes deliberate pacing and includes time waiting for prior queued overlay
 composition. `--benchmark` also disables pacing, making playback FPS the
 uncapped end-to-end throughput for firmware comparisons. Console reporting is
-sampled every two seconds to keep its own overhead small. This prototype is
-video-only; audio and A/V synchronization remain follow-up work.
+sampled every two seconds to keep its own overhead small. MPEG Program Stream
+audio is synchronized to video through AHI or compatible direct AX output.
 Additional codecs should be added as new firmware backend registry entries and
 new advertised codec/container flags, without changing the session lifecycle
 or direct-overlay contract. MPEG-1 elementary streams or MJPEG are relatively
@@ -1566,6 +1580,16 @@ return the standard audio-stream result. Gate on
 capability bit from `ZZ9KQueryCaps()`; the ops return
 `ZZ9K_STATUS_UNSUPPORTED` on firmware that does not implement them.
 
+Library revision 27 accepts `ZZ9K_AUDIO_STREAM_FEED_DRAIN` in
+`ZZ9KAudioStreamFeed()`. Unlike permanent EOF, a drain decodes every complete
+MP3 frame currently available, retains an incomplete compressed-frame tail,
+and reports `ZZ9K_AUDIO_STREAM_RESULT_DRAINED` only after decoded PCM and the
+bound AX DMA tail have retired. Later non-empty input resumes the same stream.
+Callers that use this flag must require
+`ZZ9K_LIBRARY_MIN_REVISION_AUDIO_STREAM_DRAIN` and
+`ZZ9K_CAP_AUDIO_STREAM_DRAIN`; revision 26 and earlier reject the flag during
+client-side request validation.
+
 `ZZ9KAudioStreamBeginDesc.low_water_bytes` is the PCM-ring refill
 threshold: while a session is bound to the AX output, the firmware tops the
 decoded PCM ring back up whenever it drains to this level. It is validated
@@ -1573,7 +1597,8 @@ against `pcm_ring_capacity` (as is `high_water_bytes`); pass zero to refill
 only on explicit feeds. `high_water_bytes` caps the amount of PCM firmware should produce in a
 single mailbox call; pass zero for the firmware default, or a value below the
 PCM ring capacity to keep decode work sliced for interactive callers.
-`zz9k-mp3 --stats` prints timing counters for file reads, staging-buffer
+`zz9k-mp3` remains the low-level decode/transport diagnostic rather than the
+end-user media player. `zz9k-mp3 --stats` prints timing counters for file reads, staging-buffer
 copies, feed calls, PCM copies, output writes, and read acknowledgements. Run
 without `--out` to measure decode/mailbox throughput without pulling PCM back
 to DOS, then compare against `--out` to isolate transfer and filesystem cost.

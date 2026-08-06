@@ -260,8 +260,11 @@ int main(void)
   if (ZZ9K_OP_AUDIO_STREAM_PLAY != 0x0507U) return 97;
   if (ZZ9K_OP_AUDIO_STREAM_STOP != 0x0508U) return 98;
   if (ZZ9K_CAP_AUDIO_PLAYBACK != (1U << 19)) return 99;
+  if (ZZ9K_CAP_AUDIO_STREAM_DRAIN != (1U << 23)) return 100;
   if (ZZ9K_SERVICE_FLAG_AUDIO_MP3_STREAM != (1U << 20)) return 44;
   if (ZZ9K_AUDIO_STREAM_FEED_EOF != (1U << 0)) return 45;
+  if (ZZ9K_AUDIO_STREAM_FEED_DRAIN != (1U << 1)) return 101;
+  if (ZZ9K_AUDIO_STREAM_RESULT_DRAINED != (1U << 4)) return 102;
   if (ZZ9K_AUDIO_STREAM_STATE_STREAMING == ZZ9K_AUDIO_STREAM_STATE_DONE) {
     return 46;
   }

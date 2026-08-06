@@ -85,7 +85,7 @@ int main(int argc, char **argv)
   }
 
   ok = 1;
-  ok &= expect_contains(source, "#define ZZ9K_LIBRARY_REVISION 25");
+  ok &= expect_contains(source, "#define ZZ9K_LIBRARY_REVISION 27");
   ok &= expect_contains(source, "ZZ9K_LIBRARY_MIN_REVISION_CRYPTO_KX");
   ok &= expect_contains(source, "ZZ9K_SERVICE_FLAG_CRYPTO_X25519");
   ok &= expect_contains(source, "zz9k-services --check-release");
@@ -173,10 +173,18 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "`output exists, use --overwrite:`");
   ok &= expect_contains(source, "Library revision 22 added MP3 streaming sessions");
   ok &= expect_contains(source, "ZZ9K_LIBRARY_MIN_REVISION_AUDIO_STREAM");
+  ok &= expect_contains(source,
+                        "ZZ9K_LIBRARY_MIN_REVISION_AUDIO_STREAM_DRAIN");
+  ok &= expect_contains(source, "ZZ9K_CAP_AUDIO_STREAM_DRAIN");
   ok &= expect_contains(source, "ZZ9KAudioStreamBegin()");
   ok &= expect_contains(source, "ZZ9KAudioStreamFeed()");
   ok &= expect_contains(source, "ZZ9KAudioStreamRead()");
   ok &= expect_contains(source, "ZZ9KAudioStreamClose()");
+  ok &= expect_contains(source,
+                        "zzplay --audio=mhi Work:Audio/test.mp3");
+  ok &= expect_contains(source,
+                        "`zz9k-mp3` remains the low-level");
+  ok &= expect_not_contains(source, "This prototype is\nvideo-only");
   ok &= expect_contains(source, "`--skip-existing`");
   ok &= expect_contains(source, "reported with an `s` line");
   ok &= expect_contains(source, "`--dry-run`");

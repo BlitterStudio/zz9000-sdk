@@ -165,6 +165,10 @@ Failure routing:
 zz9k-mp3 --stats Work:Audio/test.mp3
 zz9k-mpega-smoke --trace --null-api-check
 zz9k-mpega-smoke --trace --stream-info --stats --freq-max 0 --frames 100 Work:Audio/test.mp3
+zzplay --audio=ahi Work:Audio/test.mp3
+zzplay --audio=mhi Work:Audio/test.mp3
+zzplay --audio=auto Work:Audio/test.mp3
+zzplay --audio=none --benchmark Work:Audio/test.mp3
 ```
 
 Expected pass signal:
@@ -174,10 +178,19 @@ Expected pass signal:
 - `zz9k-mpega-smoke --trace --null-api-check` reports `null-api check ok`.
 - The stream-info check reports the installed `mpega.library` version/revision,
   nonzero frames/samples, and completes without decode errors.
+- `zzplay --audio=ahi` reports accelerated Layer III decode plus AHI and plays
+  the complete file without a truncated tail.
+- On ZZ9000AX with `mhizz9000.library`, explicit MHI and `AUTO` report MHI and
+  play without AHI ownership. `AUTO` falls back before playback when MHI is
+  unavailable; explicit MHI reports the acquisition error instead.
+- `--audio=none --benchmark` decodes to completion without opening an audio
+  backend. Ctrl-C and normal EOF both permit an immediate AHI or MHI reopen.
 
 Failure routing:
 
-- Direct MP3 failures route to the audio service.
+- `zz9k-mp3` diagnostic failures route to the audio-stream service.
+- `zzplay --audio=ahi` failures route to accelerated decode or AHI output;
+  MHI-only failures route to `mhizz9000.library` and ZZ9000AX ownership.
 - MPEGA-only failures route to the resident compatibility shim.
 - Surface slowdown during full-speed audio diagnostics is measured as
   contention unless the graphics or audio command times out or returns errors.

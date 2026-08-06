@@ -33,7 +33,8 @@ programs:
   surfaces, image decode/scale, streaming video, audio, compression, and
   crypto.
 - End-user tools for service inspection, benchmarking, image viewing,
-  MP3 playback, archive extraction, and release smoke checks.
+  MPEG/MP3 playback, archive extraction, and release smoke checks. `zzplay`
+  is the media player; `zz9k-mp3` remains the low-level MP3 diagnostic.
 - `zz9k-picture.datatype` and JPEG/PNG descriptors for optional
   DataTypes integration.
 - `mpega.library` and audio-stream helpers used by the current MHI/MP3

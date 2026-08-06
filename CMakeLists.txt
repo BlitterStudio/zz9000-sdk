@@ -459,17 +459,128 @@ target_include_directories(video_session_abi_test
 
 add_test(NAME video_session_abi_test COMMAND video_session_abi_test)
 
+add_executable(media_session_abi_test
+  tests/media_session_abi_test.c
+)
+
+target_include_directories(media_session_abi_test
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/host/include
+)
+
+add_test(NAME media_session_abi_test COMMAND media_session_abi_test)
+
+add_library(zzplay_core STATIC
+  tools/zzplay-audio.c
+  tools/zzplay-audio-clock.c
+  tools/zzplay-ax.c
+  tools/zzplay-core.c
+  tools/zzplay-media.c
+  tools/zzplay-mp3-transport.c
+  tools/zzplay-options.c
+  tools/zzplay-probe.c
+  tools/zzplay-stats.c
+  tools/zzplay-stream.c
+  tools/zzplay-sync.c
+  tools/zzplay-video.c
+)
+
+target_include_directories(zzplay_core
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/host/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools
+)
+
 add_executable(zzplay_probe_test
   tests/zzplay_probe_test.c
 )
 
-target_include_directories(zzplay_probe_test
-  PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/tools
+target_link_libraries(zzplay_probe_test PRIVATE zzplay_core)
+add_test(NAME zzplay_probe_test COMMAND zzplay_probe_test)
+
+add_executable(zzplay_core_test
+  tests/zzplay_core_test.c
 )
 
-add_test(NAME zzplay_probe_test COMMAND zzplay_probe_test)
+target_link_libraries(zzplay_core_test PRIVATE zzplay_core)
+add_test(NAME zzplay_core_test COMMAND zzplay_core_test)
+
+add_executable(zzplay_backend_test
+  tests/zzplay_backend_test.c
+)
+
+target_link_libraries(zzplay_backend_test PRIVATE zzplay_core)
+add_test(NAME zzplay_backend_test COMMAND zzplay_backend_test)
+
+add_executable(zzplay_audio_clock_test
+  tests/zzplay_audio_clock_test.c
+)
+
+target_link_libraries(zzplay_audio_clock_test PRIVATE zzplay_core)
+add_test(NAME zzplay_audio_clock_test COMMAND zzplay_audio_clock_test)
+
+add_executable(zzplay_ax_test
+  tests/zzplay_ax_test.c
+)
+
+target_link_libraries(zzplay_ax_test PRIVATE zzplay_core)
+add_test(NAME zzplay_ax_test COMMAND zzplay_ax_test)
+
+add_executable(zzplay_sync_test
+  tests/zzplay_sync_test.c
+)
+
+target_link_libraries(zzplay_sync_test PRIVATE zzplay_core)
+add_test(NAME zzplay_sync_test COMMAND zzplay_sync_test)
+
+add_executable(zzplay_media_test
+  tests/zzplay_media_test.c
+)
+
+target_link_libraries(zzplay_media_test PRIVATE zzplay_core)
+add_test(NAME zzplay_media_test COMMAND zzplay_media_test)
+
+add_executable(zzplay_ahi_source_test
+  tests/zzplay_ahi_source_test.c
+)
+
+add_test(
+  NAME zzplay_ahi_source_test
+  COMMAND zzplay_ahi_source_test
+          ${CMAKE_CURRENT_SOURCE_DIR}/tools/zzplay-ahi.c
+)
+
+add_executable(zzplay_player_source_test
+  tests/zzplay_player_source_test.c
+)
+
+add_test(
+  NAME zzplay_player_source_test
+  COMMAND zzplay_player_source_test
+          ${CMAKE_CURRENT_SOURCE_DIR}/tools/zzplay.c
+)
+
+add_executable(zzplay_mhi_source_test
+  tests/zzplay_mhi_source_test.c
+)
+
+add_test(
+  NAME zzplay_mhi_source_test
+  COMMAND zzplay_mhi_source_test
+          ${CMAKE_CURRENT_SOURCE_DIR}/tools/zzplay-mhi.c
+)
+
+add_executable(zzplay_mp3_source_test
+  tests/zzplay_mp3_source_test.c
+)
+
+add_test(
+  NAME zzplay_mp3_source_test
+  COMMAND zzplay_mp3_source_test
+          ${CMAKE_CURRENT_SOURCE_DIR}/tools/zzplay-mp3.c
+)
 
 add_executable(module_manifest_test
   tests/module_manifest_test.c
@@ -1199,6 +1310,7 @@ add_test(
 
 add_executable(mp3_tool_logic_test
   tests/mp3_tool_logic_test.c
+  tools/zzplay-mp3-transport.c
 )
 
 target_include_directories(mp3_tool_logic_test
@@ -1305,6 +1417,7 @@ target_link_libraries(zz9k_aead PRIVATE zz9k_host)
 
 add_executable(zz9k_mp3
   tools/zz9k-mp3.c
+  tools/zzplay-mp3-transport.c
 )
 
 target_link_libraries(zz9k_mp3 PRIVATE zz9k_host)

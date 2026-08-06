@@ -58,7 +58,7 @@ static inline uint32_t zz9k_service_capability_mask(uint32_t service_id)
   case ZZ9K_SERVICE_MODULE:
     return ZZ9K_CAP_MODULES;
   case ZZ9K_SERVICE_VIDEO:
-    return ZZ9K_CAP_VIDEO_DECODE;
+    return ZZ9K_CAP_VIDEO_DECODE | ZZ9K_CAP_MEDIA_SESSION;
   default:
     return 0U;
   }
@@ -94,7 +94,7 @@ static inline uint32_t zz9k_missing_service_flags(uint32_t available_flags,
 
 static inline uint32_t zz9k_known_capability_count(void)
 {
-  return 22U;
+  return 24U;
 }
 
 static inline uint32_t zz9k_known_capability_bit(uint32_t index)
@@ -144,6 +144,10 @@ static inline uint32_t zz9k_known_capability_bit(uint32_t index)
     return ZZ9K_CAP_HOST_WINDOW_HEAP;
   case 21:
     return ZZ9K_CAP_VIDEO_DECODE;
+  case 22:
+    return ZZ9K_CAP_MEDIA_SESSION;
+  case 23:
+    return ZZ9K_CAP_AUDIO_STREAM_DRAIN;
   default:
     return 0U;
   }
@@ -164,7 +168,7 @@ static inline uint32_t zz9k_known_service_flag_count(uint32_t service_id)
     return 5U;
   }
   if (service_id == ZZ9K_SERVICE_VIDEO) {
-    return 9U;
+    return 15U;
   }
   return 4U;
 }
@@ -289,6 +293,18 @@ static inline uint32_t zz9k_known_service_flag(uint32_t service_id,
       return ZZ9K_SERVICE_FLAG_VIDEO_STREAMING_INPUT;
     case 8:
       return ZZ9K_SERVICE_FLAG_VIDEO_CORE1;
+    case 9:
+      return ZZ9K_SERVICE_FLAG_VIDEO_MEDIA_SESSION;
+    case 10:
+      return ZZ9K_SERVICE_FLAG_VIDEO_MEDIA_MP2;
+    case 11:
+      return ZZ9K_SERVICE_FLAG_VIDEO_EXPLICIT_PRESENT;
+    case 12:
+      return ZZ9K_SERVICE_FLAG_VIDEO_TIMELINE_90KHZ;
+    case 13:
+      return ZZ9K_SERVICE_FLAG_VIDEO_PCM_RING_STATUS;
+    case 14:
+      return ZZ9K_SERVICE_FLAG_VIDEO_AUDIO_BIND;
     default:
       return 0U;
     }
@@ -344,6 +360,10 @@ static inline const char *zz9k_capability_name(uint32_t capability_bit)
     return "host-window-heap";
   case ZZ9K_CAP_VIDEO_DECODE:
     return "video-decode";
+  case ZZ9K_CAP_MEDIA_SESSION:
+    return "media-session";
+  case ZZ9K_CAP_AUDIO_STREAM_DRAIN:
+    return "audio-stream-drain";
   default:
     return 0;
   }
@@ -469,6 +489,18 @@ static inline const char *zz9k_service_flag_name(uint32_t service_id,
       return "streaming-input";
     case ZZ9K_SERVICE_FLAG_VIDEO_CORE1:
       return "core1";
+    case ZZ9K_SERVICE_FLAG_VIDEO_MEDIA_SESSION:
+      return "media-session";
+    case ZZ9K_SERVICE_FLAG_VIDEO_MEDIA_MP2:
+      return "media-mp2";
+    case ZZ9K_SERVICE_FLAG_VIDEO_EXPLICIT_PRESENT:
+      return "explicit-present";
+    case ZZ9K_SERVICE_FLAG_VIDEO_TIMELINE_90KHZ:
+      return "timeline-90khz";
+    case ZZ9K_SERVICE_FLAG_VIDEO_PCM_RING_STATUS:
+      return "pcm-ring-status";
+    case ZZ9K_SERVICE_FLAG_VIDEO_AUDIO_BIND:
+      return "audio-bind";
     default:
       return 0;
     }

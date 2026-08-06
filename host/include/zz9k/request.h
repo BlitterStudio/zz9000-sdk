@@ -561,12 +561,12 @@ static inline int zz9k_request_audio_stream_feed(
     const ZZ9KAudioStreamFeedDesc *desc)
 {
   ZZ9KAudioStreamFeedPayload *payload;
+  ZZ9KAudioStreamFeedDesc validated;
 
-  if (!request || !desc || desc->session == 0U ||
-      desc->src_handle == ZZ9K_INVALID_HANDLE ||
-      (desc->src_length == 0U &&
-       (desc->flags & ZZ9K_AUDIO_STREAM_FEED_EOF) == 0U) ||
-      (desc->flags & ~ZZ9K_AUDIO_STREAM_FEED_EOF) != 0U) {
+  if (!request || !desc ||
+      !zz9k_audio_build_stream_feed_desc(
+          &validated, desc->session, desc->src_handle, desc->src_offset,
+          desc->src_length, desc->flags)) {
     return ZZ9K_STATUS_BAD_REQUEST;
   }
 
@@ -743,6 +743,139 @@ static inline int zz9k_request_video_session_close(ZZ9KRequest *request,
   payload =
       (ZZ9KVideoSessionClosePayload *)request->entry.payload.inline_data;
   zz9k_put_be32(payload->session, session);
+  zz9k_put_be32(payload->flags, flags);
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_request_media_session_begin(
+    ZZ9KRequest *request,
+    const ZZ9KMediaSessionBeginDesc *desc)
+{
+  ZZ9KMediaSessionBeginPayload *payload;
+
+  if (!request || !desc || desc->video_codec == 0U ||
+      desc->container == 0U || desc->output_format == 0U ||
+      desc->width == 0U || desc->height == 0U || desc->flags != 0U ||
+      desc->audio_codec > ZZ9K_MEDIA_AUDIO_MP2 ||
+      (desc->audio_codec == ZZ9K_MEDIA_AUDIO_NONE &&
+       (desc->pcm_ring_handle != 0U ||
+        desc->pcm_ring_capacity != 0U ||
+        desc->pcm_low_water_bytes != 0U ||
+        desc->pcm_high_water_bytes != 0U)) ||
+      (desc->audio_codec == ZZ9K_MEDIA_AUDIO_MP2 &&
+       (desc->pcm_ring_handle == 0U ||
+        desc->pcm_ring_handle == ZZ9K_INVALID_HANDLE ||
+        desc->pcm_ring_capacity == 0U ||
+        desc->pcm_low_water_bytes >= desc->pcm_high_water_bytes ||
+        desc->pcm_high_water_bytes > desc->pcm_ring_capacity))) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  zz9k_request_init(request, ZZ9K_OP_MEDIA_SESSION_BEGIN);
+  request->entry.payload_len = sizeof(*payload);
+  payload = (ZZ9KMediaSessionBeginPayload *)
+      request->entry.payload.inline_data;
+  zz9k_put_be32(payload->video_codec, desc->video_codec);
+  zz9k_put_be32(payload->container, desc->container);
+  zz9k_put_be32(payload->width, desc->width);
+  zz9k_put_be32(payload->height, desc->height);
+  zz9k_put_be32(payload->output_format, desc->output_format);
+  zz9k_put_be32(payload->audio_codec, desc->audio_codec);
+  zz9k_put_be32(payload->pcm_ring_handle, desc->pcm_ring_handle);
+  zz9k_put_be32(payload->pcm_ring_capacity, desc->pcm_ring_capacity);
+  zz9k_put_be32(payload->pcm_low_water_bytes,
+                desc->pcm_low_water_bytes);
+  zz9k_put_be32(payload->pcm_high_water_bytes,
+                desc->pcm_high_water_bytes);
+  zz9k_put_be32(payload->flags, desc->flags);
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_request_media_session_write(
+    ZZ9KRequest *request,
+    const ZZ9KMediaSessionWriteDesc *desc)
+{
+  ZZ9KMediaSessionWritePayload *payload;
+
+  if (!request || !desc || desc->session == 0U ||
+      desc->src_handle == ZZ9K_INVALID_HANDLE ||
+      (desc->src_length == 0U &&
+       (desc->flags & ZZ9K_MEDIA_SESSION_WRITE_EOF) == 0U) ||
+      (desc->flags & ~ZZ9K_MEDIA_SESSION_WRITE_EOF) != 0U) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  zz9k_request_init(request, ZZ9K_OP_MEDIA_SESSION_WRITE);
+  request->entry.payload_len = sizeof(*payload);
+  payload = (ZZ9KMediaSessionWritePayload *)
+      request->entry.payload.inline_data;
+  zz9k_put_be32(payload->session, desc->session);
+  zz9k_put_be32(payload->src_handle, desc->src_handle);
+  zz9k_put_be32(payload->src_offset, desc->src_offset);
+  zz9k_put_be32(payload->src_length, desc->src_length);
+  zz9k_put_be32(payload->flags, desc->flags);
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_media_command_opcode_known(uint16_t opcode)
+{
+  return opcode == ZZ9K_OP_MEDIA_SESSION_DECODE ||
+         opcode == ZZ9K_OP_MEDIA_SESSION_AUDIO_READ ||
+         opcode == ZZ9K_OP_MEDIA_SESSION_PRESENT ||
+         opcode == ZZ9K_OP_MEDIA_SESSION_DISCARD ||
+         opcode == ZZ9K_OP_MEDIA_SESSION_AUDIO_BIND ||
+         opcode == ZZ9K_OP_MEDIA_SESSION_AUDIO_UNBIND ||
+         opcode == ZZ9K_OP_MEDIA_SESSION_CLOSE;
+}
+
+static inline int zz9k_request_media_session_command_value(
+    ZZ9KRequest *request, uint16_t opcode, uint32_t session,
+    uint64_t value, uint32_t flags)
+{
+  ZZ9KMediaSessionCommandPayload *payload;
+  uint32_t allowed_flags =
+      opcode == ZZ9K_OP_MEDIA_SESSION_AUDIO_BIND
+          ? ZZ9K_MEDIA_AUDIO_BIND_PAUSE
+          : 0U;
+
+  if (!request || !zz9k_media_command_opcode_known(opcode) ||
+      session == 0U || (flags & ~allowed_flags) != 0U) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+  zz9k_request_init(request, opcode);
+  request->entry.payload_len = sizeof(*payload);
+  payload = (ZZ9KMediaSessionCommandPayload *)
+      request->entry.payload.inline_data;
+  zz9k_put_be32(payload->session, session);
+  zz9k_media_u64_to_be(payload->value_hi, payload->value_lo, value);
+  zz9k_put_be32(payload->flags, flags);
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_request_media_session_command(
+    ZZ9KRequest *request, uint16_t opcode, uint32_t session,
+    uint32_t flags)
+{
+  return zz9k_request_media_session_command_value(
+      request, opcode, session, 0U, flags);
+}
+
+static inline int zz9k_request_media_session_status(
+    ZZ9KRequest *request, uint32_t session, uint32_t page, uint32_t flags)
+{
+  ZZ9KMediaSessionStatusPayload *payload;
+
+  if (!request || session == 0U ||
+      page > ZZ9K_MEDIA_STATUS_AUDIO_OUTPUT ||
+      flags != 0U) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+  zz9k_request_init(request, ZZ9K_OP_MEDIA_SESSION_STATUS);
+  request->entry.payload_len = sizeof(*payload);
+  payload = (ZZ9KMediaSessionStatusPayload *)
+      request->entry.payload.inline_data;
+  zz9k_put_be32(payload->session, session);
+  zz9k_put_be32(payload->page, page);
   zz9k_put_be32(payload->flags, flags);
   return ZZ9K_STATUS_OK;
 }

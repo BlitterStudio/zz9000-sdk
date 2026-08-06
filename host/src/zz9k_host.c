@@ -1868,6 +1868,186 @@ int zz9k_video_session_close(ZZ9KContext *ctx, uint32_t session,
                                  ZZ9K_OP_VIDEO_SESSION_CLOSE, result);
 }
 
+static int zz9k_media_session_main_call(
+    ZZ9KContext *ctx, ZZ9KRequest *request, uint16_t opcode,
+    ZZ9KMediaSessionMainResult *result)
+{
+  ZZ9KMailboxEntry reply;
+  int status;
+
+  if (!ctx || !request || !result) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+  memset(result, 0, sizeof(*result));
+  memset(&reply, 0, sizeof(reply));
+  status = zz9k_call(ctx, request, &reply, ZZ9K_DEFAULT_TIMEOUT_TICKS);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  return zz9k_reply_media_session_main(&reply, opcode, result);
+}
+
+int zz9k_media_session_begin(ZZ9KContext *ctx,
+                             const ZZ9KMediaSessionBeginDesc *desc,
+                             ZZ9KMediaSessionMainResult *result)
+{
+  ZZ9KRequest request;
+  int status;
+
+  if (!ctx || !desc || !result) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+  status = zz9k_request_media_session_begin(&request, desc);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  return zz9k_media_session_main_call(
+      ctx, &request, ZZ9K_OP_MEDIA_SESSION_BEGIN, result);
+}
+
+int zz9k_media_session_write(ZZ9KContext *ctx,
+                             const ZZ9KMediaSessionWriteDesc *desc,
+                             ZZ9KMediaSessionMainResult *result)
+{
+  ZZ9KRequest request;
+  int status;
+
+  if (!ctx || !desc || !result) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+  status = zz9k_request_media_session_write(&request, desc);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  return zz9k_media_session_main_call(
+      ctx, &request, ZZ9K_OP_MEDIA_SESSION_WRITE, result);
+}
+
+static int zz9k_media_session_simple_main(
+    ZZ9KContext *ctx, uint16_t opcode, uint32_t session, uint32_t flags,
+    ZZ9KMediaSessionMainResult *result)
+{
+  ZZ9KRequest request;
+  int status;
+
+  if (!ctx || !result) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+  status = zz9k_request_media_session_command(
+      &request, opcode, session, flags);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  return zz9k_media_session_main_call(ctx, &request, opcode, result);
+}
+
+int zz9k_media_session_decode(ZZ9KContext *ctx, uint32_t session,
+                              uint32_t flags,
+                              ZZ9KMediaSessionMainResult *result)
+{
+  return zz9k_media_session_simple_main(
+      ctx, ZZ9K_OP_MEDIA_SESSION_DECODE, session, flags, result);
+}
+
+int zz9k_media_session_present(ZZ9KContext *ctx, uint32_t session,
+                               uint32_t flags,
+                               ZZ9KMediaSessionMainResult *result)
+{
+  return zz9k_media_session_simple_main(
+      ctx, ZZ9K_OP_MEDIA_SESSION_PRESENT, session, flags, result);
+}
+
+int zz9k_media_session_discard(ZZ9KContext *ctx, uint32_t session,
+                               uint32_t flags,
+                               ZZ9KMediaSessionMainResult *result)
+{
+  return zz9k_media_session_simple_main(
+      ctx, ZZ9K_OP_MEDIA_SESSION_DISCARD, session, flags, result);
+}
+
+int zz9k_media_session_close(ZZ9KContext *ctx, uint32_t session,
+                             uint32_t flags,
+                             ZZ9KMediaSessionMainResult *result)
+{
+  return zz9k_media_session_simple_main(
+      ctx, ZZ9K_OP_MEDIA_SESSION_CLOSE, session, flags, result);
+}
+
+int zz9k_media_session_status(ZZ9KContext *ctx, uint32_t session,
+                              uint32_t page, uint32_t flags,
+                              ZZ9KMediaSessionStatusResult *result)
+{
+  ZZ9KRequest request;
+  ZZ9KMailboxEntry reply;
+  int status;
+
+  if (!ctx || !result) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+  status = zz9k_request_media_session_status(
+      &request, session, page, flags);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  memset(result, 0, sizeof(*result));
+  memset(&reply, 0, sizeof(reply));
+  status = zz9k_call(ctx, &request, &reply, ZZ9K_DEFAULT_TIMEOUT_TICKS);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  return zz9k_reply_media_session_status(&reply, result);
+}
+
+static int zz9k_media_session_audio_call(
+    ZZ9KContext *ctx, uint16_t opcode, uint32_t session,
+    uint64_t value, uint32_t flags, ZZ9KMediaSessionAudioResult *result)
+{
+  ZZ9KRequest request;
+  ZZ9KMailboxEntry reply;
+  int status;
+
+  if (!ctx || !result) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+  status = zz9k_request_media_session_command_value(
+      &request, opcode, session, value, flags);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  memset(result, 0, sizeof(*result));
+  memset(&reply, 0, sizeof(reply));
+  status = zz9k_call(ctx, &request, &reply, ZZ9K_DEFAULT_TIMEOUT_TICKS);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  return zz9k_reply_media_session_audio(&reply, opcode, result);
+}
+
+int zz9k_media_session_audio_read(ZZ9KContext *ctx, uint32_t session,
+                                  uint64_t acknowledged, uint32_t flags,
+                                  ZZ9KMediaSessionAudioResult *result)
+{
+  return zz9k_media_session_audio_call(
+      ctx, ZZ9K_OP_MEDIA_SESSION_AUDIO_READ, session,
+      acknowledged, flags, result);
+}
+
+int zz9k_media_session_audio_bind(ZZ9KContext *ctx, uint32_t session,
+                                  uint32_t flags,
+                                  ZZ9KMediaSessionAudioResult *result)
+{
+  return zz9k_media_session_audio_call(
+      ctx, ZZ9K_OP_MEDIA_SESSION_AUDIO_BIND, session, 0U, flags, result);
+}
+
+int zz9k_media_session_audio_unbind(ZZ9KContext *ctx, uint32_t session,
+                                    uint32_t flags,
+                                    ZZ9KMediaSessionAudioResult *result)
+{
+  return zz9k_media_session_audio_call(
+      ctx, ZZ9K_OP_MEDIA_SESSION_AUDIO_UNBIND, session, 0U, flags, result);
+}
+
 int zz9k_image_session_begin(ZZ9KContext *ctx,
                              const ZZ9KImageSessionBeginDesc *desc,
                              ZZ9KImageSessionResult *result)

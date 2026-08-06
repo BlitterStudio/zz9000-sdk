@@ -9,8 +9,8 @@
 
 #define ZZ9K_LIBRARY_NAME "zz9k.library"
 #define ZZ9K_LIBRARY_VERSION 2
-#define ZZ9K_LIBRARY_REVISION 26
-#define ZZ9K_LIBRARY_ID_STRING "zz9k.library 2.26 (08.07.2026)"
+#define ZZ9K_LIBRARY_REVISION 27
+#define ZZ9K_LIBRARY_ID_STRING "zz9k.library 2.27 (31.07.2026)"
 
 #define ZZ9K_LIBRARY_MIN_REVISION_CALL_ASYNC_BATCH_MSG 1
 #define ZZ9K_LIBRARY_MIN_REVISION_CANCEL_ASYNC 2
@@ -37,6 +37,9 @@
 /* ZZ9KAllocShared honors ZZ9K_ALLOC_HOST_WINDOW / ZZ9K_ALLOC_CARD_ONLY
  * (no new vector; gate on ZZ9K_CAP_HOST_WINDOW_HEAP for firmware support) */
 #define ZZ9K_LIBRARY_MIN_REVISION_ALLOC_FLAGS 26
+/* Request validation accepts the resumable AUDIO_STREAM_FEED_DRAIN flag
+ * (no new vector; firmware support is gated by the matching capability). */
+#define ZZ9K_LIBRARY_MIN_REVISION_AUDIO_STREAM_DRAIN 27
 
 #define ZZ9K_LVO_OPEN (-6)
 #define ZZ9K_LVO_CLOSE (-12)

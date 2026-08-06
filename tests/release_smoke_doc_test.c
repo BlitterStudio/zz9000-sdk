@@ -114,6 +114,11 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "AddDataTypes LIST");
   ok &= expect_contains(source, "DataType descriptors are activated from `Storage/DataTypes`");
   ok &= expect_contains(source, "zz9k-mp3 --stats");
+  ok &= expect_contains(source,
+                        "zzplay --audio=ahi Work:Audio/test.mp3");
+  ok &= expect_contains(source,
+                        "zzplay --audio=mhi Work:Audio/test.mp3");
+  ok &= expect_contains(source, "zzplay --audio=none --benchmark");
   ok &= expect_contains(source, "zz9k-mpega-smoke --trace --null-api-check");
   ok &= expect_contains(source, "Expected pass signal");
   ok &= expect_contains(source, "Failure routing");

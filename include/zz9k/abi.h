@@ -21,6 +21,13 @@ extern "C" {
 #define ZZ9K_MAILBOX_DESCRIPTOR_SIZE 128U
 #define ZZ9K_INVALID_HANDLE         0xffffffffUL
 #define ZZ9K_SURFACE_HANDLE_FRAMEBUFFER 0x80000000UL
+#define ZZ9K_MEDIA_NO_PTS           UINT64_C(0xffffffffffffffff)
+#define ZZ9K_MEDIA_PTS_MODULUS      (UINT64_C(1) << 33)
+
+typedef struct ZZ9KMediaClock {
+  uint64_t ticks;
+  uint64_t remainder;
+} ZZ9KMediaClock;
 
 #define ZZ9K_MNT_MANUFACTURER       0x6d6eU
 #define ZZ9K_PRODUCT_Z2             3U
@@ -183,6 +190,16 @@ enum ZZ9KOpcode {
   ZZ9K_OP_VIDEO_SESSION_WRITE = ZZ9K_SERVICE_VIDEO + 0x01,
   ZZ9K_OP_VIDEO_SESSION_DECODE = ZZ9K_SERVICE_VIDEO + 0x02,
   ZZ9K_OP_VIDEO_SESSION_CLOSE = ZZ9K_SERVICE_VIDEO + 0x03,
+  ZZ9K_OP_MEDIA_SESSION_BEGIN = ZZ9K_SERVICE_VIDEO + 0x04,
+  ZZ9K_OP_MEDIA_SESSION_WRITE = ZZ9K_SERVICE_VIDEO + 0x05,
+  ZZ9K_OP_MEDIA_SESSION_DECODE = ZZ9K_SERVICE_VIDEO + 0x06,
+  ZZ9K_OP_MEDIA_SESSION_AUDIO_READ = ZZ9K_SERVICE_VIDEO + 0x07,
+  ZZ9K_OP_MEDIA_SESSION_PRESENT = ZZ9K_SERVICE_VIDEO + 0x08,
+  ZZ9K_OP_MEDIA_SESSION_DISCARD = ZZ9K_SERVICE_VIDEO + 0x09,
+  ZZ9K_OP_MEDIA_SESSION_STATUS = ZZ9K_SERVICE_VIDEO + 0x0a,
+  ZZ9K_OP_MEDIA_SESSION_AUDIO_BIND = ZZ9K_SERVICE_VIDEO + 0x0b,
+  ZZ9K_OP_MEDIA_SESSION_AUDIO_UNBIND = ZZ9K_SERVICE_VIDEO + 0x0c,
+  ZZ9K_OP_MEDIA_SESSION_CLOSE = ZZ9K_SERVICE_VIDEO + 0x0d,
 
   ZZ9K_OP_DIAG_READ = ZZ9K_SERVICE_DIAG + 0x00,
   ZZ9K_OP_DIAG_TIMING = ZZ9K_SERVICE_DIAG + 0x01,
@@ -213,7 +230,11 @@ enum ZZ9KCapability {
   /* Firmware serves ZZ9K_ALLOC_HOST_WINDOW allocations from a small heap
    * that is reachable through the Zorro 2 board window. */
   ZZ9K_CAP_HOST_WINDOW_HEAP = 1U << 20,
-  ZZ9K_CAP_VIDEO_DECODE = 1U << 21
+  ZZ9K_CAP_VIDEO_DECODE = 1U << 21,
+  ZZ9K_CAP_MEDIA_SESSION = 1U << 22,
+  /* AUDIO_STREAM_FEED_DRAIN preserves partial compressed input while
+   * draining complete frames and the bound playback tail. */
+  ZZ9K_CAP_AUDIO_STREAM_DRAIN = 1U << 23
 };
 
 /*
@@ -272,6 +293,12 @@ enum ZZ9KServiceFlags {
   ZZ9K_SERVICE_FLAG_VIDEO_DIRECT_OVERLAY = 1U << 18,
   ZZ9K_SERVICE_FLAG_VIDEO_STREAMING_INPUT = 1U << 19,
   ZZ9K_SERVICE_FLAG_VIDEO_CORE1 = 1U << 20,
+  ZZ9K_SERVICE_FLAG_VIDEO_MEDIA_SESSION = 1U << 21,
+  ZZ9K_SERVICE_FLAG_VIDEO_MEDIA_MP2 = 1U << 22,
+  ZZ9K_SERVICE_FLAG_VIDEO_EXPLICIT_PRESENT = 1U << 23,
+  ZZ9K_SERVICE_FLAG_VIDEO_TIMELINE_90KHZ = 1U << 24,
+  ZZ9K_SERVICE_FLAG_VIDEO_PCM_RING_STATUS = 1U << 25,
+  ZZ9K_SERVICE_FLAG_VIDEO_AUDIO_BIND = 1U << 26,
 
   ZZ9K_SERVICE_FLAG_CODEC_DEFLATE_RAW = 1U << 16,
   ZZ9K_SERVICE_FLAG_CODEC_ZLIB = 1U << 17,
@@ -718,6 +745,100 @@ typedef struct ZZ9KVideoSessionResultPayload {
   uint8_t reserved[8];
 } ZZ9KVideoSessionResultPayload;
 
+/* Additive media sessions leave the legacy VIDEO_SESSION_* wire contract
+ * untouched. The MP2/ring fields are reserved in U2 so later firmware can
+ * enable them without changing BEGIN; requesting MP2 from U2 firmware returns
+ * UNSUPPORTED and its service flags remain clear. */
+typedef struct ZZ9KMediaSessionBeginPayload {
+  uint8_t video_codec[4];
+  uint8_t container[4];
+  uint8_t width[4];
+  uint8_t height[4];
+  uint8_t output_format[4];
+  uint8_t audio_codec[4];
+  uint8_t pcm_ring_handle[4];
+  uint8_t pcm_ring_capacity[4];
+  uint8_t pcm_low_water_bytes[4];
+  uint8_t pcm_high_water_bytes[4];
+  uint8_t flags[4];
+  uint8_t reserved[4];
+} ZZ9KMediaSessionBeginPayload;
+
+typedef struct ZZ9KMediaSessionWritePayload {
+  uint8_t session[4];
+  uint8_t src_handle[4];
+  uint8_t src_offset[4];
+  uint8_t src_length[4];
+  uint8_t flags[4];
+  uint8_t reserved[28];
+} ZZ9KMediaSessionWritePayload;
+
+/* DECODE/PRESENT/DISCARD/CLOSE and the future AUDIO_READ/ACK and bind
+ * operations share this fixed command shape. value is an operation-specific
+ * unsigned 64-bit cursor; it is zero for the U2 video-only operations. */
+typedef struct ZZ9KMediaSessionCommandPayload {
+  uint8_t session[4];
+  uint8_t value_hi[4];
+  uint8_t value_lo[4];
+  uint8_t flags[4];
+  uint8_t reserved[32];
+} ZZ9KMediaSessionCommandPayload;
+
+typedef struct ZZ9KMediaSessionStatusPayload {
+  uint8_t session[4];
+  uint8_t page[4];
+  uint8_t flags[4];
+  uint8_t reserved[36];
+} ZZ9KMediaSessionStatusPayload;
+
+typedef struct ZZ9KMediaSessionMainResultPayload {
+  uint8_t session[4];
+  uint8_t state[4];
+  uint8_t width[4];
+  uint8_t height[4];
+  uint8_t frame_rate_num[4];
+  uint8_t frame_rate_den[4];
+  uint8_t frame_number[4];
+  uint8_t video_pts_hi[4];
+  uint8_t video_pts_lo[4];
+  uint8_t bytes_accepted[4];
+  uint8_t bytes_written[4];
+  uint8_t flags[4];
+} ZZ9KMediaSessionMainResultPayload;
+
+typedef struct ZZ9KMediaSessionAudioResultPayload {
+  uint8_t session[4];
+  uint8_t state[4];
+  uint8_t sample_rate[4];
+  uint8_t channels[4];
+  uint8_t sample_format[4];
+  uint8_t pcm_produced_hi[4];
+  uint8_t pcm_produced_lo[4];
+  uint8_t pcm_acknowledged_hi[4];
+  uint8_t pcm_acknowledged_lo[4];
+  uint8_t audio_pts_hi[4];
+  uint8_t audio_pts_lo[4];
+  uint8_t flags[4];
+} ZZ9KMediaSessionAudioResultPayload;
+
+/* STATUS is paged so future counters do not grow the 48-byte mailbox entry.
+ * The timing page exposes, in order: first valid PTS origin, current video
+ * PTS, current audio PTS, and the most recently observed raw 33-bit PTS. */
+typedef struct ZZ9KMediaSessionStatusResultPayload {
+  uint8_t session[4];
+  uint8_t state[4];
+  uint8_t page[4];
+  uint8_t flags[4];
+  uint8_t value0_hi[4];
+  uint8_t value0_lo[4];
+  uint8_t value1_hi[4];
+  uint8_t value1_lo[4];
+  uint8_t value2_hi[4];
+  uint8_t value2_lo[4];
+  uint8_t value3_hi[4];
+  uint8_t value3_lo[4];
+} ZZ9KMediaSessionStatusResultPayload;
+
 typedef struct ZZ9KCryptoHashPayload {
   uint8_t src_handle[4];
   uint8_t src_offset[4];
@@ -977,6 +1098,27 @@ typedef char ZZ9KVideoSessionClosePayload_must_be_48_bytes[
 typedef char ZZ9KVideoSessionResultPayload_must_be_48_bytes[
   (sizeof(ZZ9KVideoSessionResultPayload) == 48U) ? 1 : -1
 ];
+typedef char ZZ9KMediaSessionBeginPayload_must_be_48_bytes[
+  (sizeof(ZZ9KMediaSessionBeginPayload) == 48U) ? 1 : -1
+];
+typedef char ZZ9KMediaSessionWritePayload_must_be_48_bytes[
+  (sizeof(ZZ9KMediaSessionWritePayload) == 48U) ? 1 : -1
+];
+typedef char ZZ9KMediaSessionCommandPayload_must_be_48_bytes[
+  (sizeof(ZZ9KMediaSessionCommandPayload) == 48U) ? 1 : -1
+];
+typedef char ZZ9KMediaSessionStatusPayload_must_be_48_bytes[
+  (sizeof(ZZ9KMediaSessionStatusPayload) == 48U) ? 1 : -1
+];
+typedef char ZZ9KMediaSessionMainResultPayload_must_be_48_bytes[
+  (sizeof(ZZ9KMediaSessionMainResultPayload) == 48U) ? 1 : -1
+];
+typedef char ZZ9KMediaSessionAudioResultPayload_must_be_48_bytes[
+  (sizeof(ZZ9KMediaSessionAudioResultPayload) == 48U) ? 1 : -1
+];
+typedef char ZZ9KMediaSessionStatusResultPayload_must_be_48_bytes[
+  (sizeof(ZZ9KMediaSessionStatusResultPayload) == 48U) ? 1 : -1
+];
 typedef char ZZ9KCryptoHashPayload_must_be_48_bytes[
   (sizeof(ZZ9KCryptoHashPayload) == 48U) ? 1 : -1
 ];
@@ -1053,6 +1195,60 @@ static inline void zz9k_put_be32(volatile void *p, uint32_t value)
   b[1] = (uint8_t)((value >> 16) & 0xffU);
   b[2] = (uint8_t)((value >> 8) & 0xffU);
   b[3] = (uint8_t)(value & 0xffU);
+}
+
+static inline uint64_t zz9k_media_u64_from_be(const volatile void *hi,
+                                               const volatile void *lo)
+{
+  return ((uint64_t)zz9k_get_be32(hi) << 32) | zz9k_get_be32(lo);
+}
+
+static inline void zz9k_media_u64_to_be(volatile void *hi,
+                                        volatile void *lo,
+                                        uint64_t value)
+{
+  zz9k_put_be32(hi, (uint32_t)(value >> 32));
+  zz9k_put_be32(lo, (uint32_t)value);
+}
+
+/* Convert arbitrary clock units to the unwrapped 90 kHz media timeline while
+ * retaining the division remainder. This prevents cumulative drift for rates
+ * such as 44.1 kHz and 30000/1001. */
+static inline uint64_t zz9k_media_clock_advance(ZZ9KMediaClock *clock,
+                                                uint64_t units,
+                                                uint32_t units_per_second)
+{
+  uint64_t scaled;
+
+  if (!clock || units_per_second == 0U) {
+    return ZZ9K_MEDIA_NO_PTS;
+  }
+  scaled = units * UINT64_C(90000) + clock->remainder;
+  clock->ticks += scaled / units_per_second;
+  clock->remainder = scaled % units_per_second;
+  return clock->ticks;
+}
+
+/* Map a raw MPEG 33-bit PTS to the epoch nearest the prior unwrapped value. */
+static inline uint64_t zz9k_media_pts_unwrap(uint64_t previous,
+                                             uint64_t raw_pts)
+{
+  const uint64_t mask = ZZ9K_MEDIA_PTS_MODULUS - 1U;
+  const uint64_t half = ZZ9K_MEDIA_PTS_MODULUS >> 1;
+  uint64_t candidate;
+
+  raw_pts &= mask;
+  if (previous == ZZ9K_MEDIA_NO_PTS) {
+    return raw_pts;
+  }
+  candidate = (previous & ~mask) | raw_pts;
+  if (candidate < previous && previous - candidate > half) {
+    candidate += ZZ9K_MEDIA_PTS_MODULUS;
+  } else if (candidate > previous && candidate - previous > half &&
+             candidate >= ZZ9K_MEDIA_PTS_MODULUS) {
+    candidate -= ZZ9K_MEDIA_PTS_MODULUS;
+  }
+  return candidate;
 }
 
 typedef struct ZZ9KMailboxEntry {
@@ -1362,6 +1558,62 @@ typedef struct ZZ9KVideoSessionResult {
   uint32_t flags;
 } ZZ9KVideoSessionResult;
 
+typedef struct ZZ9KMediaSessionBeginDesc {
+  uint32_t video_codec;
+  uint32_t container;
+  uint32_t width;
+  uint32_t height;
+  uint32_t output_format;
+  uint32_t audio_codec;
+  uint32_t pcm_ring_handle;
+  uint32_t pcm_ring_capacity;
+  uint32_t pcm_low_water_bytes;
+  uint32_t pcm_high_water_bytes;
+  uint32_t flags;
+} ZZ9KMediaSessionBeginDesc;
+
+typedef struct ZZ9KMediaSessionWriteDesc {
+  uint32_t session;
+  uint32_t src_handle;
+  uint32_t src_offset;
+  uint32_t src_length;
+  uint32_t flags;
+} ZZ9KMediaSessionWriteDesc;
+
+typedef struct ZZ9KMediaSessionMainResult {
+  uint32_t session;
+  uint32_t state;
+  uint32_t width;
+  uint32_t height;
+  uint32_t frame_rate_num;
+  uint32_t frame_rate_den;
+  uint32_t frame_number;
+  uint64_t video_pts;
+  uint32_t bytes_accepted;
+  uint32_t bytes_written;
+  uint32_t flags;
+} ZZ9KMediaSessionMainResult;
+
+typedef struct ZZ9KMediaSessionAudioResult {
+  uint32_t session;
+  uint32_t state;
+  uint32_t sample_rate;
+  uint32_t channels;
+  uint32_t sample_format;
+  uint64_t pcm_produced;
+  uint64_t pcm_acknowledged;
+  uint64_t audio_pts;
+  uint32_t flags;
+} ZZ9KMediaSessionAudioResult;
+
+typedef struct ZZ9KMediaSessionStatusResult {
+  uint32_t session;
+  uint32_t state;
+  uint32_t page;
+  uint32_t flags;
+  uint64_t value[4];
+} ZZ9KMediaSessionStatusResult;
+
 typedef struct ZZ9KCryptoHashDesc {
   uint32_t src_handle;
   uint32_t src_offset;
@@ -1628,7 +1880,10 @@ enum ZZ9KImageSessionResultFlags {
 };
 
 enum ZZ9KAudioStreamFeedFlags {
-  ZZ9K_AUDIO_STREAM_FEED_EOF = 1U << 0
+  ZZ9K_AUDIO_STREAM_FEED_EOF = 1U << 0,
+  /* Resumable starvation boundary: decode every complete frame currently
+   * buffered, retain any incomplete compressed frame, and drain PCM/output. */
+  ZZ9K_AUDIO_STREAM_FEED_DRAIN = 1U << 1
 };
 
 enum ZZ9KAudioStreamState {
@@ -1642,7 +1897,9 @@ enum ZZ9KAudioStreamResultFlags {
   ZZ9K_AUDIO_STREAM_RESULT_NEED_INPUT = 1U << 0,
   ZZ9K_AUDIO_STREAM_RESULT_PCM_READY = 1U << 1,
   ZZ9K_AUDIO_STREAM_RESULT_DONE = 1U << 2,
-  ZZ9K_AUDIO_STREAM_RESULT_BACKPRESSURE = 1U << 3
+  ZZ9K_AUDIO_STREAM_RESULT_BACKPRESSURE = 1U << 3,
+  /* The most recent resumable drain reached the real output frontier. */
+  ZZ9K_AUDIO_STREAM_RESULT_DRAINED = 1U << 4
 };
 
 enum ZZ9KVideoCodec {
@@ -1674,6 +1931,53 @@ enum ZZ9KVideoSessionResultFlags {
   ZZ9K_VIDEO_SESSION_RESULT_NEED_INPUT = 1U << 1,
   ZZ9K_VIDEO_SESSION_RESULT_FRAME_READY = 1U << 2,
   ZZ9K_VIDEO_SESSION_RESULT_DONE = 1U << 3
+};
+
+enum ZZ9KMediaAudioCodec {
+  ZZ9K_MEDIA_AUDIO_NONE = 0U,
+  ZZ9K_MEDIA_AUDIO_MP2 = 1U
+};
+
+enum ZZ9KMediaSessionWriteFlags {
+  ZZ9K_MEDIA_SESSION_WRITE_EOF = 1U << 0
+};
+
+enum ZZ9KMediaAudioBindFlags {
+  ZZ9K_MEDIA_AUDIO_BIND_PAUSE = 1U << 0
+};
+
+enum ZZ9KMediaSessionState {
+  ZZ9K_MEDIA_SESSION_STATE_NEED_INPUT = 1U,
+  ZZ9K_MEDIA_SESSION_STATE_READY = 2U,
+  ZZ9K_MEDIA_SESSION_STATE_FRAME_HELD = 3U,
+  ZZ9K_MEDIA_SESSION_STATE_DONE = 4U,
+  ZZ9K_MEDIA_SESSION_STATE_ERROR = 5U
+};
+
+enum ZZ9KMediaSessionResultFlags {
+  ZZ9K_MEDIA_SESSION_RESULT_HEADER_READY = 1U << 0,
+  ZZ9K_MEDIA_SESSION_RESULT_NEED_INPUT = 1U << 1,
+  ZZ9K_MEDIA_SESSION_RESULT_FRAME_HELD = 1U << 2,
+  ZZ9K_MEDIA_SESSION_RESULT_DONE = 1U << 3,
+  ZZ9K_MEDIA_SESSION_RESULT_DERIVED_TIME = 1U << 4,
+  ZZ9K_MEDIA_SESSION_RESULT_DISCONTINUITY = 1U << 5,
+  ZZ9K_MEDIA_SESSION_RESULT_REBASED = 1U << 6,
+  ZZ9K_MEDIA_SESSION_RESULT_AUDIO_READY = 1U << 7,
+  ZZ9K_MEDIA_SESSION_RESULT_BACKPRESSURE = 1U << 8,
+  ZZ9K_MEDIA_SESSION_RESULT_PRESENTED = 1U << 9,
+  ZZ9K_MEDIA_SESSION_RESULT_DISCARDED = 1U << 10,
+  ZZ9K_MEDIA_SESSION_RESULT_AUDIO_BOUND = 1U << 11,
+  ZZ9K_MEDIA_SESSION_RESULT_AUDIO_PLAYING = 1U << 12,
+  ZZ9K_MEDIA_SESSION_RESULT_AUDIO_DRAINED = 1U << 13,
+  ZZ9K_MEDIA_SESSION_RESULT_AUDIO_UNDERRUN = 1U << 14
+};
+
+enum ZZ9KMediaStatusPage {
+  ZZ9K_MEDIA_STATUS_TIMING = 0U,
+  ZZ9K_MEDIA_STATUS_AUDIO = 1U,
+  ZZ9K_MEDIA_STATUS_COUNTERS = 2U,
+  /* DMA-retired frames, DMA-queued frames, staged source frames, underruns. */
+  ZZ9K_MEDIA_STATUS_AUDIO_OUTPUT = 3U
 };
 
 enum ZZ9KCryptoHashAlgorithm {
