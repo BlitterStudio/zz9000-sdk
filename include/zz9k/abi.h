@@ -1999,6 +1999,12 @@ enum ZZ9KMediaProfileStage {
   ZZ9K_MEDIA_PROFILE_STAGES = 4
 };
 
+/* Profile-page flags: names the live YUY2 pack kernel, so a before/after
+ * comparison states what it measured rather than assuming. */
+enum ZZ9KMediaProfileFlags {
+  ZZ9K_MEDIA_PROFILE_FLAG_NEON_PACK = 1U << 0
+};
+
 #define ZZ9K_MEDIA_PROFILE_US(v) ((uint32_t)((v) >> 32))
 #define ZZ9K_MEDIA_PROFILE_CALLS(v) ((uint32_t)((v) & 0xffffffffU))
 

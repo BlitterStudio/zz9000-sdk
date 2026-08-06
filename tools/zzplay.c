@@ -1015,6 +1015,10 @@ static void zzplay_report_card_profile(struct ZZPlayRuntime *runtime)
                 "(firmware predates it)\n");
     return;
   }
+  zzplay_info("zzplay: card YUY2 pack kernel: %s\n",
+              (status.flags & ZZ9K_MEDIA_PROFILE_FLAG_NEON_PACK) != 0U
+                  ? "NEON"
+                  : "scalar");
   for (stage = 0U; stage < ZZ9K_MEDIA_PROFILE_STAGES; stage++) {
     uint32_t microseconds =
         ZZ9K_MEDIA_PROFILE_US(status.value[stage]);

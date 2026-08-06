@@ -373,6 +373,21 @@ static int test_reply_decoders(void)
   if (zz9k_reply_media_session_status(&reply, &status_result) !=
       ZZ9K_STATUS_INTERNAL_ERROR)
     return 19;
+
+  /* The profile page owns its own flag namespace too. Validating one page
+   * against another's mask only appears to work while the bits overlap. */
+  zz9k_put_be32(&reply.payload.inline_data[8], ZZ9K_MEDIA_STATUS_PROFILE);
+  zz9k_put_be32(&reply.payload.inline_data[12],
+                ZZ9K_MEDIA_PROFILE_FLAG_NEON_PACK);
+  if (zz9k_reply_media_session_status(&reply, &status_result) !=
+          ZZ9K_STATUS_OK ||
+      (status_result.flags & ZZ9K_MEDIA_PROFILE_FLAG_NEON_PACK) == 0U)
+    return 20;
+  zz9k_put_be32(&reply.payload.inline_data[12],
+                ZZ9K_MEDIA_SESSION_RESULT_AUDIO_UNDERRUN);
+  if (zz9k_reply_media_session_status(&reply, &status_result) !=
+      ZZ9K_STATUS_INTERNAL_ERROR)
+    return 21;
   return 0;
 }
 
