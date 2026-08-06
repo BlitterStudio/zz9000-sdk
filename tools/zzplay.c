@@ -683,6 +683,23 @@ static void zzplay_force_geometry(struct ZZPlayRuntime *runtime,
  * exactly the source size reduces that to a 1:1 fill, which is both the
  * fastest path and the one that avoids the sizing behaviour that repeatedly
  * failed on this driver. */
+/* ~0 terminates the list and asks P96 for the default pen set, while
+ * SharePens leaves them obtainable - between them the PIP can get its key. */
+static UWORD zzplay_screen_pens[] = { (UWORD)~0 };
+
+static const char *zzplay_pip_error_name(LONG error)
+{
+  switch (error) {
+  case 1: return "out of memory";
+  case 2: return "could not attach to the screen";
+  case 3: return "PIP not available";
+  case 4: return "no free pen for the colour key";
+  case 5: return "bad dimensions or format";
+  case 6: return "could not open the window";
+  default: return "unknown";
+  }
+}
+
 static int zzplay_open_video_screen(struct ZZPlayRuntime *runtime)
 {
   uint16_t width = (uint16_t)runtime->video_info.width;
@@ -714,6 +731,9 @@ static int zzplay_open_video_screen(struct ZZPlayRuntime *runtime)
                 (unsigned)width, (unsigned)height);
     return 0;
   }
+  /* The PIP obtains a pen for its colour key. A screen opened without
+   * shareable pens has none to give and the PIP open fails with
+   * PIPERR_OUTOFPENS (4), which is what froze the r5 bench round. */
   runtime->screen = p96OpenScreenTags(
       P96SA_DisplayID, mode,
       P96SA_Width, (ULONG)width,
@@ -723,6 +743,8 @@ static int zzplay_open_video_screen(struct ZZPlayRuntime *runtime)
       P96SA_ShowTitle, FALSE,
       P96SA_Quiet, TRUE,
       P96SA_AutoScroll, FALSE,
+      P96SA_SharePens, TRUE,
+      P96SA_Pens, (ULONG)zzplay_screen_pens,
       TAG_DONE);
   if (!runtime->screen) {
     zzplay_info("zzplay: could not open a %ux%u fullscreen display\n",
@@ -806,11 +828,16 @@ static int zzplay_open_pip_mode(struct ZZPlayRuntime *runtime,
   if (!runtime->window) {
     runtime->pip_open_failed = 1U;
     zzplay_info("zzplay: PIP open failed for %s %ux%u at %d,%d "
-                "(P96 error %ld)\n",
+                "(P96 error %ld: %s)\n",
                 fullscreen ? "fullscreen" : "windowed",
                 (unsigned)placement.width, (unsigned)placement.height,
                 (int)placement.x, (int)placement.y,
-                (long)runtime->pip_error);
+                (long)runtime->pip_error,
+                zzplay_pip_error_name(runtime->pip_error));
+    /* Never leave a custom screen open with nothing driving it: that is a
+     * displayed screen with no window on it, which is how the r5 round left
+     * the machine wedged after this failure. */
+    zzplay_close_video_screen(runtime);
     return 0;
   }
   zzplay_cache_screen(runtime);

@@ -144,6 +144,17 @@ static int check_player(const char *path)
     rc = 23;
     goto done;
   }
+  /* A PIP that fails to open on the dedicated screen must take the screen
+   * down with it. Leaving a custom screen displayed with no window driving
+   * it wedged the machine on the r5 bench round. */
+  if (find(s, "zzplay_pip_error_name(runtime->pip_error));\n"
+              "    /* Never leave a custom screen open") < 0L) {
+    rc = 24;
+    goto done;
+  }
+  /* The PIP takes a pen for its colour key; a screen with none to give
+   * fails with PIPERR_OUTOFPENS (4). */
+  if (find(s, "P96SA_SharePens") < 0L) { rc = 25; goto done; }
 
   /* Fullscreen must not paint a title bar it does not have. */
   if (find(s, "runtime->fullscreen) {\n    runtime->title_dirty = 0U;") < 0L) {

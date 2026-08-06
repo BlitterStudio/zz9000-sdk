@@ -7,6 +7,7 @@
 #include "zz9k/host.h"
 #include "zz9k/shared.h"
 #include "zzplay-ahi.h"
+#include "zzplay-core.h"
 #include "zzplay-mhi.h"
 #include "zzplay-mp3-transport.h"
 
