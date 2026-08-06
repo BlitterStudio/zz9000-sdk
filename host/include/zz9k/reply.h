@@ -561,6 +561,16 @@ static inline uint32_t zz9k_media_session_known_result_flags(void)
          ZZ9K_MEDIA_SESSION_RESULT_AUDIO_UNDERRUN;
 }
 
+/* The presentation page reuses the `flags` word for a different namespace
+ * (ZZ9K_MEDIA_PRESENT_*), so it must be validated against its own mask. */
+static inline uint32_t zz9k_media_present_known_flags(void)
+{
+  return ZZ9K_MEDIA_PRESENT_CONFIGURED |
+         ZZ9K_MEDIA_PRESENT_ACTIVE |
+         ZZ9K_MEDIA_PRESENT_NATIVE |
+         ZZ9K_MEDIA_PRESENT_OWNED;
+}
+
 static inline int zz9k_reply_media_session_main(
     const ZZ9KMailboxEntry *reply,
     uint16_t opcode,
@@ -674,8 +684,11 @@ static inline int zz9k_reply_media_session_status(
   if (result->session == 0U ||
       result->state < ZZ9K_MEDIA_SESSION_STATE_NEED_INPUT ||
       result->state > ZZ9K_MEDIA_SESSION_STATE_ERROR ||
-      result->page > ZZ9K_MEDIA_STATUS_AUDIO_OUTPUT ||
-      (result->flags & ~zz9k_media_session_known_result_flags()) != 0U) {
+      result->page > ZZ9K_MEDIA_STATUS_PRESENTATION ||
+      (result->page == ZZ9K_MEDIA_STATUS_PRESENTATION
+           ? (result->flags & ~zz9k_media_present_known_flags()) != 0U
+           : (result->flags &
+              ~zz9k_media_session_known_result_flags()) != 0U)) {
     memset(result, 0, sizeof(*result));
     return ZZ9K_STATUS_INTERNAL_ERROR;
   }
