@@ -48,4 +48,5 @@ ZZ9KCryptoKeyExchange(desc,result)(a0/a1)
 ZZ9KCryptoVerify(desc,valid)(a0/a1)
 ZZ9KAudioStreamPlay(session,flags,result)(d0/d1/a0)
 ZZ9KAudioStreamStop(session,flags,result)(d0/d1/a0)
+ZZ9KQueryPalette(desc)(a0)
 ##end

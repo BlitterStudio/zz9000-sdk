@@ -1325,6 +1325,87 @@ static int test_fill_surface_builds_request(void)
   return 0;
 }
 
+static int test_query_palette_builds_request(void)
+{
+  struct TestMailbox mailbox;
+  ZZ9KContext *ctx;
+  ZZ9KBoard board;
+  ZZ9KPaletteQueryDesc desc;
+
+  init_mailbox(&mailbox);
+  memset(&board, 0, sizeof(board));
+  memset(&desc, 0, sizeof(desc));
+  desc.surface = ZZ9K_SURFACE_HANDLE_FRAMEBUFFER;
+  desc.start = 0U;
+  desc.count = (uint32_t)ZZ9K_PALETTE_MAX_ENTRIES;
+  desc.dst_handle = 0x40000009UL;
+  desc.dst_offset = 0x40U;
+  desc.flags = 0U;
+  prepare_completion(&mailbox, 1, ZZ9K_OP_QUERY_PALETTE, ZZ9K_STATUS_OK, 0);
+
+  if (zz9k_attach_mailbox(&ctx, &board, &mailbox.descriptor, 0, 0) !=
+      ZZ9K_STATUS_OK) {
+    return 1;
+  }
+
+  if (zz9k_query_palette(ctx, &desc) != ZZ9K_STATUS_OK) return 2;
+  if (zz9k_get_be16(mailbox.request_ring[0].opcode) !=
+      ZZ9K_OP_QUERY_PALETTE) {
+    return 3;
+  }
+  if (zz9k_get_be32(&mailbox.request_ring[0].payload[0]) !=
+      ZZ9K_SURFACE_HANDLE_FRAMEBUFFER) {
+    return 4;
+  }
+  if (zz9k_get_be32(&mailbox.request_ring[0].payload[4]) != 0U) return 5;
+  if (zz9k_get_be32(&mailbox.request_ring[0].payload[8]) !=
+      (uint32_t)ZZ9K_PALETTE_MAX_ENTRIES) {
+    return 6;
+  }
+  if (zz9k_get_be32(&mailbox.request_ring[0].payload[12]) != 0x40000009UL) {
+    return 7;
+  }
+  if (zz9k_get_be32(&mailbox.request_ring[0].payload[16]) != 0x40U) return 8;
+
+  zz9k_close(ctx);
+  return 0;
+}
+
+/* Firmware that predates the op answers UNSUPPORTED; the call must surface
+ * that verbatim rather than reporting a transport failure, because that is
+ * the status callers gate the feature on. */
+static int test_query_palette_reports_unsupported(void)
+{
+  struct TestMailbox mailbox;
+  ZZ9KContext *ctx;
+  ZZ9KBoard board;
+  ZZ9KPaletteQueryDesc desc;
+
+  init_mailbox(&mailbox);
+  memset(&board, 0, sizeof(board));
+  memset(&desc, 0, sizeof(desc));
+  desc.surface = ZZ9K_SURFACE_HANDLE_FRAMEBUFFER;
+  desc.start = 0U;
+  desc.count = 16U;
+  desc.dst_handle = 0x40000009UL;
+  prepare_completion(&mailbox, 1, ZZ9K_OP_QUERY_PALETTE,
+                     ZZ9K_STATUS_UNSUPPORTED, 0);
+
+  if (zz9k_attach_mailbox(&ctx, &board, &mailbox.descriptor, 0, 0) !=
+      ZZ9K_STATUS_OK) {
+    return 1;
+  }
+  if (zz9k_query_palette(ctx, &desc) != ZZ9K_STATUS_UNSUPPORTED) return 2;
+
+  /* A rejected descriptor must not reach the ring at all. */
+  desc.count = 0U;
+  if (zz9k_query_palette(ctx, &desc) != ZZ9K_STATUS_BAD_REQUEST) return 3;
+  if (zz9k_query_palette(NULL, &desc) != ZZ9K_STATUS_BAD_REQUEST) return 4;
+
+  zz9k_close(ctx);
+  return 0;
+}
+
 static int test_copy_surface_builds_request(void)
 {
   struct TestMailbox mailbox;
@@ -2908,6 +2989,12 @@ int main(void)
 
   result = test_fill_surface_builds_request();
   if (result) return 322 + result;
+
+  result = test_query_palette_builds_request();
+  if (result) return 375 + result;
+
+  result = test_query_palette_reports_unsupported();
+  if (result) return 380 + result;
 
   result = test_copy_surface_builds_request();
   if (result) return 324 + result;

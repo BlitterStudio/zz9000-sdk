@@ -149,6 +149,10 @@ int zz9k_scale_image_clipped(ZZ9KContext *ctx,
                              const ZZ9KScaleImageClippedDesc *desc);
 int zz9k_fill_surface(ZZ9KContext *ctx, const ZZ9KSurfaceFillDesc *desc);
 int zz9k_copy_surface(ZZ9KContext *ctx, const ZZ9KSurfaceCopyDesc *desc);
+/* Reads `count` primary-CLUT entries from index `start` into the caller's
+ * shared buffer as 0x00RRGGBB words. Requires firmware advertising
+ * ZZ9K_SERVICE_FLAG_SURFACE_PALETTE_QUERY on the surface service. */
+int zz9k_query_palette(ZZ9KContext *ctx, const ZZ9KPaletteQueryDesc *desc);
 int zz9k_decode_image(ZZ9KContext *ctx, uint32_t opcode,
                       const ZZ9KImageDecodeDesc *desc,
                       ZZ9KImageDecodeResult *result);

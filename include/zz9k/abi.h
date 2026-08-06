@@ -152,6 +152,7 @@ enum ZZ9KOpcode {
   ZZ9K_OP_MAP_FRAMEBUFFER_SURFACE = ZZ9K_SERVICE_SURFACE + 0x02,
   ZZ9K_OP_FILL_SURFACE = ZZ9K_SERVICE_SURFACE + 0x03,
   ZZ9K_OP_COPY_SURFACE = ZZ9K_SERVICE_SURFACE + 0x04,
+  ZZ9K_OP_QUERY_PALETTE = ZZ9K_SERVICE_SURFACE + 0x05,
 
   ZZ9K_OP_SCALE_IMAGE = ZZ9K_SERVICE_IMAGE + 0x00,
   ZZ9K_OP_DECODE_JPEG = ZZ9K_SERVICE_IMAGE + 0x01,
@@ -270,6 +271,7 @@ enum ZZ9KServiceFlags {
   ZZ9K_SERVICE_FLAG_MODULE = 1U << 1,
   ZZ9K_SERVICE_FLAG_ASYNC = 1U << 2,
   ZZ9K_SERVICE_FLAG_ZERO_COPY = 1U << 3,
+  ZZ9K_SERVICE_FLAG_SURFACE_PALETTE_QUERY = 1U << 16,
   ZZ9K_SERVICE_FLAG_IMAGE_JPEG_BASELINE = 1U << 16,
   ZZ9K_SERVICE_FLAG_IMAGE_JPEG_PROGRESSIVE = 1U << 17,
   ZZ9K_SERVICE_FLAG_IMAGE_JPEG_DIRECT_BGRA = 1U << 18,
@@ -476,6 +478,16 @@ typedef struct ZZ9KAllocSurfacePayload {
   uint8_t pitch[4];
   uint8_t reserved[28];
 } ZZ9KAllocSurfacePayload;
+
+typedef struct ZZ9KQueryPalettePayload {
+  uint8_t surface[4];
+  uint8_t start[4];
+  uint8_t count[4];
+  uint8_t dst_handle[4];
+  uint8_t dst_offset[4];
+  uint8_t flags[4];
+  uint8_t reserved[24];
+} ZZ9KQueryPalettePayload;
 
 typedef struct ZZ9KFreeSurfacePayload {
   uint8_t handle[4];
@@ -1043,6 +1055,9 @@ typedef char ZZ9KSurfaceInfoPayload_must_be_48_bytes[
 ];
 typedef char ZZ9KAllocSurfacePayload_must_be_48_bytes[
   (sizeof(ZZ9KAllocSurfacePayload) == 48U) ? 1 : -1
+];
+typedef char ZZ9KQueryPalettePayload_must_be_48_bytes[
+  (sizeof(ZZ9KQueryPalettePayload) == 48U) ? 1 : -1
 ];
 typedef char ZZ9KFreeSurfacePayload_must_be_48_bytes[
   (sizeof(ZZ9KFreeSurfacePayload) == 48U) ? 1 : -1
@@ -1971,6 +1986,36 @@ enum ZZ9KMediaSessionResultFlags {
   ZZ9K_MEDIA_SESSION_RESULT_AUDIO_DRAINED = 1U << 13,
   ZZ9K_MEDIA_SESSION_RESULT_AUDIO_UNDERRUN = 1U << 14
 };
+
+/* Palette (CLUT) limits for ZZ9K_OP_QUERY_PALETTE. The INDEX8 table has 256
+ * entries, each returned as one 0x00RRGGBB word. */
+enum ZZ9KPaletteLimits {
+  ZZ9K_PALETTE_MAX_ENTRIES = 256,
+  ZZ9K_PALETTE_ENTRY_BYTES = 4
+};
+
+/* Bit 0 is reserved for the secondary (HI) CLUT, which firmware does not
+ * shadow; queries that set it get ZZ9K_STATUS_UNSUPPORTED rather than a
+ * silently wrong answer. */
+enum ZZ9KPaletteQueryFlags {
+  ZZ9K_PALETTE_QUERY_FLAG_SECONDARY = 1U << 0
+};
+
+/* ZZ9K_OP_QUERY_PALETTE reads the display CLUT into a caller shared buffer.
+ * The 256-entry table cannot fit the fixed 48-byte reply, so - as the crypto
+ * hash op does - the result is written to dst_handle/dst_offset as `count`
+ * consecutive 0x00RRGGBB words starting at palette index `start`. The palette
+ * is display-global: `surface` is carried for future per-surface tables but
+ * does not select one, and this op implies nothing about 8-bit overlay
+ * composition being available. */
+typedef struct ZZ9KPaletteQueryDesc {
+  uint32_t surface;
+  uint32_t start;
+  uint32_t count;
+  uint32_t dst_handle;
+  uint32_t dst_offset;
+  uint32_t flags;
+} ZZ9KPaletteQueryDesc;
 
 enum ZZ9KMediaStatusPage {
   ZZ9K_MEDIA_STATUS_TIMING = 0U,

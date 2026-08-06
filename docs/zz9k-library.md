@@ -8,7 +8,7 @@ The current library identity is:
 ```c
 #define ZZ9K_LIBRARY_NAME "zz9k.library"
 #define ZZ9K_LIBRARY_VERSION 2
-#define ZZ9K_LIBRARY_REVISION 27
+#define ZZ9K_LIBRARY_REVISION 28
 ```
 
 Open the library with at least version 2:
@@ -1589,6 +1589,22 @@ Callers that use this flag must require
 `ZZ9K_LIBRARY_MIN_REVISION_AUDIO_STREAM_DRAIN` and
 `ZZ9K_CAP_AUDIO_STREAM_DRAIN`; revision 26 and earlier reject the flag during
 client-side request validation.
+
+Library revision 28 added `ZZ9KQueryPalette()`, which reads the INDEX8 display
+CLUT into a caller shared buffer. Fill a `ZZ9KPaletteQueryDesc` with `start`
+and `count` (bounded by `ZZ9K_PALETTE_MAX_ENTRIES`) plus the
+`dst_handle`/`dst_offset` of a shared buffer with room for
+`count * ZZ9K_PALETTE_ENTRY_BYTES`; the 256-entry table cannot fit the fixed
+48-byte reply, so - as the crypto hash op does - the result is written to the
+destination buffer as consecutive `0x00RRGGBB` words. The palette is
+display-global: `desc.surface` is carried for future per-surface tables but
+does not select one, and reading it implies nothing about 8-bit overlay
+composition being available. `ZZ9K_PALETTE_QUERY_FLAG_SECONDARY` is reserved
+for the secondary (HI) CLUT, which firmware does not shadow, so it returns
+`ZZ9K_STATUS_UNSUPPORTED` rather than a silently wrong answer. Gate on
+`ZZ9K_LIBRARY_MIN_REVISION_QUERY_PALETTE` and the
+`ZZ9K_SERVICE_FLAG_SURFACE_PALETTE_QUERY` surface-service flag; the op returns
+`ZZ9K_STATUS_UNSUPPORTED` on firmware that does not implement it.
 
 `ZZ9KAudioStreamBeginDesc.low_water_bytes` is the PCM-ring refill
 threshold: while a session is bound to the AX output, the firmware tops the

@@ -75,6 +75,10 @@ typedef char surface_fill_payload_is_48_bytes[
   (sizeof(ZZ9KSurfaceFillPayload) == 48U) ? 1 : -1
 ];
 
+typedef char query_palette_payload_is_48_bytes[
+  (sizeof(ZZ9KQueryPalettePayload) == 48U) ? 1 : -1
+];
+
 typedef char surface_copy_payload_is_48_bytes[
   (sizeof(ZZ9KSurfaceCopyPayload) == 48U) ? 1 : -1
 ];

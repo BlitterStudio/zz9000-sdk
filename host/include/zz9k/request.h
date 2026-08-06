@@ -313,6 +313,32 @@ static inline int zz9k_request_fill_surface(ZZ9KRequest *request,
   return ZZ9K_STATUS_OK;
 }
 
+static inline int zz9k_request_query_palette(
+    ZZ9KRequest *request, const ZZ9KPaletteQueryDesc *desc)
+{
+  ZZ9KQueryPalettePayload *payload;
+
+  if (!request || !desc || desc->dst_handle == ZZ9K_INVALID_HANDLE ||
+      desc->count == 0U ||
+      desc->count > (uint32_t)ZZ9K_PALETTE_MAX_ENTRIES ||
+      desc->start > (uint32_t)ZZ9K_PALETTE_MAX_ENTRIES ||
+      desc->start + desc->count > (uint32_t)ZZ9K_PALETTE_MAX_ENTRIES ||
+      (desc->flags & ~(uint32_t)ZZ9K_PALETTE_QUERY_FLAG_SECONDARY) != 0U) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  zz9k_request_init(request, ZZ9K_OP_QUERY_PALETTE);
+  request->entry.payload_len = sizeof(ZZ9KQueryPalettePayload);
+  payload = (ZZ9KQueryPalettePayload *)request->entry.payload.inline_data;
+  zz9k_put_be32(payload->surface, desc->surface);
+  zz9k_put_be32(payload->start, desc->start);
+  zz9k_put_be32(payload->count, desc->count);
+  zz9k_put_be32(payload->dst_handle, desc->dst_handle);
+  zz9k_put_be32(payload->dst_offset, desc->dst_offset);
+  zz9k_put_be32(payload->flags, desc->flags);
+  return ZZ9K_STATUS_OK;
+}
+
 static inline int zz9k_request_copy_surface(ZZ9KRequest *request,
                                             const ZZ9KSurfaceCopyDesc *desc)
 {
