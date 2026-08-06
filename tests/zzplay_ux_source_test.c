@@ -130,6 +130,21 @@ static int check_player(const char *path)
   /* A failed PIP open must report the P96 error, not just fall back. */
   if (find(s, "P96 error") < 0L) { rc = 18; goto done; }
 
+  /* Fullscreen uses a dedicated screen sized to the video, so the PIP is a
+   * 1:1 fill and nothing is resized. The screen must be released through
+   * the resource stack, and it must sit BELOW the window in the resource
+   * order so release_all - which runs highest index first - closes the
+   * window before the screen it lives on. */
+  if (find(s, "p96OpenScreenTags") < 0L) { rc = 19; goto done; }
+  if (find(s, "WA_CustomScreen") < 0L) { rc = 20; goto done; }
+  if (find(s, "ZZPLAY_RESOURCE_VIDEO_SCREEN") < 0L) { rc = 21; goto done; }
+  if (find(s, "p96CloseScreen") < 0L) { rc = 22; goto done; }
+  /* Leaving fullscreen must give the screen back. */
+  if (find(s, "zzplay_close_video_screen(runtime);") < 0L) {
+    rc = 23;
+    goto done;
+  }
+
   /* Fullscreen must not paint a title bar it does not have. */
   if (find(s, "runtime->fullscreen) {\n    runtime->title_dirty = 0U;") < 0L) {
     rc = 13;

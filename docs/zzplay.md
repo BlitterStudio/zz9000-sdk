@@ -92,13 +92,20 @@ stealing it, and `AUTO` falls back and says so.
 
 ### Fullscreen
 
-Fullscreen covers the whole screen with a borderless window and centres the
-video inside it, scaled up and aspect-preserved: a 640x480 clip on a
-1280x1024 screen becomes 1280x960, with the remainder black. Nothing of the
-desktop shows around the picture. Scaling is done by the FPGA overlay, so the
-frame rate is unaffected. Pressing F again restores the exact window position
-and size you had before. Unless `QUIET` is in force, the resulting geometry
-is printed, so it is always possible to confirm what was applied.
+Fullscreen opens a **dedicated screen matching the video's own size** and
+shows the picture on it 1:1 — a 640x480 clip gets a 640x480 display. Your
+monitor changes mode and does its own upscaling.
+
+This is deliberately not "stretch the video to the desktop resolution". 1:1
+is the fastest path there is: the FPGA scaler is not involved at all, and
+nothing has to be resized. It also means no part of Workbench is visible, so
+it suits a program showing a video sequence.
+
+Pressing F again closes that screen and returns to the exact window position
+and size you had before.
+
+If no display mode matches the video, ZZPlay says so and stays windowed
+rather than pretending the request succeeded.
 
 **Starting fullscreen.** `--fullscreen`, or the `FULLSCREEN` ToolType, starts
 that way with no window ever appearing on the desktop — which is what you

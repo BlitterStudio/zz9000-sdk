@@ -116,6 +116,7 @@ struct ZZPlayRuntime {
   /* Runtime UX state (U6). */
   ZZPlayWindowGeometry saved_geometry;
   ZZPlayPresentInfo present;
+  struct Screen *screen;
   uint16_t screen_w;
   uint16_t screen_h;
   uint8_t fullscreen;
@@ -543,6 +544,7 @@ static void zzplay_screen_size(struct ZZPlayRuntime *runtime,
 static struct Window *zzplay_open_pip(const ZZPlayVideoInfo *info,
                                       const ZZPlayRect *placement,
                                       int fullscreen,
+                                      struct Screen *screen,
                                       uint16_t limit_w, uint16_t limit_h,
                                       const char *title,
                                       struct BitMap **bitmap,
@@ -576,8 +578,13 @@ static struct Window *zzplay_open_pip(const ZZPlayVideoInfo *info,
   open_tags[i++].ti_Data = (ULONG)(LONG)placement->x;
   open_tags[i].ti_Tag = WA_Top;
   open_tags[i++].ti_Data = (ULONG)(LONG)placement->y;
-  open_tags[i].ti_Tag = WA_PubScreenName;
-  open_tags[i++].ti_Data = (ULONG)"Workbench";
+  if (screen) {
+    open_tags[i].ti_Tag = WA_CustomScreen;
+    open_tags[i++].ti_Data = (ULONG)screen;
+  } else {
+    open_tags[i].ti_Tag = WA_PubScreenName;
+    open_tags[i++].ti_Data = (ULONG)"Workbench";
+  }
   open_tags[i].ti_Tag = WA_Activate;
   open_tags[i++].ti_Data = TRUE;
   /* Without these Intuition derives the size limits from the window's
@@ -592,15 +599,12 @@ static struct Window *zzplay_open_pip(const ZZPlayVideoInfo *info,
   open_tags[i].ti_Tag = WA_MaxHeight;
   open_tags[i++].ti_Data = limit_h != 0U ? limit_h : (ULONG)~0UL;
   if (fullscreen) {
-    /* Fullscreen is a borderless window sized to the aspect-correct fit, so
-     * the screen behind it forms the letterbox. A dedicated screen was
-     * rejected for v2.8: PIP placement comes from VisibleBitMap friend
-     * affinity and the source stride derives from the screen's RGBFormat,
-     * so changing screens would force a full PIP teardown. */
+    /* On its own screen the window is a borderless backdrop filling it, so
+     * the PIP is a plain 1:1 fill and nothing has to be resized. */
     open_tags[i].ti_Tag = WA_Borderless;
     open_tags[i++].ti_Data = TRUE;
     open_tags[i].ti_Tag = WA_Backdrop;
-    open_tags[i++].ti_Data = FALSE;
+    open_tags[i++].ti_Data = screen ? TRUE : FALSE;
   } else {
     open_tags[i].ti_Tag = WA_Title;
     open_tags[i++].ti_Data = (ULONG)title;
@@ -672,6 +676,71 @@ static void zzplay_force_geometry(struct ZZPlayRuntime *runtime,
               (unsigned)runtime->screen_w, (unsigned)runtime->screen_h);
 }
 
+/* Open a dedicated screen matching the video, so fullscreen needs no
+ * scaling and no window resizing at all. The overlay rectangle is owned by
+ * ZZ9000.card through P96's PIP API - there is no SDK op that positions it -
+ * so the PIP is still how the video plane gets placed. Giving it a screen of
+ * exactly the source size reduces that to a 1:1 fill, which is both the
+ * fastest path and the one that avoids the sizing behaviour that repeatedly
+ * failed on this driver. */
+static int zzplay_open_video_screen(struct ZZPlayRuntime *runtime)
+{
+  uint16_t width = (uint16_t)runtime->video_info.width;
+  uint16_t height = (uint16_t)runtime->video_info.height;
+  ULONG depth = 16UL;
+  ULONG mode;
+
+  if (runtime->screen) {
+    return 1;
+  }
+  /* Match the Workbench depth where we know it: both 16- and 32-bit are
+   * hardware-qualified for the PIP, and the source stride P96 derives for
+   * the packed-YUV bitmap depends on it. */
+  if (runtime->window && runtime->window->WScreen) {
+    ULONG current = (ULONG)p96GetBitMapAttr(
+        runtime->window->WScreen->RastPort.BitMap, P96BMA_DEPTH);
+
+    if (current == 15UL || current == 16UL || current == 32UL) {
+      depth = current;
+    }
+  }
+  mode = p96BestModeIDTags(
+      P96BIDTAG_NominalWidth, (ULONG)width,
+      P96BIDTAG_NominalHeight, (ULONG)height,
+      P96BIDTAG_Depth, depth,
+      TAG_DONE);
+  if (mode == (ULONG)INVALID_ID) {
+    zzplay_info("zzplay: no %ux%u screen mode available for fullscreen\n",
+                (unsigned)width, (unsigned)height);
+    return 0;
+  }
+  runtime->screen = p96OpenScreenTags(
+      P96SA_DisplayID, mode,
+      P96SA_Width, (ULONG)width,
+      P96SA_Height, (ULONG)height,
+      P96SA_Depth, depth,
+      P96SA_Title, (ULONG)"ZZPlay",
+      P96SA_ShowTitle, FALSE,
+      P96SA_Quiet, TRUE,
+      P96SA_AutoScroll, FALSE,
+      TAG_DONE);
+  if (!runtime->screen) {
+    zzplay_info("zzplay: could not open a %ux%u fullscreen display\n",
+                (unsigned)width, (unsigned)height);
+    return 0;
+  }
+  (void)zzplay_resource_acquire(
+      &runtime->core.resources, ZZPLAY_RESOURCE_VIDEO_SCREEN);
+  return 1;
+}
+
+static void zzplay_close_video_screen(struct ZZPlayRuntime *runtime)
+{
+  (void)zzplay_resource_release(
+      &runtime->core.resources, ZZPLAY_RESOURCE_VIDEO_SCREEN,
+      zzplay_release_resource, runtime);
+}
+
 /* Where the window should sit for the requested mode. */
 static ZZPlayRect zzplay_pip_placement(struct ZZPlayRuntime *runtime,
                                        int fullscreen)
@@ -712,23 +781,26 @@ static int zzplay_open_pip_mode(struct ZZPlayRuntime *runtime,
 {
   ZZPlayRect placement;
 
-  if (fullscreen) {
-    uint16_t screen_w;
-    uint16_t screen_h;
-
-    zzplay_screen_size(runtime, &screen_w, &screen_h);
-    if (screen_w == 0U || screen_h == 0U) {
-      /* Without the screen size a "fullscreen" window would silently be a
-       * borderless source-size window, which is worse than saying so. */
-      zzplay_info("zzplay: screen size unavailable; staying windowed\n");
-      fullscreen = 0;
-    }
+  if (fullscreen && !zzplay_open_video_screen(runtime)) {
+    /* Say so rather than silently presenting a windowed player as though
+     * the request had been honoured. */
+    zzplay_info("zzplay: staying windowed\n");
+    fullscreen = 0;
   }
   placement = zzplay_pip_placement(runtime, fullscreen);
+  if (fullscreen) {
+    /* Fill the dedicated screen exactly: source size, at the origin. No
+     * scaling and no resizing are involved on this path. */
+    memset(&placement, 0, sizeof(placement));
+    placement.width = (uint16_t)runtime->video_info.width;
+    placement.height = (uint16_t)runtime->video_info.height;
+  } else {
+    zzplay_close_video_screen(runtime);
+  }
 
   runtime->pip_error = 0;
   runtime->window = zzplay_open_pip(
-      &runtime->video_info, &placement, fullscreen,
+      &runtime->video_info, &placement, fullscreen, runtime->screen,
       runtime->screen_w, runtime->screen_h, runtime->title,
       &runtime->bitmap, &runtime->pip_error);
   if (!runtime->window) {
@@ -748,7 +820,9 @@ static int zzplay_open_pip_mode(struct ZZPlayRuntime *runtime,
    * takes, and that path was already proven to scale correctly, so the
    * requested geometry is enforced here rather than trusted at open. */
   runtime->fullscreen = fullscreen ? 1U : 0U;
-  zzplay_force_geometry(runtime, &placement);
+  if (!runtime->screen) {
+    zzplay_force_geometry(runtime, &placement);
+  }
   runtime->present_recheck = 1U;
   runtime->title_dirty = 1U;
   (void)zzplay_resource_acquire(
@@ -1680,6 +1754,15 @@ static int zzplay_release_resource(void *user,
         p96PIP_Close(runtime->window);
         runtime->window = 0;
         runtime->bitmap = 0;
+      }
+      break;
+    case ZZPLAY_RESOURCE_VIDEO_SCREEN:
+      /* Always after the window: the PIP lives on this screen. The resource
+       * order guarantees it, since release runs from the highest index down
+       * and the screen sits below the window. */
+      if (runtime->screen) {
+        p96CloseScreen(runtime->screen);
+        runtime->screen = 0;
       }
       break;
     case ZZPLAY_RESOURCE_P96_LIBRARY:
