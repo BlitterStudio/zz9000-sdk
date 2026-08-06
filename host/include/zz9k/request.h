@@ -866,7 +866,7 @@ static inline int zz9k_request_media_session_status(
   ZZ9KMediaSessionStatusPayload *payload;
 
   if (!request || session == 0U ||
-      page > ZZ9K_MEDIA_STATUS_PRESENTATION ||
+      page > ZZ9K_MEDIA_STATUS_PROFILE ||
       flags != 0U) {
     return ZZ9K_STATUS_BAD_REQUEST;
   }

@@ -987,6 +987,50 @@ static void zzplay_update_presentation(struct ZZPlayRuntime *runtime)
   runtime->title_dirty = 1U;
 }
 
+/* U7: report where the card actually spent its time, so optimisation is
+ * driven by measurement rather than assumption - in particular whether the
+ * planar-to-YUY2 pack is material against decode, which is what gates the
+ * planar FPGA subproject. */
+static void zzplay_report_card_profile(struct ZZPlayRuntime *runtime)
+{
+  static const char *const stage_name[ZZ9K_MEDIA_PROFILE_STAGES] = {
+    "video decode",
+    "YUY2 pack",
+    "present",
+    "audio decode"
+  };
+  ZZ9KMediaSessionStatusResult status;
+  int result;
+  unsigned stage;
+
+  if (runtime->session == 0U) {
+    return;
+  }
+  memset(&status, 0, sizeof(status));
+  result = zz9k_media_session_status(
+      runtime->ctx, runtime->session, ZZ9K_MEDIA_STATUS_PROFILE, 0U,
+      &status);
+  if (result != ZZ9K_STATUS_OK) {
+    zzplay_info("zzplay: card profiling unavailable "
+                "(firmware predates it)\n");
+    return;
+  }
+  for (stage = 0U; stage < ZZ9K_MEDIA_PROFILE_STAGES; stage++) {
+    uint32_t microseconds =
+        ZZ9K_MEDIA_PROFILE_US(status.value[stage]);
+    uint32_t calls = ZZ9K_MEDIA_PROFILE_CALLS(status.value[stage]);
+    uint32_t per_call_us = calls != 0U ? microseconds / calls : 0U;
+
+    zzplay_info("zzplay: card %-13s %lu calls, %lu.%03lu ms total, "
+                "%lu.%03lu ms each\n",
+                stage_name[stage], (unsigned long)calls,
+                (unsigned long)(microseconds / 1000U),
+                (unsigned long)(microseconds % 1000U),
+                (unsigned long)(per_call_us / 1000U),
+                (unsigned long)(per_call_us % 1000U));
+  }
+}
+
 static void zzplay_update_title(struct ZZPlayRuntime *runtime)
 {
   const char *state;
@@ -2522,6 +2566,8 @@ playback_session:
 cleanup:
   if (runtime.options.show_fps) {
     zzplay_stats_stop(&runtime.stats);
+    /* Must run before resource release closes the media session. */
+    zzplay_report_card_profile(&runtime);
   }
   zzplay_capture_audio_totals(&runtime);
   cleanup_status = zzplay_resources_release_all(

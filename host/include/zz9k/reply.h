@@ -684,7 +684,7 @@ static inline int zz9k_reply_media_session_status(
   if (result->session == 0U ||
       result->state < ZZ9K_MEDIA_SESSION_STATE_NEED_INPUT ||
       result->state > ZZ9K_MEDIA_SESSION_STATE_ERROR ||
-      result->page > ZZ9K_MEDIA_STATUS_PRESENTATION ||
+      result->page > ZZ9K_MEDIA_STATUS_PROFILE ||
       (result->page == ZZ9K_MEDIA_STATUS_PRESENTATION
            ? (result->flags & ~zz9k_media_present_known_flags()) != 0U
            : (result->flags &
