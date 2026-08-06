@@ -14,11 +14,14 @@
 #include "zzplay-ax.h"
 #include "zzplay-controls.h"
 #include "zzplay-core.h"
+#include "zzplay-geometry.h"
 #include "zzplay-launch.h"
 #include "zzplay-media.h"
+#include "zzplay-path.h"
 #include "zzplay-mp3.h"
 #include "zzplay-options.h"
 #include "zzplay-probe.h"
+#include "zzplay-statuswin.h"
 #include "zzplay-stats.h"
 #include "zzplay-stream.h"
 #include "zzplay-sync.h"
@@ -30,6 +33,7 @@
 #include <intuition/intuition.h>
 #include <libraries/Picasso96.h>
 #include <proto/exec.h>
+#include <proto/intuition.h>
 #include <proto/Picasso96.h>
 #include <proto/timer.h>
 #include <utility/tagitem.h>
@@ -109,6 +113,14 @@ struct ZZPlayRuntime {
   uint8_t audio_totals_captured;
   uint8_t frame_held;
   uint8_t pip_open_failed;
+  /* Runtime UX state (U6). */
+  ZZPlayWindowGeometry saved_geometry;
+  ZZPlayPresentInfo present;
+  uint8_t fullscreen;
+  uint8_t present_known;
+  uint8_t present_recheck;
+  uint8_t title_dirty;
+  char title[128];
 };
 
 static uint32_t zzplay_elapsed_us(const TimeVal_Type *start,
@@ -120,11 +132,38 @@ static void zzplay_sigint_handler(int signal_number)
   zzplay_ctrl_c_requested = 1;
 }
 
+/* The standalone-MP3 control surface (U6 D3). The status window supplies the
+ * keys; the SIGINT flag still has to be consulted because libnix converts a
+ * Ctrl-C taken during I/O into a signal the window never sees. */
+static int zzplay_mp3_paused(void *user)
+{
+  ZZPlayStatusWindow *status = (ZZPlayStatusWindow *)user;
+
+  return status ? status->paused : 0;
+}
+
+static void zzplay_mp3_backend(void *user, const char *name)
+{
+  zzplay_statuswin_set_backend((ZZPlayStatusWindow *)user, name);
+}
+
 static int zzplay_mp3_stop_requested(void *user)
 {
-  (void)user;
+  ZZPlayStatusWindow *status = (ZZPlayStatusWindow *)user;
+
   if (zzplay_ctrl_c_requested != 0) {
     return 1;
+  }
+  /* This is the one callback both playback loops poll every pass, so it is
+   * also where the status window's input is drained. Polling in the paused
+   * callback as well would consume a single keypress twice. */
+  if (status) {
+    (void)zzplay_statuswin_poll(status);
+    if (status->stop) {
+      return 1;
+    }
+    /* The window already consumed any pending break. */
+    return 0;
   }
   if ((SetSignal(0L, SIGBREAKF_CTRL_C) &
        SIGBREAKF_CTRL_C) != 0U) {
@@ -400,39 +439,84 @@ static uint32_t zzplay_elapsed_us(const TimeVal_Type *start,
   return seconds * 1000000U + (uint32_t)micros;
 }
 
-static ZZPlayControlAction zzplay_poll_control(struct Window *window)
+/* Defined further down; the window helpers below need them. */
+static int zzplay_release_resource(void *user, ZZPlayResource resource);
+static const char *zzplay_audio_backend_name(ZZPlayAudioBackend backend);
+
+static ZZPlayControlAction zzplay_poll_control(
+    struct ZZPlayRuntime *runtime, int *resized)
 {
   struct IntuiMessage *message;
-  int ctrl_c;
-  int window_close = 0;
-  int toggle_pause = 0;
+  ZZPlayControlInput input;
+  struct Window *window = runtime->window;
 
+  memset(&input, 0, sizeof(input));
+  if (resized) {
+    *resized = 0;
+  }
   /* libnix checks SIGBREAKF_CTRL_C from stdio read/write and raises SIGINT.
    * Keep the handler as the durable request bit, and consume a break seen
    * here so later cleanup printf/fclose calls cannot see it as an uncaught
    * abort and bypass the resource stack. */
-  ctrl_c = zzplay_ctrl_c_requested != 0 ||
-           (SetSignal(0L, SIGBREAKF_CTRL_C) &
-            SIGBREAKF_CTRL_C) != 0U;
+  input.ctrl_c = zzplay_ctrl_c_requested != 0 ||
+                 (SetSignal(0L, SIGBREAKF_CTRL_C) &
+                  SIGBREAKF_CTRL_C) != 0U;
   while (window &&
          (message = (struct IntuiMessage *)GetMsg(window->UserPort))) {
     if (message->Class == IDCMP_CLOSEWINDOW) {
-      window_close = 1;
-    } else if (message->Class == IDCMP_VANILLAKEY &&
-               message->Code == (UWORD)' ') {
-      toggle_pause = 1;
+      input.window_close = 1;
+    } else if (message->Class == IDCMP_VANILLAKEY) {
+      ZZPlayControlAction action =
+          zzplay_control_action_from_key((unsigned)message->Code);
+
+      /* Keep the first meaningful key in this poll: a burst of autorepeat
+       * must not let a later NONE overwrite a real request. */
+      if (action != ZZPLAY_CONTROL_NONE && input.key == 0U) {
+        input.key = (unsigned)message->Code;
+      }
+    } else if (message->Class == IDCMP_NEWSIZE) {
+      if (resized) {
+        *resized = 1;
+      }
     }
     ReplyMsg((struct Message *)message);
   }
-  return zzplay_control_action(
-      ctrl_c, window_close, toggle_pause);
+  return zzplay_control_resolve(&input);
+}
+
+/* Screen dimensions for fullscreen placement. Taken from the open window
+ * when there is one; otherwise from the public screen. This runs in the
+ * application, not inside a P96 driver callback, so LockPubScreen is safe
+ * here (the deadlock noted in the P96 contract is a CreateFeature hazard). */
+static void zzplay_screen_size(struct ZZPlayRuntime *runtime,
+                               uint16_t *width, uint16_t *height)
+{
+  struct Screen *screen;
+
+  *width = 0U;
+  *height = 0U;
+  if (runtime->window && runtime->window->WScreen) {
+    *width = (uint16_t)runtime->window->WScreen->Width;
+    *height = (uint16_t)runtime->window->WScreen->Height;
+    return;
+  }
+  screen = LockPubScreen(0);
+  if (!screen) {
+    return;
+  }
+  *width = (uint16_t)screen->Width;
+  *height = (uint16_t)screen->Height;
+  UnlockPubScreen(0, screen);
 }
 
 static struct Window *zzplay_open_pip(const ZZPlayVideoInfo *info,
+                                      const ZZPlayRect *placement,
+                                      int fullscreen,
+                                      const char *title,
                                       struct BitMap **bitmap,
                                       LONG *pip_error)
 {
-  struct TagItem open_tags[16];
+  struct TagItem open_tags[22];
   struct TagItem get_tags[2];
   struct Window *window;
   ULONG bitmap_value = 0U;
@@ -453,26 +537,42 @@ static struct Window *zzplay_open_pip(const ZZPlayVideoInfo *info,
   /* Request an exact video-area size. WA_Width/Height include borders and
    * silently force scaling even when the user has not resized the window. */
   open_tags[i].ti_Tag = WA_InnerWidth;
-  open_tags[i++].ti_Data = info->width;
+  open_tags[i++].ti_Data = placement->width;
   open_tags[i].ti_Tag = WA_InnerHeight;
-  open_tags[i++].ti_Data = info->height;
-  open_tags[i].ti_Tag = WA_Title;
-  open_tags[i++].ti_Data = (ULONG)"ZZ9000 zzplay";
+  open_tags[i++].ti_Data = placement->height;
+  open_tags[i].ti_Tag = WA_Left;
+  open_tags[i++].ti_Data = (ULONG)(LONG)placement->x;
+  open_tags[i].ti_Tag = WA_Top;
+  open_tags[i++].ti_Data = (ULONG)(LONG)placement->y;
   open_tags[i].ti_Tag = WA_PubScreenName;
   open_tags[i++].ti_Data = (ULONG)"Workbench";
   open_tags[i].ti_Tag = WA_Activate;
   open_tags[i++].ti_Data = TRUE;
-  open_tags[i].ti_Tag = WA_DragBar;
-  open_tags[i++].ti_Data = TRUE;
-  open_tags[i].ti_Tag = WA_CloseGadget;
-  open_tags[i++].ti_Data = TRUE;
-  open_tags[i].ti_Tag = WA_DepthGadget;
-  open_tags[i++].ti_Data = TRUE;
-  open_tags[i].ti_Tag = WA_SizeGadget;
-  open_tags[i++].ti_Data = TRUE;
+  if (fullscreen) {
+    /* Fullscreen is a borderless window sized to the aspect-correct fit, so
+     * the screen behind it forms the letterbox. A dedicated screen was
+     * rejected for v2.8: PIP placement comes from VisibleBitMap friend
+     * affinity and the source stride derives from the screen's RGBFormat,
+     * so changing screens would force a full PIP teardown. */
+    open_tags[i].ti_Tag = WA_Borderless;
+    open_tags[i++].ti_Data = TRUE;
+    open_tags[i].ti_Tag = WA_Backdrop;
+    open_tags[i++].ti_Data = FALSE;
+  } else {
+    open_tags[i].ti_Tag = WA_Title;
+    open_tags[i++].ti_Data = (ULONG)title;
+    open_tags[i].ti_Tag = WA_DragBar;
+    open_tags[i++].ti_Data = TRUE;
+    open_tags[i].ti_Tag = WA_CloseGadget;
+    open_tags[i++].ti_Data = TRUE;
+    open_tags[i].ti_Tag = WA_DepthGadget;
+    open_tags[i++].ti_Data = TRUE;
+    open_tags[i].ti_Tag = WA_SizeGadget;
+    open_tags[i++].ti_Data = TRUE;
+  }
   open_tags[i].ti_Tag = WA_IDCMP;
   open_tags[i++].ti_Data =
-      IDCMP_CLOSEWINDOW | IDCMP_VANILLAKEY;
+      IDCMP_CLOSEWINDOW | IDCMP_VANILLAKEY | IDCMP_NEWSIZE;
   open_tags[i].ti_Tag = TAG_DONE;
   open_tags[i].ti_Data = 0U;
 
@@ -492,6 +592,62 @@ static struct Window *zzplay_open_pip(const ZZPlayVideoInfo *info,
   return window;
 }
 
+/* Where the window should sit for the requested mode. */
+static ZZPlayRect zzplay_pip_placement(struct ZZPlayRuntime *runtime,
+                                       int fullscreen)
+{
+  ZZPlayRect rect;
+
+  if (fullscreen) {
+    uint16_t screen_w;
+    uint16_t screen_h;
+
+    zzplay_screen_size(runtime, &screen_w, &screen_h);
+    if (screen_w != 0U && screen_h != 0U) {
+      return zzplay_geometry_fit(
+          runtime->video_info.width, runtime->video_info.height,
+          screen_w, screen_h);
+    }
+  } else if (zzplay_geometry_restore(&runtime->saved_geometry, &rect)) {
+    return rect;
+  }
+  memset(&rect, 0, sizeof(rect));
+  rect.width = (uint16_t)runtime->video_info.width;
+  rect.height = (uint16_t)runtime->video_info.height;
+  return rect;
+}
+
+static void zzplay_close_pip(struct ZZPlayRuntime *runtime)
+{
+  if (!runtime->window) {
+    return;
+  }
+  (void)zzplay_resource_release(
+      &runtime->core.resources, ZZPLAY_RESOURCE_VIDEO_WINDOW,
+      zzplay_release_resource, runtime);
+}
+
+static int zzplay_open_pip_mode(struct ZZPlayRuntime *runtime,
+                                int fullscreen)
+{
+  ZZPlayRect placement = zzplay_pip_placement(runtime, fullscreen);
+
+  runtime->pip_error = 0;
+  runtime->window = zzplay_open_pip(
+      &runtime->video_info, &placement, fullscreen, runtime->title,
+      &runtime->bitmap, &runtime->pip_error);
+  if (!runtime->window) {
+    runtime->pip_open_failed = 1U;
+    return 0;
+  }
+  runtime->fullscreen = fullscreen ? 1U : 0U;
+  runtime->present_recheck = 1U;
+  runtime->title_dirty = 1U;
+  (void)zzplay_resource_acquire(
+      &runtime->core.resources, ZZPLAY_RESOURCE_VIDEO_WINDOW);
+  return 1;
+}
+
 static int zzplay_ensure_pip(struct ZZPlayRuntime *runtime)
 {
   if (runtime->window) {
@@ -499,16 +655,149 @@ static int zzplay_ensure_pip(struct ZZPlayRuntime *runtime)
   }
   /* A visible memory-window PIP exposes its key color until the first
    * formatter-backed frame arrives, so create it only at retirement. */
-  runtime->pip_error = 0;
-  runtime->window = zzplay_open_pip(
-      &runtime->video_info, &runtime->bitmap, &runtime->pip_error);
-  if (!runtime->window) {
-    runtime->pip_open_failed = 1U;
-    return 0;
+  return zzplay_open_pip_mode(
+      runtime, runtime->options.fullscreen ? 1 : 0);
+}
+
+/* Remember the current windowed placement so returning from fullscreen
+ * restores what the user had. */
+static void zzplay_remember_window(struct ZZPlayRuntime *runtime)
+{
+  ZZPlayRect rect;
+
+  if (!runtime->window || runtime->fullscreen) {
+    return;
   }
-  (void)zzplay_resource_acquire(
-      &runtime->core.resources, ZZPLAY_RESOURCE_VIDEO_WINDOW);
-  return 1;
+  rect.x = (int16_t)runtime->window->LeftEdge;
+  rect.y = (int16_t)runtime->window->TopEdge;
+  rect.width = (uint16_t)(runtime->window->Width -
+                          runtime->window->BorderLeft -
+                          runtime->window->BorderRight);
+  rect.height = (uint16_t)(runtime->window->Height -
+                           runtime->window->BorderTop -
+                           runtime->window->BorderBottom);
+  zzplay_geometry_remember(&runtime->saved_geometry, &rect);
+}
+
+/* The media session is bound to the overlay, not to this window, so the PIP
+ * can be reopened mid-playback: P96 simply re-SETs the overlay geometry. */
+static int zzplay_toggle_fullscreen(struct ZZPlayRuntime *runtime)
+{
+  int target;
+
+  if (!runtime->window) {
+    return 1;
+  }
+  target = runtime->fullscreen ? 0 : 1;
+  zzplay_remember_window(runtime);
+  zzplay_close_pip(runtime);
+  if (zzplay_open_pip_mode(runtime, target)) {
+    return 1;
+  }
+  /* Could not get the requested mode; fall back to the one that worked
+   * before rather than continuing with no window at all. */
+  runtime->pip_open_failed = 0U;
+  if (zzplay_open_pip_mode(runtime, runtime->fullscreen ? 1 : 0)) {
+    printf("zzplay: could not switch to %s\n",
+           target ? "fullscreen" : "windowed");
+    return 1;
+  }
+  return 0;
+}
+
+/* Snap a user resize back to the source aspect (R7). */
+static void zzplay_apply_resize(struct ZZPlayRuntime *runtime)
+{
+  struct Window *window = runtime->window;
+  uint16_t inner_w;
+  uint16_t inner_h;
+  ZZPlayRect fitted;
+  LONG border_w;
+  LONG border_h;
+
+  if (!window || runtime->fullscreen) {
+    return;
+  }
+  border_w = window->BorderLeft + window->BorderRight;
+  border_h = window->BorderTop + window->BorderBottom;
+  inner_w = (uint16_t)(window->Width - border_w);
+  inner_h = (uint16_t)(window->Height - border_h);
+  fitted = zzplay_geometry_fit(
+      runtime->video_info.width, runtime->video_info.height,
+      inner_w, inner_h);
+  if (fitted.width == 0U || fitted.height == 0U) {
+    return;
+  }
+  if (fitted.width != inner_w || fitted.height != inner_h) {
+    ChangeWindowBox(window, window->LeftEdge, window->TopEdge,
+                    (LONG)fitted.width + border_w,
+                    (LONG)fitted.height + border_h);
+  }
+  zzplay_remember_window(runtime);
+  runtime->present_recheck = 1U;
+  runtime->title_dirty = 1U;
+}
+
+/* Ask firmware which path actually presented, and report transitions. */
+static void zzplay_update_presentation(struct ZZPlayRuntime *runtime)
+{
+  ZZ9KMediaSessionStatusResult status;
+  ZZPlayPresentInfo info;
+  int result;
+
+  if (runtime->session == 0U) {
+    return;
+  }
+  memset(&status, 0, sizeof(status));
+  result = zz9k_media_session_status(
+      runtime->ctx, runtime->session, ZZ9K_MEDIA_STATUS_PRESENTATION,
+      0U, &status);
+  zzplay_present_from_status(result, status.flags, status.value, &info);
+  if (runtime->present_known && !zzplay_present_changed(
+                                     &runtime->present, &info)) {
+    return;
+  }
+  /* Report the first observation and every later transition, but stay quiet
+   * on firmware that cannot answer at all. */
+  if (info.path != ZZPLAY_PATH_UNKNOWN &&
+      (!runtime->present_known ||
+       runtime->present.path != info.path)) {
+    printf("zzplay: presentation path %s (%ux%u source, %ux%u shown)\n",
+           zzplay_present_path_name(info.path),
+           (unsigned)info.src_w, (unsigned)info.src_h,
+           (unsigned)info.dst_w, (unsigned)info.dst_h);
+  } else if (!runtime->present_known &&
+             info.path == ZZPLAY_PATH_UNKNOWN) {
+    printf("zzplay: presentation path unavailable "
+           "(firmware predates path reporting)\n");
+  }
+  runtime->present = info;
+  runtime->present_known = 1U;
+  runtime->title_dirty = 1U;
+}
+
+static void zzplay_update_title(struct ZZPlayRuntime *runtime)
+{
+  const char *state;
+
+  if (!runtime->window || !runtime->title_dirty ||
+      runtime->fullscreen) {
+    runtime->title_dirty = 0U;
+    return;
+  }
+  state = runtime->core.state == ZZPLAY_STATE_PAUSED ? "paused"
+                                                     : "playing";
+  sprintf(runtime->title, "zzplay - MPEG-1 - %s - %s - %s%s",
+          zzplay_audio_backend_name(runtime->audio_backend),
+          runtime->present_known
+              ? zzplay_present_path_name(runtime->present.path)
+              : "starting",
+          state,
+          runtime->options.loop_mode != ZZPLAY_LOOP_NONE ? " - loop"
+                                                         : "");
+  SetWindowTitles(runtime->window, (CONST_STRPTR)runtime->title,
+                  (CONST_STRPTR)~0UL);
+  runtime->title_dirty = 0U;
 }
 
 static int zzplay_decode_once(ZZ9KContext *ctx, uint32_t session,
@@ -1141,7 +1430,7 @@ static int zzplay_drain_audio(struct ZZPlayRuntime *runtime)
         return ZZ9K_STATUS_OK;
       }
       stop_reason = zzplay_control_stop_reason_from_action(
-          zzplay_poll_control(runtime->window));
+          zzplay_poll_control(runtime, 0));
       if (stop_reason != ZZPLAY_STOP_NONE) {
         zzplay_core_stop(&runtime->core, stop_reason);
         return ZZ9K_STATUS_CANCELLED;
@@ -1195,7 +1484,7 @@ static int zzplay_drain_audio(struct ZZPlayRuntime *runtime)
       return ZZ9K_STATUS_OK;
     }
     stop_reason = zzplay_control_stop_reason_from_action(
-        zzplay_poll_control(runtime->window));
+        zzplay_poll_control(runtime, 0));
     if (stop_reason != ZZPLAY_STOP_NONE) {
       zzplay_core_stop(&runtime->core, stop_reason);
       return ZZ9K_STATUS_CANCELLED;
@@ -1402,6 +1691,9 @@ int main(int argc, char **argv)
   struct ZZPlayRuntime runtime;
   ZZPlayOptionsResult options_result;
   ZZPlayLaunch launch;
+  ZZPlayStatusWindow status_window;
+  ZZPlayMP3Controls mp3_controls;
+  int have_status_window;
   ZZPlayProbeInfo probe;
   ZZPlayVideoInfo info;
   ZZPlayTransport transport;
@@ -1479,9 +1771,24 @@ int main(int argc, char **argv)
     (void)zzplay_resource_release(
         &runtime.core.resources, ZZPLAY_RESOURCE_INPUT_FILE,
         zzplay_release_resource, &runtime);
+    /* Standalone MP3 has no PIP window, so give it its own control surface
+     * (U6 D3). Playback must still work if the window cannot open. */
+    memset(&status_window, 0, sizeof(status_window));
+    have_status_window =
+        zzplay_statuswin_open(&status_window, runtime.options.path);
+    status_window.loop =
+        runtime.options.loop_mode != ZZPLAY_LOOP_NONE ? 1 : 0;
+    memset(&mp3_controls, 0, sizeof(mp3_controls));
+    mp3_controls.stop_requested = zzplay_mp3_stop_requested;
+    mp3_controls.paused = zzplay_mp3_paused;
+    mp3_controls.backend = zzplay_mp3_backend;
+    mp3_controls.user = have_status_window ? &status_window : 0;
     mp3_ok = zzplay_mp3_run(
         runtime.options.path, &probe.mp3, &runtime.options,
-        zzplay_mp3_stop_requested, 0);
+        &mp3_controls);
+    if (have_status_window) {
+      zzplay_statuswin_close(&status_window);
+    }
     zzplay_launch_end(&launch);
     return mp3_ok ? 0 : 20;
   }
@@ -1689,12 +1996,16 @@ playback_session:
     ZZPlayControlAction control;
     ZZPlayStopReason stop_reason;
     ZZPlayMediaAction action;
+    int resized = 0;
 
-    control = zzplay_poll_control(runtime.window);
+    control = zzplay_poll_control(&runtime, &resized);
     stop_reason = zzplay_control_stop_reason_from_action(control);
     if (stop_reason != ZZPLAY_STOP_NONE) {
       zzplay_core_stop(&runtime.core, stop_reason);
       break;
+    }
+    if (resized) {
+      zzplay_apply_resize(&runtime);
     }
     if (control == ZZPLAY_CONTROL_TOGGLE_PAUSE) {
       cleanup_status = zzplay_toggle_pause(&runtime);
@@ -1704,7 +2015,32 @@ playback_session:
         zzplay_fail(&runtime, ZZPLAY_FAILURE_IO, cleanup_status);
         break;
       }
+      runtime.title_dirty = 1U;
+    } else if (control == ZZPLAY_CONTROL_TOGGLE_FULLSCREEN) {
+      if (!zzplay_toggle_fullscreen(&runtime)) {
+        zzplay_error(&runtime,
+                     "zzplay: cannot reopen the P96 PIP window "
+                     "(error %ld)\n", (long)runtime.pip_error);
+        zzplay_fail(&runtime, ZZPLAY_FAILURE_PIP,
+                    ZZ9K_STATUS_UNSUPPORTED);
+        break;
+      }
+    } else if (control == ZZPLAY_CONTROL_TOGGLE_LOOP) {
+      /* Toggling loop mid-play affects what happens at the next EOF; an
+       * indefinite loop becomes "stop after this pass". */
+      if (runtime.options.loop_mode == ZZPLAY_LOOP_NONE) {
+        runtime.options.loop_mode = ZZPLAY_LOOP_FOREVER;
+        runtime.options.loop_count = 0U;
+      } else {
+        runtime.options.loop_mode = ZZPLAY_LOOP_NONE;
+        runtime.options.loop_count = 0U;
+      }
+      printf("zzplay: loop %s\n",
+             runtime.options.loop_mode == ZZPLAY_LOOP_NONE ? "off"
+                                                           : "on");
+      runtime.title_dirty = 1U;
     }
+    zzplay_update_title(&runtime);
     if (runtime.core.state == ZZPLAY_STATE_PAUSED) {
       zzplay_wait_us(&runtime.timer, ZZPLAY_SYNC_POLL_US);
       continue;
@@ -1745,6 +2081,14 @@ playback_session:
         runtime.frame_held = 0U;
         if (runtime.options.show_fps) {
           zzplay_stats_frame(&runtime.stats, held_decode_us);
+        }
+        /* One mailbox round trip roughly twice a second, plus an immediate
+         * recheck after any geometry change. */
+        if (runtime.present_recheck || !runtime.present_known ||
+            (runtime.frames % 15U) == 0U) {
+          runtime.present_recheck = 0U;
+          zzplay_update_presentation(&runtime);
+          zzplay_update_title(&runtime);
         }
       }
       continue;

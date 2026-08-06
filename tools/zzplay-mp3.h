@@ -9,10 +9,21 @@
 
 typedef int (*ZZPlayMP3StopRequested)(void *user);
 
+/* Standalone MP3 has no video window, so U6 gives it a small status window
+ * of its own; this is how that window's keys reach the playback loops.
+ * Returning non-zero from `paused` holds playback without ending it. Both
+ * callbacks are optional. */
+typedef struct ZZPlayMP3Controls {
+  ZZPlayMP3StopRequested stop_requested;
+  int (*paused)(void *user);
+  /* Called when the backend is known, so the window can show it. */
+  void (*backend)(void *user, const char *name);
+  void *user;
+} ZZPlayMP3Controls;
+
 int zzplay_mp3_run(const char *path,
                    const ZZPlayMP3Info *info,
                    const ZZPlayOptions *options,
-                   ZZPlayMP3StopRequested stop_requested,
-                   void *user);
+                   const ZZPlayMP3Controls *controls);
 
 #endif /* ZZPLAY_MP3_H */

@@ -26,6 +26,19 @@ struct Library *AslBase;
 struct IntuitionBase *IntuitionBase;
 static int zzplay_launch_owns_intuition;
 
+/* The player calls Intuition directly (window title, resize, screen size) on
+ * every launch path, not only the Workbench error path, so open it once up
+ * front and let every caller rely on it. */
+static void zzplay_launch_open_intuition(void)
+{
+  if (IntuitionBase) {
+    return;
+  }
+  IntuitionBase = (struct IntuitionBase *)OpenLibrary(
+      (CONST_STRPTR)"intuition.library", 37U);
+  zzplay_launch_owns_intuition = IntuitionBase ? 1 : 0;
+}
+
 /* CurrentDir() must be moved to reach an icon by name, but the original must
  * be restored exactly once no matter how many locks we visit. */
 static void zzplay_launch_set_dir(ZZPlayLaunch *launch, BPTR lock)
@@ -98,11 +111,7 @@ void zzplay_launch_report(const ZZPlayOptions *options, const char *message)
   if (options && options->launch == ZZPLAY_LAUNCH_WORKBENCH) {
     struct EasyStruct easy;
 
-    if (!IntuitionBase) {
-      IntuitionBase = (struct IntuitionBase *)OpenLibrary(
-          (CONST_STRPTR)"intuition.library", 37U);
-      zzplay_launch_owns_intuition = IntuitionBase ? 1 : 0;
-    }
+    zzplay_launch_open_intuition();
     if (!IntuitionBase) {
       return;
     }
@@ -168,6 +177,7 @@ ZZPlayOptionsResult zzplay_launch_begin(int argc, char **argv,
   }
   memset(launch, 0, sizeof(*launch));
   launch->old_directory = -1;
+  zzplay_launch_open_intuition();
 
   /* A CLI launch keeps the existing behaviour exactly. */
   if (argc != 0) {

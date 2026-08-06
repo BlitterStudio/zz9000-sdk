@@ -88,6 +88,7 @@ ZZPlayMHIStatus zzplay_mhi_play_file(
     ZZPlayMHISink *sink,
     FILE *file,
     ZZPlayMHIStopRequested stop_requested,
+    ZZPlayMHIPaused paused,
     void *user)
 {
   uint32_t queued = 0U;
@@ -134,6 +135,21 @@ ZZPlayMHIStatus zzplay_mhi_play_file(
     if (stop_requested && stop_requested(user)) {
       result = ZZPLAY_MHI_STOPPED;
       goto done;
+    }
+    if (paused) {
+      int want_pause = paused(user) != 0;
+
+      if (want_pause && !sink->paused) {
+        (void)zzplay_mhi_pause(sink);
+      } else if (!want_pause && sink->paused) {
+        (void)zzplay_mhi_resume(sink);
+      }
+      if (sink->paused) {
+        /* Hold input as well: refilling while the decoder is paused races
+         * the driver's buffer accounting for no benefit. */
+        Delay(1U);
+        continue;
+      }
     }
     while ((empty = MHIGetEmpty(sink->decoder)) != 0) {
       int index = zzplay_mhi_buffer_index(sink->buffers, empty);

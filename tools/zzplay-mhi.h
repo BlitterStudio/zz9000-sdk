@@ -31,12 +31,16 @@ typedef struct ZZPlayMHISink {
 } ZZPlayMHISink;
 
 typedef int (*ZZPlayMHIStopRequested)(void *user);
+/* Non-zero holds playback through the real MHI pause primitive without
+ * ending the session. */
+typedef int (*ZZPlayMHIPaused)(void *user);
 
 ZZPlayMHIStatus zzplay_mhi_acquire(ZZPlayMHISink *sink);
 ZZPlayMHIStatus zzplay_mhi_play_file(
     ZZPlayMHISink *sink,
     FILE *file,
     ZZPlayMHIStopRequested stop_requested,
+    ZZPlayMHIPaused paused,
     void *user);
 int zzplay_mhi_pause(ZZPlayMHISink *sink);
 int zzplay_mhi_resume(ZZPlayMHISink *sink);

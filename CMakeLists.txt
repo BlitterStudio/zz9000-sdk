@@ -565,6 +565,18 @@ add_executable(zzplay_geometry_test
 target_link_libraries(zzplay_geometry_test PRIVATE zzplay_core)
 add_test(NAME zzplay_geometry_test COMMAND zzplay_geometry_test)
 
+add_executable(zzplay_ux_source_test
+  tests/zzplay_ux_source_test.c
+)
+
+add_test(
+  NAME zzplay_ux_source_test
+  COMMAND zzplay_ux_source_test
+          ${CMAKE_CURRENT_SOURCE_DIR}/tools/zzplay.c
+          ${CMAKE_CURRENT_SOURCE_DIR}/tools/zzplay-mp3.c
+          ${CMAKE_CURRENT_SOURCE_DIR}/tools/zzplay-mhi.c
+)
+
 add_executable(zzplay_icon_test
   tests/zzplay_icon_test.c
 )
