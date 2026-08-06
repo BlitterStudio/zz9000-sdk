@@ -56,7 +56,7 @@ parentheses in Workbench's *Information* window to enable one.
 | `--audio=none` | `AUDIO=NONE` | Mute |
 | `--loop` | `LOOP` | Repeat forever |
 | `--loop=N` | `LOOP=N` | Repeat N times after the first play |
-| `--fullscreen` | `FULLSCREEN` | Start filling the screen, aspect preserved |
+| `--fullscreen` | `FULLSCREEN` | Start fullscreen, no window furniture |
 | `--quiet` | `QUIET` | No progress output. The default from Workbench |
 | `--verbose` | `VERBOSE` | Force progress output even from Workbench |
 | `--fps` | `FPS` | Rolling playback and decode-call frame rates |
@@ -92,10 +92,23 @@ stealing it, and `AUTO` falls back and says so.
 
 ### Fullscreen
 
-Fullscreen scales the video up to fill the display, preserving aspect: a
-640x480 clip on a 1280x1024 screen becomes 1280x960 with the remainder left
-as a border. Unless `QUIET` is in force, the resulting window geometry is
-printed, so it is always possible to confirm what was actually applied. The scaling is done by the FPGA overlay, so the frame rate is
+Fullscreen covers the whole screen with a borderless window and centres the
+video inside it, scaled up and aspect-preserved: a 640x480 clip on a
+1280x1024 screen becomes 1280x960, with the remainder black. Nothing of the
+desktop shows around the picture. Scaling is done by the FPGA overlay, so the
+frame rate is unaffected. Pressing F again restores the exact window position
+and size you had before. Unless `QUIET` is in force, the resulting geometry
+is printed, so it is always possible to confirm what was applied.
+
+**Starting fullscreen.** `--fullscreen`, or the `FULLSCREEN` ToolType, starts
+that way with no window ever appearing on the desktop — which is what you
+want when another program is showing a video sequence and a framed window on
+the Workbench would break the effect. Combine it with `--quiet` (already the
+default from Workbench) for a completely silent, chrome-free playback:
+
+```
+zzplay --fullscreen --quiet Video:intro.mpg
+``` The scaling is done by the FPGA overlay, so the frame rate is
 unaffected. Pressing F again restores the exact window position and size you
 had before.
 
