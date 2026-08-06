@@ -98,6 +98,25 @@ static int check_player(const char *path)
    * silently opening a borderless source-size window. */
   if (find(s, "staying windowed") < 0L) { rc = 12; goto done; }
 
+  /* p96PIP_OpenTagList does not reliably adopt an opening size larger than
+   * the PIP source, so the geometry must be enforced afterwards through the
+   * same ChangeWindowBox route a user drag takes. Requesting it only via
+   * the open tags left two bench rounds borderless at the source size. */
+  if (find(s, "zzplay_force_geometry(runtime, &placement)") < 0L) {
+    rc = 14;
+    goto done;
+  }
+  if (find(s, "ChangeWindowBox(window, (LONG)want->x") < 0L) {
+    rc = 15;
+    goto done;
+  }
+  /* The window must also be permitted to grow to the screen; without
+   * explicit maxima Intuition caps it at its opening size. */
+  if (find(s, "WA_MaxWidth") < 0L || find(s, "WA_MaxHeight") < 0L) {
+    rc = 16;
+    goto done;
+  }
+
   /* Fullscreen must not paint a title bar it does not have. */
   if (find(s, "runtime->fullscreen) {\n    runtime->title_dirty = 0U;") < 0L) {
     rc = 13;

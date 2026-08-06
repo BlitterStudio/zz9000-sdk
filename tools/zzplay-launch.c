@@ -117,7 +117,7 @@ void zzplay_launch_report(const ZZPlayOptions *options, const char *message)
     }
     memset(&easy, 0, sizeof(easy));
     easy.es_StructSize = sizeof(easy);
-    easy.es_Title = (STRPTR)"zzplay";
+    easy.es_Title = (STRPTR)"ZZPlay";
     easy.es_TextFormat = (STRPTR)"%s";
     easy.es_GadgetFormat = (STRPTR)"Continue";
     (void)EasyRequestArgs(0, &easy, 0, (APTR)&message);

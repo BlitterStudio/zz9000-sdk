@@ -64,7 +64,7 @@ static uint32_t zzplay_input_staging[
     ZZPLAY_INPUT_BYTES / sizeof(uint32_t)];
 static volatile sig_atomic_t zzplay_ctrl_c_requested;
 
-static const char zzplay_version[] = "$VER: zzplay 0.2 (10.07.2026)";
+static const char zzplay_version[] = "$VER: ZZPlay 0.3 (06.08.2026)";
 
 struct ZZPlayTimer {
   struct MsgPort *port;
@@ -539,11 +539,12 @@ static void zzplay_screen_size(struct ZZPlayRuntime *runtime,
 static struct Window *zzplay_open_pip(const ZZPlayVideoInfo *info,
                                       const ZZPlayRect *placement,
                                       int fullscreen,
+                                      uint16_t limit_w, uint16_t limit_h,
                                       const char *title,
                                       struct BitMap **bitmap,
                                       LONG *pip_error)
 {
-  struct TagItem open_tags[22];
+  struct TagItem open_tags[28];
   struct TagItem get_tags[2];
   struct Window *window;
   ULONG bitmap_value = 0U;
@@ -575,6 +576,17 @@ static struct Window *zzplay_open_pip(const ZZPlayVideoInfo *info,
   open_tags[i++].ti_Data = (ULONG)"Workbench";
   open_tags[i].ti_Tag = WA_Activate;
   open_tags[i++].ti_Data = TRUE;
+  /* Without these Intuition derives the size limits from the window's
+   * opening dimensions, so it could never afterwards be enlarged to the
+   * screen - which is what ChangeWindowBox() below has to be able to do. */
+  open_tags[i].ti_Tag = WA_MinWidth;
+  open_tags[i++].ti_Data = 32U;
+  open_tags[i].ti_Tag = WA_MinHeight;
+  open_tags[i++].ti_Data = 24U;
+  open_tags[i].ti_Tag = WA_MaxWidth;
+  open_tags[i++].ti_Data = limit_w != 0U ? limit_w : (ULONG)~0UL;
+  open_tags[i].ti_Tag = WA_MaxHeight;
+  open_tags[i++].ti_Data = limit_h != 0U ? limit_h : (ULONG)~0UL;
   if (fullscreen) {
     /* Fullscreen is a borderless window sized to the aspect-correct fit, so
      * the screen behind it forms the letterbox. A dedicated screen was
@@ -617,6 +629,43 @@ static struct Window *zzplay_open_pip(const ZZPlayVideoInfo *info,
   }
   *bitmap = (struct BitMap *)bitmap_value;
   return window;
+}
+
+/* Make the window actually be the requested inner size and position, and
+ * say what happened. ChangeWindowBox() is the same mechanism a user drag
+ * uses, and takes outer dimensions, so the borders are added back here. */
+static void zzplay_force_geometry(struct ZZPlayRuntime *runtime,
+                                  const ZZPlayRect *want)
+{
+  struct Window *window = runtime->window;
+  LONG border_w;
+  LONG border_h;
+  LONG outer_w;
+  LONG outer_h;
+
+  if (!window || want->width == 0U || want->height == 0U) {
+    return;
+  }
+  border_w = window->BorderLeft + window->BorderRight;
+  border_h = window->BorderTop + window->BorderBottom;
+  outer_w = (LONG)want->width + border_w;
+  outer_h = (LONG)want->height + border_h;
+  if (window->Width != outer_w || window->Height != outer_h ||
+      window->LeftEdge != (WORD)want->x ||
+      window->TopEdge != (WORD)want->y) {
+    ChangeWindowBox(window, (LONG)want->x, (LONG)want->y,
+                    outer_w, outer_h);
+  }
+  /* Report what was asked for against what Intuition settled on: if these
+   * ever disagree the geometry was refused, and that must be visible
+   * rather than silently looking like the wrong mode. */
+  zzplay_info("zzplay: window %ldx%ld at %ld,%ld (video area %ux%u "
+              "requested, screen %ux%u)\n",
+              (long)(window->Width - border_w),
+              (long)(window->Height - border_h),
+              (long)window->LeftEdge, (long)window->TopEdge,
+              (unsigned)want->width, (unsigned)want->height,
+              (unsigned)runtime->screen_w, (unsigned)runtime->screen_h);
 }
 
 /* Where the window should sit for the requested mode. */
@@ -675,14 +724,21 @@ static int zzplay_open_pip_mode(struct ZZPlayRuntime *runtime,
 
   runtime->pip_error = 0;
   runtime->window = zzplay_open_pip(
-      &runtime->video_info, &placement, fullscreen, runtime->title,
+      &runtime->video_info, &placement, fullscreen,
+      runtime->screen_w, runtime->screen_h, runtime->title,
       &runtime->bitmap, &runtime->pip_error);
   if (!runtime->window) {
     runtime->pip_open_failed = 1U;
     return 0;
   }
   zzplay_cache_screen(runtime);
+  /* p96PIP_OpenTagList() does not reliably adopt an opening size larger
+   * than the PIP source, which left the first two bench rounds borderless
+   * but still 640x480. Resizing afterwards is the same route a user drag
+   * takes, and that path was already proven to scale correctly, so the
+   * requested geometry is enforced here rather than trusted at open. */
   runtime->fullscreen = fullscreen ? 1U : 0U;
+  zzplay_force_geometry(runtime, &placement);
   runtime->present_recheck = 1U;
   runtime->title_dirty = 1U;
   (void)zzplay_resource_acquire(
@@ -831,7 +887,7 @@ static void zzplay_update_title(struct ZZPlayRuntime *runtime)
   }
   state = runtime->core.state == ZZPLAY_STATE_PAUSED ? "paused"
                                                      : "playing";
-  sprintf(runtime->title, "zzplay - MPEG-1 - %s - %s - %s%s",
+  sprintf(runtime->title, "ZZPlay - MPEG-1 - %s - %s - %s%s",
           zzplay_audio_backend_name(runtime->audio_backend),
           runtime->present_known
               ? zzplay_present_path_name(runtime->present.path)

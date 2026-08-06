@@ -181,7 +181,7 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     targets = [
         ("zzplay.info", WB_TOOL, None),
-        ("zzplay-project.info", WB_PROJECT, "zzplay"),
+        ("zzplay-project.info", WB_PROJECT, "ZZPlay"),
     ]
     for name, icon_type, default_tool in targets:
         data = build(icon_type, default_tool, TOOLTYPES, 16384)

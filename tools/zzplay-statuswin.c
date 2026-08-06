@@ -18,7 +18,7 @@ struct GfxBase *GfxBase;
 static int zzplay_statuswin_owns_gfx;
 
 #define ZZPLAY_STATUSWIN_WIDTH 384
-#define ZZPLAY_STATUSWIN_HEIGHT 58
+#define ZZPLAY_STATUSWIN_HEIGHT 68
 #define ZZPLAY_STATUSWIN_LINE 10
 
 /* Keep only the final path component so the display stays readable. */
@@ -90,15 +90,18 @@ static void zzplay_statuswin_draw(ZZPlayStatusWindow *status)
   zzplay_statuswin_line(window, 0, line);
 
   if (status->sample_rate != 0U) {
-    sprintf(line, "%lu Hz  %s  %lu kbps  [%s]",
+    sprintf(line, "%lu Hz  %s  %lu kbps",
             (unsigned long)status->sample_rate,
             status->channels == 1U ? "mono" : "stereo",
-            (unsigned long)status->bitrate_kbps,
-            status->backend[0] ? status->backend : "...");
+            (unsigned long)status->bitrate_kbps);
   } else {
-    sprintf(line, "[%s]", status->backend[0] ? status->backend : "...");
+    strcpy(line, "");
   }
   zzplay_statuswin_line(window, 1, line);
+
+  sprintf(line, "Output: %s", status->backend[0] ? status->backend
+                                                 : "selecting...");
+  zzplay_statuswin_line(window, 2, line);
 
   zzplay_statuswin_time(elapsed, status->elapsed_ms);
   if (status->total_ms != 0U) {
@@ -111,13 +114,13 @@ static void zzplay_statuswin_draw(ZZPlayStatusWindow *status)
             elapsed, status->paused ? "PAUSED" : "playing",
             status->loop ? "  loop" : "");
   }
-  zzplay_statuswin_line(window, 2, line);
+  zzplay_statuswin_line(window, 3, line);
 
   /* Position bar. Only meaningful when the duration is known. */
   if (status->total_ms != 0U) {
     int bar_left = left + 4;
     int bar_right = right - 5;
-    int bar_y = top + 2 + 4 * ZZPLAY_STATUSWIN_LINE - 4;
+    int bar_y = top + 2 + 5 * ZZPLAY_STATUSWIN_LINE - 4;
     int span = bar_right - bar_left;
     uint32_t done = status->elapsed_ms;
 
@@ -139,7 +142,7 @@ static void zzplay_statuswin_draw(ZZPlayStatusWindow *status)
     }
   }
 
-  zzplay_statuswin_line(window, 4, "Space pause   Q stop   L loop");
+  zzplay_statuswin_line(window, 5, "Space pause   Q stop   L loop");
   status->dirty = 0;
 }
 
@@ -152,7 +155,8 @@ static void zzplay_statuswin_retitle(ZZPlayStatusWindow *status)
     return;
   }
   strcpy(previous, status->title);
-  sprintf(status->title, "zzplay - %s%s",
+  sprintf(status->title, "ZZPlay - %s - %s%s",
+          status->backend[0] ? status->backend : "...",
           status->paused ? "paused" : "playing",
           status->loop ? " - loop" : "");
   if (strcmp(previous, status->title) != 0) {
@@ -211,7 +215,7 @@ int zzplay_statuswin_open(ZZPlayStatusWindow *status, const char *path,
   status->bitrate_kbps = bitrate_kbps;
   status->total_ms = total_ms;
   status->position_exact = 1;
-  strcpy(status->title, "zzplay");
+  strcpy(status->title, "ZZPlay");
   window = OpenWindowTags(
       0,
       WA_Title, (ULONG)status->title,

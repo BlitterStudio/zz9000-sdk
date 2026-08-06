@@ -1,6 +1,6 @@
-# `zzplay` — the ZZ9000 accelerated media player
+# ZZPlay — the ZZ9000 accelerated media player
 
-`zzplay` plays MPEG-1 Program Streams and standalone MP3 files using the
+ZZPlay plays MPEG-1 Program Streams and standalone MP3 files using the
 ZZ9000's ARM coprocessor and FPGA video overlay. Video decoding happens on the
 card; on the accelerated Zorro III path no decoded video ever crosses the
 Zorro bus.
@@ -17,18 +17,19 @@ The format is chosen by inspecting the file, not by its name. MPEG-1
 elementary streams, standalone MP2, MPEG-2 and other codecs are rejected with
 a specific message rather than being half-played.
 
-Video requires Zorro III and the Picasso96 overlay. On Zorro II `zzplay`
+Video requires Zorro III and the Picasso96 overlay. On Zorro II ZZPlay
 reports that clearly and standalone MP3 still works.
 
 ## Starting it
 
-**Shell.** `zzplay [options] <file>`
+**Shell.** `zzplay [options] <file>` — AmigaDOS is case-insensitive, so the
+lower-case spelling works even though the file installs as `C:ZZPlay`.
 
-**Workbench.** Drop a media file onto the `zzplay` icon, double-click a
-project icon whose default tool is `zzplay`, or double-click `zzplay` itself
-and pick a file from the requester that appears.
+**Workbench.** Drop a media file onto the **ZZPlay** icon, double-click a
+project icon whose default tool is `ZZPlay`, or double-click ZZPlay itself and
+pick a file from the requester that appears.
 
-A copy of a suitable project icon ships as `Docs/zzplay-project.info`. To use
+A copy of a suitable project icon ships as `Docs/ZZPlay-project.info`. To use
 it, copy it next to your media file and rename it to match — for example, for
 `Video:holiday.mpg`, copy it to `Video:holiday.mpg.info`.
 
@@ -93,15 +94,18 @@ stealing it, and `AUTO` falls back and says so.
 
 Fullscreen scales the video up to fill the display, preserving aspect: a
 640x480 clip on a 1280x1024 screen becomes 1280x960 with the remainder left
-as a border. The scaling is done by the FPGA overlay, so the frame rate is
+as a border. Unless `QUIET` is in force, the resulting window geometry is
+printed, so it is always possible to confirm what was actually applied. The scaling is done by the FPGA overlay, so the frame rate is
 unaffected. Pressing F again restores the exact window position and size you
 had before.
 
 ### Standalone MP3
 
 MP3 playback has no video window, so it opens a small player window instead,
-showing the file name, sample rate, channel mode and bitrate, the selected
-backend, elapsed and total time with a position bar, and the same controls.
+showing the file name; sample rate, channel mode and bitrate; an `Output:`
+line naming the backend actually in use (MHI or AHI); elapsed and total time
+with a position bar; and the control legend. The backend also appears in the
+window title, so it stays readable when the window is partly covered.
 The duration is estimated from the file size, so for a VBR file both it and
 the elapsed time are approximate; an approximate position is shown with a
 leading `~`.
@@ -112,7 +116,7 @@ what keeps playback gap-free.
 
 ## Presentation path
 
-`zzplay` reports which path actually presented your video, asked of the
+ZZPlay reports which path actually presented your video, asked of the
 firmware rather than guessed:
 
 - **native 1:1** — exact size and fully visible, straight from the FPGA
@@ -130,7 +134,7 @@ reported. Restoring the window to exact size returns to native 1:1.
 ## Diagnostics
 
 `zz9k-mp3` remains the low-level MP3 decode diagnostic, producing raw or WAV
-output for exactness checking. `zzplay` is the player; `zz9k-mp3` is the
+output for exactness checking. ZZPlay is the player; `zz9k-mp3` is the
 instrument.
 
 `--benchmark` disables pacing so decode throughput can be measured
