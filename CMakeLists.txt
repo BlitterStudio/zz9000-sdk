@@ -479,6 +479,7 @@ add_library(zzplay_core STATIC
   tools/zzplay-media.c
   tools/zzplay-mp3-transport.c
   tools/zzplay-options.c
+  tools/zzplay-path.c
   tools/zzplay-probe.c
   tools/zzplay-stats.c
   tools/zzplay-stream.c
@@ -541,6 +542,13 @@ add_executable(zzplay_media_test
 
 target_link_libraries(zzplay_media_test PRIVATE zzplay_core)
 add_test(NAME zzplay_media_test COMMAND zzplay_media_test)
+
+add_executable(zzplay_path_test
+  tests/zzplay_path_test.c
+)
+
+target_link_libraries(zzplay_path_test PRIVATE zzplay_core)
+add_test(NAME zzplay_path_test COMMAND zzplay_path_test)
 
 add_executable(zzplay_ahi_source_test
   tests/zzplay_ahi_source_test.c

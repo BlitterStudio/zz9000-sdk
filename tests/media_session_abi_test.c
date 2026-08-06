@@ -38,6 +38,20 @@ static int test_constants_and_layout(void)
   if (ZZ9K_MEDIA_SESSION_RESULT_AUDIO_DRAINED != (1U << 13)) return 23;
   if (ZZ9K_MEDIA_SESSION_RESULT_AUDIO_UNDERRUN != (1U << 14)) return 24;
   if (ZZ9K_MEDIA_STATUS_AUDIO_OUTPUT != 3U) return 25;
+  if (ZZ9K_MEDIA_STATUS_PRESENTATION != 4U) return 26;
+  if (ZZ9K_MEDIA_PRESENT_CONFIGURED != (1U << 0)) return 27;
+  if (ZZ9K_MEDIA_PRESENT_ACTIVE != (1U << 1)) return 28;
+  if (ZZ9K_MEDIA_PRESENT_NATIVE != (1U << 2)) return 29;
+  if (ZZ9K_MEDIA_PRESENT_OWNED != (1U << 3)) return 30;
+  if (ZZ9K_MEDIA_PACK_PAIR(320U, 240U) != ((320ULL << 16) | 240ULL))
+    return 31;
+  if (ZZ9K_MEDIA_PAIR_HI(ZZ9K_MEDIA_PACK_PAIR(320U, 240U)) != 320U ||
+      ZZ9K_MEDIA_PAIR_LO(ZZ9K_MEDIA_PACK_PAIR(320U, 240U)) != 240U)
+    return 32;
+  /* Signed destination origins must round-trip through the packing. */
+  if (ZZ9K_MEDIA_PAIR_HI_S(ZZ9K_MEDIA_PACK_PAIR(-16, -9)) != -16 ||
+      ZZ9K_MEDIA_PAIR_LO_S(ZZ9K_MEDIA_PACK_PAIR(-16, -9)) != -9)
+    return 33;
   return 0;
 }
 
@@ -187,7 +201,7 @@ static int test_request_builders(void)
       ZZ9K_STATUS_OK)
     return 18;
   if (zz9k_request_media_session_status(
-          &request, 9U, ZZ9K_MEDIA_STATUS_AUDIO_OUTPUT + 1U, 0U) !=
+          &request, 9U, ZZ9K_MEDIA_STATUS_PRESENTATION + 1U, 0U) !=
       ZZ9K_STATUS_BAD_REQUEST)
     return 19;
   return 0;
@@ -325,10 +339,29 @@ static int test_reply_decoders(void)
     return 16;
   reply.opcode = ZZ9K_OP_MEDIA_SESSION_STATUS;
   zz9k_put_be32(&reply.payload.inline_data[8],
-                ZZ9K_MEDIA_STATUS_AUDIO_OUTPUT + 1U);
+                ZZ9K_MEDIA_STATUS_PRESENTATION + 1U);
   if (zz9k_reply_media_session_status(&reply, &status_result) !=
       ZZ9K_STATUS_INTERNAL_ERROR)
     return 17;
+
+  /* The presentation page reuses `flags` for its own namespace, so it must
+   * be validated against ZZ9K_MEDIA_PRESENT_* and not the session-result
+   * mask. A present-flag combination is legal here... */
+  zz9k_put_be32(&reply.payload.inline_data[8],
+                ZZ9K_MEDIA_STATUS_PRESENTATION);
+  zz9k_put_be32(&reply.payload.inline_data[12],
+                ZZ9K_MEDIA_PRESENT_CONFIGURED | ZZ9K_MEDIA_PRESENT_ACTIVE |
+                    ZZ9K_MEDIA_PRESENT_NATIVE | ZZ9K_MEDIA_PRESENT_OWNED);
+  if (zz9k_reply_media_session_status(&reply, &status_result) !=
+          ZZ9K_STATUS_OK ||
+      status_result.page != ZZ9K_MEDIA_STATUS_PRESENTATION)
+    return 18;
+  /* ...while an out-of-namespace bit is still rejected. */
+  zz9k_put_be32(&reply.payload.inline_data[12],
+                ZZ9K_MEDIA_SESSION_RESULT_AUDIO_UNDERRUN);
+  if (zz9k_reply_media_session_status(&reply, &status_result) !=
+      ZZ9K_STATUS_INTERNAL_ERROR)
+    return 19;
   return 0;
 }
 

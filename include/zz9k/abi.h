@@ -1977,8 +1977,34 @@ enum ZZ9KMediaStatusPage {
   ZZ9K_MEDIA_STATUS_AUDIO = 1U,
   ZZ9K_MEDIA_STATUS_COUNTERS = 2U,
   /* DMA-retired frames, DMA-queued frames, staged source frames, underruns. */
-  ZZ9K_MEDIA_STATUS_AUDIO_OUTPUT = 3U
+  ZZ9K_MEDIA_STATUS_AUDIO_OUTPUT = 3U,
+  /* Overlay presentation path and geometry: source size, destination size,
+   * destination origin, screen size. Firmware that predates this page
+   * answers ZZ9K_STATUS_BAD_REQUEST, which is the intended capability gate —
+   * a client seeing that reports the presentation path as unavailable rather
+   * than failing playback. */
+  ZZ9K_MEDIA_STATUS_PRESENTATION = 4U
 };
+
+/* ZZ9K_MEDIA_STATUS_PRESENTATION `flags` bits. NATIVE distinguishes the FPGA
+ * overlay plane from the card-local ARM shadow compositor; OWNED says the
+ * queried session is the one feeding that overlay. */
+enum ZZ9KMediaPresentFlags {
+  ZZ9K_MEDIA_PRESENT_CONFIGURED = 1U << 0,
+  ZZ9K_MEDIA_PRESENT_ACTIVE = 1U << 1,
+  ZZ9K_MEDIA_PRESENT_NATIVE = 1U << 2,
+  ZZ9K_MEDIA_PRESENT_OWNED = 1U << 3
+};
+
+/* Each presentation value carries two 16-bit halves: width/height, or x/y.
+ * Signed coordinates travel as their two's-complement 16-bit pattern.
+ * Mirrored as SDK_MEDIA_PACK_PAIR in the firmware. */
+#define ZZ9K_MEDIA_PACK_PAIR(hi, lo) \
+  (((uint64_t)(uint16_t)(hi) << 16) | (uint64_t)(uint16_t)(lo))
+#define ZZ9K_MEDIA_PAIR_HI(v) ((uint16_t)(((v) >> 16) & 0xffffU))
+#define ZZ9K_MEDIA_PAIR_LO(v) ((uint16_t)((v) & 0xffffU))
+#define ZZ9K_MEDIA_PAIR_HI_S(v) ((int16_t)ZZ9K_MEDIA_PAIR_HI(v))
+#define ZZ9K_MEDIA_PAIR_LO_S(v) ((int16_t)ZZ9K_MEDIA_PAIR_LO(v))
 
 enum ZZ9KCryptoHashAlgorithm {
   ZZ9K_CRYPTO_HASH_NONE = 0,

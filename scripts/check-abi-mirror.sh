@@ -91,6 +91,28 @@ FNR == NR {
     }
     if (name != "" && bit ~ /^[0-9]+$/) sdkcap[name] = bit + 0
   }
+  # ZZ9K_MEDIA_STATUS_<NAME> = <dec>U   (paged MEDIA_SESSION STATUS selectors;
+  # name at 19: "ZZ9K_MEDIA_STATUS_"). A page number that disagrees across the
+  # repos silently returns the wrong counters instead of failing.
+  if (s ~ /ZZ9K_MEDIA_STATUS_[A-Z0-9_]+ = [0-9]+/) {
+    name = ""; val = ""
+    for (i = 1; i <= n; i++) {
+      if (a[i] ~ /^ZZ9K_MEDIA_STATUS_/) name = substr(a[i], 19)
+      else if (a[i] ~ /^[0-9]+[uUlL]*$/) val = a[i]
+    }
+    if (name != "" && val != "") {
+      sub(/[uUlL]+$/, "", val); sdkpage[name] = val + 0
+    }
+  }
+  # ZZ9K_MEDIA_PRESENT_<NAME> = 1U << <bit>   (name at 20)
+  if (s ~ /ZZ9K_MEDIA_PRESENT_[A-Z0-9_]+ = 1U? << [0-9]+/) {
+    name = ""; bit = ""
+    for (i = 1; i <= n; i++) {
+      if (a[i] ~ /^ZZ9K_MEDIA_PRESENT_/) name = substr(a[i], 20)
+      else if (a[i] == "<<" && (i + 1) <= n) bit = a[i + 1]
+    }
+    if (name != "" && bit ~ /^[0-9]+$/) sdkpresent[name] = bit + 0
+  }
   next
 }
 # ---- firmware header (second file) ----
@@ -126,6 +148,26 @@ FNR == NR {
     else if (a[i] == "<<" && (i + 1) <= n) bit = a[i + 1]
   }
   if (name != "" && bit ~ /^[0-9]+$/) fwcap[name] = bit + 0
+}
+# #define SDK_MEDIA_STATUS_<NAME> <dec>U   (name at 18: "SDK_MEDIA_STATUS_")
+/^[ \t]*#[ \t]*define[ \t]+SDK_MEDIA_STATUS_[A-Z0-9_]+[ \t]+[0-9]/ {
+  s = $0; gsub(/[ \t]+/, " ", s); n = split(s, a, " ")
+  name = ""; val = ""
+  for (i = 1; i <= n; i++) {
+    if (a[i] ~ /^SDK_MEDIA_STATUS_/) name = substr(a[i], 18)
+    else if (a[i] ~ /^[0-9]+[uUlL]*$/) val = a[i]
+  }
+  if (name != "" && val != "") { sub(/[uUlL]+$/, "", val); fwpage[name] = val + 0 }
+}
+# #define SDK_MEDIA_PRESENT_<NAME> (1U << <bit>)   (name at 19)
+/^[ \t]*#[ \t]*define[ \t]+SDK_MEDIA_PRESENT_[A-Z0-9_]+[ \t]+.*<</ {
+  s = $0; gsub(/[()]/, " ", s); gsub(/[ \t]+/, " ", s); n = split(s, a, " ")
+  name = ""; bit = ""
+  for (i = 1; i <= n; i++) {
+    if (a[i] ~ /^SDK_MEDIA_PRESENT_/) name = substr(a[i], 19)
+    else if (a[i] == "<<" && (i + 1) <= n) bit = a[i + 1]
+  }
+  if (name != "" && bit ~ /^[0-9]+$/) fwpresent[name] = bit + 0
 }
 END {
   mism = 0; common = 0; sdkonly = 0; fwonly = 0
@@ -180,8 +222,29 @@ END {
       }
     }
   }
-  printf("check-abi-mirror: %d common name(s) compared (incl. %d service flag[s], %d cap bit[s]), %d SDK-only, %d firmware-only op(s)\n",
-         common, flagcommon, capcommon, sdkonly, fwonly)
+  # Compare paged MEDIA_SESSION STATUS selectors and presentation flag bits.
+  pagecommon = 0
+  for (pg in sdkpage) {
+    if (pg in fwpage) {
+      common++; pagecommon++
+      if (sdkpage[pg] != fwpage[pg]) {
+        printf("  MISMATCH  status page %-14s SDK ZZ9K_MEDIA_STATUS_%s=%d  FW SDK_MEDIA_STATUS_%s=%d\n",
+               pg, pg, sdkpage[pg], pg, fwpage[pg]); mism++
+      }
+    }
+  }
+  presentcommon = 0
+  for (pf in sdkpresent) {
+    if (pf in fwpresent) {
+      common++; presentcommon++
+      if (sdkpresent[pf] != fwpresent[pf]) {
+        printf("  MISMATCH  present flag %-13s SDK ZZ9K_MEDIA_PRESENT_%s=1<<%d  FW SDK_MEDIA_PRESENT_%s=1<<%d\n",
+               pf, pf, sdkpresent[pf], pf, fwpresent[pf]); mism++
+      }
+    }
+  }
+  printf("check-abi-mirror: %d common name(s) compared (incl. %d service flag[s], %d cap bit[s], %d status page[s], %d present flag[s]), %d SDK-only, %d firmware-only op(s)\n",
+         common, flagcommon, capcommon, pagecommon, presentcommon, sdkonly, fwonly)
   if (sdkonly > 0) printf("  SDK-only ops (firmware does not implement):%s\n", sdkonly_names)
   if (fwonly  > 0) printf("  firmware-only ops (not in SDK abi.h):%s\n", fwonly_names)
   if (mism > 0) { printf("check-abi-mirror: FAIL — %d mismatch(es)\n", mism); exit 1 }

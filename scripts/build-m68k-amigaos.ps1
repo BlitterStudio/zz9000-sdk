@@ -33,7 +33,7 @@ for src in bitio crcio dhuf extract huf larc maketbl maketree shuf slide zz9k_lh
     -c tools/lha-unix/$src.c -o build/m68k/lha-$src.o
 done
 LHA_OBJS="build/m68k/lha-bitio.o build/m68k/lha-crcio.o build/m68k/lha-dhuf.o build/m68k/lha-extract.o build/m68k/lha-huf.o build/m68k/lha-larc.o build/m68k/lha-maketbl.o build/m68k/lha-maketree.o build/m68k/lha-shuf.o build/m68k/lha-slide.o build/m68k/lha-zz9k_lha_unix.o build/m68k/lha-zz9k_lha_unix_support.o"
-ZZPLAY_SOURCES="tools/zzplay-ahi.c tools/zzplay-audio.c tools/zzplay-audio-clock.c tools/zzplay-ax.c tools/zzplay-core.c tools/zzplay-media.c tools/zzplay-mhi.c tools/zzplay-mp3.c tools/zzplay-mp3-transport.c tools/zzplay-options.c tools/zzplay-probe.c tools/zzplay-stats.c tools/zzplay-stream.c tools/zzplay-sync.c tools/zzplay-video.c tools/zzplay.c"
+ZZPLAY_SOURCES="tools/zzplay-ahi.c tools/zzplay-audio.c tools/zzplay-audio-clock.c tools/zzplay-ax.c tools/zzplay-core.c tools/zzplay-media.c tools/zzplay-mhi.c tools/zzplay-mp3.c tools/zzplay-mp3-transport.c tools/zzplay-options.c tools/zzplay-path.c tools/zzplay-probe.c tools/zzplay-stats.c tools/zzplay-stream.c tools/zzplay-sync.c tools/zzplay-video.c tools/zzplay.c"
 
 m68k-amigaos-gcc -noixemul -nostartfiles -Os -s -Iinclude -Ihost/include -Iamiga/include \
   build/m68k/zz9k_library_resident.o build/m68k/zz9k_library.o \
