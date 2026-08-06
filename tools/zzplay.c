@@ -2375,27 +2375,13 @@ playback_session:
       TimeVal_Type started;
       size_t read_capacity = runtime.input.length;
       size_t got;
-      /* The shared input buffer is host-window memory and directly
-       * addressable, so read into it and skip the staging copy entirely.
-       * That copy cost 8.4 ms per 64 KiB on the r2 bench, second only to
-       * the file read itself, and it is the ceiling DVD-rate MPEG-2 would
-       * hit first. Host writes reach the card through the cache-coherent
-       * ACP port, so no cache maintenance is owed for them.
-       *
-       * The cast drops `volatile` deliberately: fread() writes plain bytes
-       * and nothing here depends on per-access ordering, which is the only
-       * thing the qualifier would buy. The firmware does not read this
-       * buffer until the WRITE that follows tells it to. */
-      void *destination = (void *)(uintptr_t)runtime.input.data;
 
-      if (!destination) {
-        destination = zzplay_input_staging;
-        if (read_capacity > sizeof(zzplay_input_staging)) {
-          read_capacity = sizeof(zzplay_input_staging);
-        }
+      if (read_capacity > sizeof(zzplay_input_staging)) {
+        read_capacity = sizeof(zzplay_input_staging);
       }
       zzplay_profile_begin(&runtime, &started);
-      got = fread(destination, 1U, read_capacity, runtime.file);
+      got = fread(zzplay_input_staging, 1U,
+                  read_capacity, runtime.file);
       zzplay_profile_end(
           &runtime, &started, ZZPLAY_PROFILE_FILE_READ);
 
@@ -2404,7 +2390,7 @@ playback_session:
         zzplay_fail(&runtime, ZZPLAY_FAILURE_IO, ZZ9K_STATUS_IO_ERROR);
         break;
       }
-      if (got != 0U && destination == (void *)zzplay_input_staging) {
+      if (got != 0U) {
         int copied;
 
         zzplay_profile_begin(&runtime, &started);

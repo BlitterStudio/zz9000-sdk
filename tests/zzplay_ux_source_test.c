@@ -156,27 +156,6 @@ static int check_player(const char *path)
    * fails with PIPERR_OUTOFPENS (4). */
   if (find(s, "P96SA_SharePens") < 0L) { rc = 25; goto done; }
 
-  /* U7: input must be read straight into the shared buffer. The staging
-   * copy cost 8.4 ms per 64 KiB - second only to the file read - and is the
-   * ceiling DVD-rate MPEG-2 would hit first. The staging path stays only as
-   * a fallback for when the buffer is not host-addressable. */
-  if (find(s, "void *destination = (void *)(uintptr_t)runtime.input.data") <
-      0L) {
-    rc = 26;
-    goto done;
-  }
-  if (find(s, "got = fread(destination, 1U, read_capacity, runtime.file)") <
-      0L) {
-    rc = 27;
-    goto done;
-  }
-  /* The copy must be conditional on having fallen back, not unconditional. */
-  if (find(s, "got != 0U && destination == (void *)zzplay_input_staging") <
-      0L) {
-    rc = 28;
-    goto done;
-  }
-
   /* Fullscreen must not paint a title bar it does not have. */
   if (find(s, "runtime->fullscreen) {\n    runtime->title_dirty = 0U;") < 0L) {
     rc = 13;
