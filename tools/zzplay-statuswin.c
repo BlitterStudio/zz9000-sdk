@@ -18,8 +18,10 @@ struct GfxBase *GfxBase;
 static int zzplay_statuswin_owns_gfx;
 
 #define ZZPLAY_STATUSWIN_WIDTH 384
-#define ZZPLAY_STATUSWIN_HEIGHT 68
-#define ZZPLAY_STATUSWIN_LINE 10
+/* Five text lines plus the position bar. The pixel height is computed from
+ * the screen font at open time, never assumed. */
+#define ZZPLAY_STATUSWIN_LINES 6
+#define ZZPLAY_STATUSWIN_BAR 4
 
 /* Keep only the final path component so the display stays readable. */
 static const char *zzplay_statuswin_basename(const char *path)
@@ -46,12 +48,20 @@ static void zzplay_statuswin_time(char *out, uint32_t ms)
           (unsigned long)(seconds % 60U));
 }
 
-static void zzplay_statuswin_line(struct Window *window, int index,
+/* Baseline of text line `index`, measured from the top of the inner area. */
+static int zzplay_statuswin_line_y(const ZZPlayStatusWindow *status,
+                                   int index)
+{
+  return index * status->line_height + status->baseline;
+}
+
+static void zzplay_statuswin_line(ZZPlayStatusWindow *status, int index,
                                   const char *text)
 {
+  struct Window *window = (struct Window *)status->window;
   struct RastPort *rp = window->RPort;
-  int x = window->BorderLeft + 4;
-  int y = window->BorderTop + 2 + (index + 1) * ZZPLAY_STATUSWIN_LINE;
+  int x = window->BorderLeft + status->text_left;
+  int y = window->BorderTop + 2 + zzplay_statuswin_line_y(status, index);
 
   SetAPen(rp, 1U);
   SetBPen(rp, 0U);
@@ -87,7 +97,7 @@ static void zzplay_statuswin_draw(ZZPlayStatusWindow *status)
            (WORD)(window->Height - window->BorderBottom - 1));
 
   sprintf(line, "%.60s", status->name);
-  zzplay_statuswin_line(window, 0, line);
+  zzplay_statuswin_line(status, 0, line);
 
   if (status->sample_rate != 0U) {
     sprintf(line, "%lu Hz  %s  %lu kbps",
@@ -97,11 +107,11 @@ static void zzplay_statuswin_draw(ZZPlayStatusWindow *status)
   } else {
     strcpy(line, "");
   }
-  zzplay_statuswin_line(window, 1, line);
+  zzplay_statuswin_line(status, 1, line);
 
   sprintf(line, "Output: %s", status->backend[0] ? status->backend
                                                  : "selecting...");
-  zzplay_statuswin_line(window, 2, line);
+  zzplay_statuswin_line(status, 2, line);
 
   zzplay_statuswin_time(elapsed, status->elapsed_ms);
   if (status->total_ms != 0U) {
@@ -114,13 +124,14 @@ static void zzplay_statuswin_draw(ZZPlayStatusWindow *status)
             elapsed, status->paused ? "PAUSED" : "playing",
             status->loop ? "  loop" : "");
   }
-  zzplay_statuswin_line(window, 3, line);
+  zzplay_statuswin_line(status, 3, line);
 
   /* Position bar. Only meaningful when the duration is known. */
   if (status->total_ms != 0U) {
-    int bar_left = left + 4;
-    int bar_right = right - 5;
-    int bar_y = top + 2 + 5 * ZZPLAY_STATUSWIN_LINE - 4;
+    int bar_left = left + status->text_left;
+    int bar_right = right - status->text_left - 1;
+    int bar_y = top + 2 + 4 * status->line_height +
+                (status->line_height - ZZPLAY_STATUSWIN_BAR) / 2;
     int span = bar_right - bar_left;
     uint32_t done = status->elapsed_ms;
 
@@ -133,16 +144,18 @@ static void zzplay_statuswin_draw(ZZPlayStatusWindow *status)
       filled = (int)(((uint32_t)span * done) / status->total_ms);
       SetAPen(rp, 2U);
       RectFill(rp, (WORD)bar_left, (WORD)bar_y,
-               (WORD)(bar_right), (WORD)(bar_y + 3));
+               (WORD)(bar_right),
+               (WORD)(bar_y + ZZPLAY_STATUSWIN_BAR - 1));
       if (filled > 0) {
         SetAPen(rp, 3U);
         RectFill(rp, (WORD)bar_left, (WORD)bar_y,
-                 (WORD)(bar_left + filled), (WORD)(bar_y + 3));
+                 (WORD)(bar_left + filled),
+                 (WORD)(bar_y + ZZPLAY_STATUSWIN_BAR - 1));
       }
     }
   }
 
-  zzplay_statuswin_line(window, 5, "Space pause   Q stop   L loop");
+  zzplay_statuswin_line(status, 5, "Space pause   Q stop   L loop");
   status->dirty = 0;
 }
 
@@ -194,6 +207,7 @@ int zzplay_statuswin_open(ZZPlayStatusWindow *status, const char *path,
                           uint32_t bitrate_kbps, uint32_t total_ms)
 {
   struct Window *window;
+  int inner_height;
 
   if (!status) {
     return 0;
@@ -216,11 +230,30 @@ int zzplay_statuswin_open(ZZPlayStatusWindow *status, const char *path,
   status->total_ms = total_ms;
   status->position_exact = 1;
   strcpy(status->title, "ZZPlay");
+  /* Size from the screen's actual font. A hardcoded 10-pixel line clipped
+   * the descenders of a taller Workbench font by a pixel or two. */
+  status->line_height = 10;
+  status->baseline = 8;
+  status->text_left = 4;
+  {
+    struct Screen *screen = LockPubScreen(0);
+
+    if (screen) {
+      struct TextFont *font = screen->RastPort.Font;
+
+      if (font && font->tf_YSize > 0) {
+        status->line_height = (int)font->tf_YSize + 2;
+        status->baseline = (int)font->tf_Baseline + 1;
+      }
+      UnlockPubScreen(0, screen);
+    }
+  }
+  inner_height = ZZPLAY_STATUSWIN_LINES * status->line_height + 4;
   window = OpenWindowTags(
       0,
       WA_Title, (ULONG)status->title,
       WA_InnerWidth, (ULONG)ZZPLAY_STATUSWIN_WIDTH,
-      WA_InnerHeight, (ULONG)ZZPLAY_STATUSWIN_HEIGHT,
+      WA_InnerHeight, (ULONG)inner_height,
       WA_PubScreenName, (ULONG)"Workbench",
       WA_Activate, TRUE,
       WA_DragBar, TRUE,

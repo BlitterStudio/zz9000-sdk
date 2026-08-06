@@ -549,6 +549,9 @@ static int zzplay_mp3_mhi(
     return 0;
   }
   zzplay_info("zzplay: selected audio backend MHI (card-local Layer III)\n");
+  /* The player window has to be told too, or it shows "selecting..." for the
+   * whole track whenever MHI is the chosen backend. */
+  zzplay_mp3_report_backend(controls, "MHI");
   for (;;) {
     FILE *file = fopen(path, "rb");
 

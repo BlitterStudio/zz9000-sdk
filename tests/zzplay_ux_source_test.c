@@ -117,21 +117,18 @@ static int check_player(const char *path)
     goto done;
   }
 
-  /* Fullscreen covers the whole screen and insets the video with the PIP
-   * tags, so the letterbox is the window's own background and no desktop
-   * shows through - what a game playing a cutscene needs. The default
-   * Relativity would reinterpret Width/Height as an unused-pixel margin, so
-   * it must be cleared. */
-  if (find(s, "P96PIP_Relativity") < 0L) { rc = 17; goto done; }
-  if (find(s, "open_tags[i++].ti_Data = 0U;") < 0L) { rc = 18; goto done; }
-  if (find(s, "P96PIP_Width") < 0L || find(s, "P96PIP_Height") < 0L) {
-    rc = 19;
+  /* Setting the PIP rectangle explicitly makes p96PIP_OpenTagList fail on
+   * this driver, which is what turned fullscreen into a silent revert to
+   * windowed. The window is the only handle on the video geometry. */
+  /* Matched as a tag assignment, so the comment explaining why it must not
+   * come back does not itself trip the guard. */
+  if (find(s, "ti_Tag = P96PIP_Left") >= 0L ||
+      find(s, "ti_Tag = P96PIP_Relativity") >= 0L) {
+    rc = 17;
     goto done;
   }
-  if (find(s, "placement.width = runtime->screen_w") < 0L) {
-    rc = 20;
-    goto done;
-  }
+  /* A failed PIP open must report the P96 error, not just fall back. */
+  if (find(s, "P96 error") < 0L) { rc = 18; goto done; }
 
   /* Fullscreen must not paint a title bar it does not have. */
   if (find(s, "runtime->fullscreen) {\n    runtime->title_dirty = 0U;") < 0L) {

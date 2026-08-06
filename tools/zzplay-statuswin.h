@@ -29,6 +29,11 @@ typedef struct ZZPlayStatusWindow {
   int stop;
   int loop;
   int dirty;
+  /* Layout derived from the screen font rather than assumed, so a taller
+   * font is not clipped and a shorter one does not leave a gap. */
+  int line_height;
+  int baseline;
+  int text_left;
 } ZZPlayStatusWindow;
 
 /* Opens on the default public screen. Returns 0 if a window could not be

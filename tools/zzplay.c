@@ -536,15 +536,12 @@ static void zzplay_screen_size(struct ZZPlayRuntime *runtime,
   *height = runtime->screen_h;
 }
 
-/* `placement` is the window itself. `inset` is where the video sits inside
- * that window, or NULL to let the PIP fill the whole inner area (the normal
- * windowed case). Fullscreen covers the entire screen and insets the video,
- * so the letterbox is the window's own background rather than whatever
- * Workbench happens to have behind it - which is what a game playing a
- * cutscene needs. */
+/* `placement` is the window; the PIP always fills its inner area. Setting
+ * the PIP rectangle explicitly with P96PIP_Left/Top/Width/Height was tried
+ * and makes p96PIP_OpenTagList fail outright on this driver, so the window
+ * is the only handle on the video geometry. */
 static struct Window *zzplay_open_pip(const ZZPlayVideoInfo *info,
                                       const ZZPlayRect *placement,
-                                      const ZZPlayRect *inset,
                                       int fullscreen,
                                       uint16_t limit_w, uint16_t limit_h,
                                       const char *title,
@@ -569,21 +566,6 @@ static struct Window *zzplay_open_pip(const ZZPlayVideoInfo *info,
   open_tags[i++].ti_Data = P96PIPT_MemoryWindow;
   open_tags[i].ti_Tag = P96PIP_ErrorCode;
   open_tags[i++].ti_Data = (ULONG)pip_error;
-  if (inset) {
-    /* Relativity defaults to PIPRel_Width|PIPRel_Height, under which Width
-     * and Height mean "pixels NOT used at the right/bottom". Clear it so
-     * these are plain absolute coordinates inside the window. */
-    open_tags[i].ti_Tag = P96PIP_Relativity;
-    open_tags[i++].ti_Data = 0U;
-    open_tags[i].ti_Tag = P96PIP_Left;
-    open_tags[i++].ti_Data = (ULONG)(LONG)inset->x;
-    open_tags[i].ti_Tag = P96PIP_Top;
-    open_tags[i++].ti_Data = (ULONG)(LONG)inset->y;
-    open_tags[i].ti_Tag = P96PIP_Width;
-    open_tags[i++].ti_Data = inset->width;
-    open_tags[i].ti_Tag = P96PIP_Height;
-    open_tags[i++].ti_Data = inset->height;
-  }
   /* Request an exact video-area size. WA_Width/Height include borders and
    * silently force scaling even when the user has not resized the window. */
   open_tags[i].ti_Tag = WA_InnerWidth;
@@ -729,8 +711,6 @@ static int zzplay_open_pip_mode(struct ZZPlayRuntime *runtime,
                                 int fullscreen)
 {
   ZZPlayRect placement;
-  ZZPlayRect inset;
-  const ZZPlayRect *inset_ptr = 0;
 
   if (fullscreen) {
     uint16_t screen_w;
@@ -745,23 +725,20 @@ static int zzplay_open_pip_mode(struct ZZPlayRuntime *runtime,
     }
   }
   placement = zzplay_pip_placement(runtime, fullscreen);
-  if (fullscreen) {
-    /* The window becomes the whole screen and the video is inset centred
-     * inside it, so nothing of the desktop shows around the picture. */
-    inset = placement;
-    memset(&placement, 0, sizeof(placement));
-    placement.width = runtime->screen_w;
-    placement.height = runtime->screen_h;
-    inset_ptr = &inset;
-  }
 
   runtime->pip_error = 0;
   runtime->window = zzplay_open_pip(
-      &runtime->video_info, &placement, inset_ptr, fullscreen,
+      &runtime->video_info, &placement, fullscreen,
       runtime->screen_w, runtime->screen_h, runtime->title,
       &runtime->bitmap, &runtime->pip_error);
   if (!runtime->window) {
     runtime->pip_open_failed = 1U;
+    zzplay_info("zzplay: PIP open failed for %s %ux%u at %d,%d "
+                "(P96 error %ld)\n",
+                fullscreen ? "fullscreen" : "windowed",
+                (unsigned)placement.width, (unsigned)placement.height,
+                (int)placement.x, (int)placement.y,
+                (long)runtime->pip_error);
     return 0;
   }
   zzplay_cache_screen(runtime);
