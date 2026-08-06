@@ -12,3 +12,4 @@ build-cmake
 .omo
 build-host
 docs/plans
+.worktrees
