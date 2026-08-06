@@ -476,6 +476,7 @@ add_library(zzplay_core STATIC
   tools/zzplay-audio-clock.c
   tools/zzplay-ax.c
   tools/zzplay-core.c
+  tools/zzplay-geometry.c
   tools/zzplay-media.c
   tools/zzplay-mp3-transport.c
   tools/zzplay-options.c
@@ -556,6 +557,13 @@ add_executable(zzplay_options_test
 
 target_link_libraries(zzplay_options_test PRIVATE zzplay_core)
 add_test(NAME zzplay_options_test COMMAND zzplay_options_test)
+
+add_executable(zzplay_geometry_test
+  tests/zzplay_geometry_test.c
+)
+
+target_link_libraries(zzplay_geometry_test PRIVATE zzplay_core)
+add_test(NAME zzplay_geometry_test COMMAND zzplay_geometry_test)
 
 add_executable(zzplay_icon_test
   tests/zzplay_icon_test.c

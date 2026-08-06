@@ -203,13 +203,59 @@ ZZPlayControlAction zzplay_control_action(int ctrl_c,
   return ZZPLAY_CONTROL_NONE;
 }
 
+ZZPlayControlAction zzplay_control_action_from_key(unsigned key)
+{
+  switch (key) {
+  case ' ':
+    return ZZPLAY_CONTROL_TOGGLE_PAUSE;
+  case 0x1bU: /* Escape */
+  case 'q':
+  case 'Q':
+    return ZZPLAY_CONTROL_STOP_KEY;
+  case 'f':
+  case 'F':
+    return ZZPLAY_CONTROL_TOGGLE_FULLSCREEN;
+  case 'l':
+  case 'L':
+    return ZZPLAY_CONTROL_TOGGLE_LOOP;
+  default:
+    return ZZPLAY_CONTROL_NONE;
+  }
+}
+
+ZZPlayControlAction zzplay_control_resolve(const ZZPlayControlInput *input)
+{
+  if (!input) {
+    return ZZPLAY_CONTROL_NONE;
+  }
+  /* Stops win over everything else in the same poll: a user who closed the
+   * window is not also asking to go fullscreen. */
+  if (input->ctrl_c) {
+    return ZZPLAY_CONTROL_STOP_CTRL_C;
+  }
+  if (input->window_close) {
+    return ZZPLAY_CONTROL_STOP_WINDOW;
+  }
+  return zzplay_control_action_from_key(input->key);
+}
+
+int zzplay_control_is_stop(ZZPlayControlAction action)
+{
+  return action == ZZPLAY_CONTROL_STOP_CTRL_C ||
+         action == ZZPLAY_CONTROL_STOP_WINDOW ||
+         action == ZZPLAY_CONTROL_STOP_KEY;
+}
+
 ZZPlayStopReason zzplay_control_stop_reason_from_action(
     ZZPlayControlAction action)
 {
   if (action == ZZPLAY_CONTROL_STOP_CTRL_C) {
     return ZZPLAY_STOP_CTRL_C;
   }
-  if (action == ZZPLAY_CONTROL_STOP_WINDOW) {
+  /* A key-driven stop is a deliberate user stop, exactly like the close
+   * gadget, and must retire resources through the same path. */
+  if (action == ZZPLAY_CONTROL_STOP_WINDOW ||
+      action == ZZPLAY_CONTROL_STOP_KEY) {
     return ZZPLAY_STOP_WINDOW_CLOSE;
   }
   return ZZPLAY_STOP_NONE;
