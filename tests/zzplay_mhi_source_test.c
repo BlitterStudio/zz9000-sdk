@@ -36,10 +36,22 @@ int main(int argc, char **argv)
   if (argc != 2 || !(source = read_file(argv[1]))) return 2;
   ok = strstr(source, "#include <libraries/mhi.h>") &&
        strstr(source, "#include <proto/mhi.h>") &&
-       strstr(source, "OpenLibrary((CONST_STRPTR)\"mhizz9000.library\"") &&
+       strstr(source,
+              "#define ZZPLAY_MHI_LIBRARY_PATH \"MHI/mhizz9000.library\"") &&
+       strstr(source,
+              "OpenLibrary((CONST_STRPTR)ZZPLAY_MHI_LIBRARY_PATH") &&
+       !strstr(source,
+               "OpenLibrary((CONST_STRPTR)\"mhizz9000.library\"") &&
+       strstr(source, "struct Library *MHIBase = 0;") &&
+       !strstr(source, "struct Library *MHIBase;") &&
        strstr(source, "MHIQuery(MHIQ_LAYER3)") &&
        strstr(source, "MHIAllocDecoder(") &&
        strstr(source, "MHIQueueBuffer(") &&
+       strstr(source, "int eof_announced = 0;") &&
+       strstr(source,
+              "if (eof && queued == 0U && !eof_announced) {") &&
+       strstr(source,
+              "MHIQueueBuffer(sink->decoder, sink->buffers[0], 0U)") &&
        strstr(source, "MHIGetEmpty(") &&
        strstr(source, "MHIGetStatus(") &&
        strstr(source, "MHIF_OUT_OF_DATA") &&

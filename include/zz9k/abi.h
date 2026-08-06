@@ -231,7 +231,10 @@ enum ZZ9KCapability {
    * that is reachable through the Zorro 2 board window. */
   ZZ9K_CAP_HOST_WINDOW_HEAP = 1U << 20,
   ZZ9K_CAP_VIDEO_DECODE = 1U << 21,
-  ZZ9K_CAP_MEDIA_SESSION = 1U << 22
+  ZZ9K_CAP_MEDIA_SESSION = 1U << 22,
+  /* AUDIO_STREAM_FEED_DRAIN preserves partial compressed input while
+   * draining complete frames and the bound playback tail. */
+  ZZ9K_CAP_AUDIO_STREAM_DRAIN = 1U << 23
 };
 
 /*
@@ -1877,7 +1880,10 @@ enum ZZ9KImageSessionResultFlags {
 };
 
 enum ZZ9KAudioStreamFeedFlags {
-  ZZ9K_AUDIO_STREAM_FEED_EOF = 1U << 0
+  ZZ9K_AUDIO_STREAM_FEED_EOF = 1U << 0,
+  /* Resumable starvation boundary: decode every complete frame currently
+   * buffered, retain any incomplete compressed frame, and drain PCM/output. */
+  ZZ9K_AUDIO_STREAM_FEED_DRAIN = 1U << 1
 };
 
 enum ZZ9KAudioStreamState {
@@ -1891,7 +1897,9 @@ enum ZZ9KAudioStreamResultFlags {
   ZZ9K_AUDIO_STREAM_RESULT_NEED_INPUT = 1U << 0,
   ZZ9K_AUDIO_STREAM_RESULT_PCM_READY = 1U << 1,
   ZZ9K_AUDIO_STREAM_RESULT_DONE = 1U << 2,
-  ZZ9K_AUDIO_STREAM_RESULT_BACKPRESSURE = 1U << 3
+  ZZ9K_AUDIO_STREAM_RESULT_BACKPRESSURE = 1U << 3,
+  /* The most recent resumable drain reached the real output frontier. */
+  ZZ9K_AUDIO_STREAM_RESULT_DRAINED = 1U << 4
 };
 
 enum ZZ9KVideoCodec {

@@ -8,7 +8,7 @@ The current library identity is:
 ```c
 #define ZZ9K_LIBRARY_NAME "zz9k.library"
 #define ZZ9K_LIBRARY_VERSION 2
-#define ZZ9K_LIBRARY_REVISION 25
+#define ZZ9K_LIBRARY_REVISION 27
 ```
 
 Open the library with at least version 2:
@@ -1579,6 +1579,16 @@ return the standard audio-stream result. Gate on
 `ZZ9K_LIBRARY_MIN_REVISION_AUDIO_PLAYBACK` and the `ZZ9K_CAP_AUDIO_PLAYBACK`
 capability bit from `ZZ9KQueryCaps()`; the ops return
 `ZZ9K_STATUS_UNSUPPORTED` on firmware that does not implement them.
+
+Library revision 27 accepts `ZZ9K_AUDIO_STREAM_FEED_DRAIN` in
+`ZZ9KAudioStreamFeed()`. Unlike permanent EOF, a drain decodes every complete
+MP3 frame currently available, retains an incomplete compressed-frame tail,
+and reports `ZZ9K_AUDIO_STREAM_RESULT_DRAINED` only after decoded PCM and the
+bound AX DMA tail have retired. Later non-empty input resumes the same stream.
+Callers that use this flag must require
+`ZZ9K_LIBRARY_MIN_REVISION_AUDIO_STREAM_DRAIN` and
+`ZZ9K_CAP_AUDIO_STREAM_DRAIN`; revision 26 and earlier reject the flag during
+client-side request validation.
 
 `ZZ9KAudioStreamBeginDesc.low_water_bytes` is the PCM-ring refill
 threshold: while a session is bound to the AX output, the firmware tops the

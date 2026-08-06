@@ -593,6 +593,23 @@ static int test_audio_stream_builders_encode_descriptors(void)
     return 10;
   }
 
+  memset(&feed, 0, sizeof(feed));
+  feed.session = 7U;
+  feed.flags = ZZ9K_AUDIO_STREAM_FEED_DRAIN;
+  if (zz9k_request_audio_stream_feed(&request, &feed) != ZZ9K_STATUS_OK) {
+    return 40;
+  }
+  feed_payload =
+      (const ZZ9KAudioStreamFeedPayload *)request.entry.payload.inline_data;
+  if (zz9k_get_be32(feed_payload->flags) != ZZ9K_AUDIO_STREAM_FEED_DRAIN) {
+    return 41;
+  }
+  feed.flags = ZZ9K_AUDIO_STREAM_FEED_EOF | ZZ9K_AUDIO_STREAM_FEED_DRAIN;
+  if (zz9k_request_audio_stream_feed(&request, &feed) !=
+      ZZ9K_STATUS_BAD_REQUEST) {
+    return 42;
+  }
+
   if (zz9k_request_audio_stream_read(&request, 7U, 8192U, 0U) !=
       ZZ9K_STATUS_OK) {
     return 11;

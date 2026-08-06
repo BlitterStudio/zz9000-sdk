@@ -155,6 +155,10 @@ static int test_capability_names(void)
                    "media-session")) {
     return 9;
   }
+  if (!expect_name(zz9k_capability_name(ZZ9K_CAP_AUDIO_STREAM_DRAIN),
+                   "audio-stream-drain")) {
+    return 10;
+  }
   if (zz9k_capability_name(0x80000000UL) != 0) {
     return 7;
   }
@@ -164,7 +168,7 @@ static int test_capability_names(void)
 
 static int test_capability_iteration(void)
 {
-  if (zz9k_known_capability_count() != 23U) {
+  if (zz9k_known_capability_count() != 24U) {
     return 1;
   }
   if (zz9k_known_capability_bit(0) != ZZ9K_CAP_MAILBOX) {
@@ -192,7 +196,8 @@ static int test_capability_iteration(void)
     return 9;
   }
   if (zz9k_known_capability_bit(22) != ZZ9K_CAP_MEDIA_SESSION) return 10;
-  if (zz9k_known_capability_bit(23) != 0U) return 11;
+  if (zz9k_known_capability_bit(23) != ZZ9K_CAP_AUDIO_STREAM_DRAIN) return 11;
+  if (zz9k_known_capability_bit(24) != 0U) return 12;
 
   return 0;
 }

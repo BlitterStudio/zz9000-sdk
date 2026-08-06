@@ -12,8 +12,12 @@
 #include <string.h>
 
 #define ZZPLAY_MHI_BUFFER_BYTES (16UL * 1024UL)
+#define ZZPLAY_MHI_LIBRARY_PATH "MHI/mhizz9000.library"
 
-struct Library *MHIBase;
+/* A strong definition prevents the Amiga linker from satisfying this base
+ * with libstubs.a(mhi.o), whose pre-main hook opens the unrelated
+ * MHI.library before zzplay can select the runtime driver. */
+struct Library *MHIBase = 0;
 
 ZZPlayMHIStatus zzplay_mhi_acquire(ZZPlayMHISink *sink)
 {
@@ -22,7 +26,7 @@ ZZPlayMHIStatus zzplay_mhi_acquire(ZZPlayMHISink *sink)
   }
   memset(sink, 0, sizeof(*sink));
   sink->signal_bit = -1;
-  MHIBase = OpenLibrary((CONST_STRPTR)"mhizz9000.library", 0U);
+  MHIBase = OpenLibrary((CONST_STRPTR)ZZPLAY_MHI_LIBRARY_PATH, 0U);
   if (!MHIBase) {
     return ZZPLAY_MHI_MISSING;
   }
@@ -90,6 +94,7 @@ ZZPlayMHIStatus zzplay_mhi_play_file(
   ZZPlayMHIStatus result = ZZPLAY_MHI_IO_ERROR;
   unsigned i;
   int eof = 0;
+  int eof_announced = 0;
 
   if (!sink || !sink->decoder || !file) {
     return ZZPLAY_MHI_IO_ERROR;
@@ -156,8 +161,18 @@ ZZPlayMHIStatus zzplay_mhi_play_file(
         }
       }
     }
+    if (eof && queued == 0U && !eof_announced) {
+      /* mhizz9000 extends the public queue call with a self-detecting
+       * zero-length EOF marker. Firmware needs the corresponding stream EOF
+       * flag to decode the last short input and drain a sub-period PCM tail. */
+      if (!MHIQueueBuffer(sink->decoder, sink->buffers[0], 0U)) {
+        goto done;
+      }
+      eof_announced = 1;
+    }
     status = MHIGetStatus(sink->decoder);
-    if (eof && queued == 0U && status == MHIF_OUT_OF_DATA) {
+    if (eof && queued == 0U && eof_announced &&
+        status == MHIF_OUT_OF_DATA) {
       result = ZZPLAY_MHI_OK;
       goto done;
     }

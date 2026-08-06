@@ -94,7 +94,7 @@ static inline uint32_t zz9k_missing_service_flags(uint32_t available_flags,
 
 static inline uint32_t zz9k_known_capability_count(void)
 {
-  return 23U;
+  return 24U;
 }
 
 static inline uint32_t zz9k_known_capability_bit(uint32_t index)
@@ -146,6 +146,8 @@ static inline uint32_t zz9k_known_capability_bit(uint32_t index)
     return ZZ9K_CAP_VIDEO_DECODE;
   case 22:
     return ZZ9K_CAP_MEDIA_SESSION;
+  case 23:
+    return ZZ9K_CAP_AUDIO_STREAM_DRAIN;
   default:
     return 0U;
   }
@@ -360,6 +362,8 @@ static inline const char *zz9k_capability_name(uint32_t capability_bit)
     return "video-decode";
   case ZZ9K_CAP_MEDIA_SESSION:
     return "media-session";
+  case ZZ9K_CAP_AUDIO_STREAM_DRAIN:
+    return "audio-stream-drain";
   default:
     return 0;
   }

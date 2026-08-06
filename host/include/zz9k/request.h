@@ -561,12 +561,12 @@ static inline int zz9k_request_audio_stream_feed(
     const ZZ9KAudioStreamFeedDesc *desc)
 {
   ZZ9KAudioStreamFeedPayload *payload;
+  ZZ9KAudioStreamFeedDesc validated;
 
-  if (!request || !desc || desc->session == 0U ||
-      desc->src_handle == ZZ9K_INVALID_HANDLE ||
-      (desc->src_length == 0U &&
-       (desc->flags & ZZ9K_AUDIO_STREAM_FEED_EOF) == 0U) ||
-      (desc->flags & ~ZZ9K_AUDIO_STREAM_FEED_EOF) != 0U) {
+  if (!request || !desc ||
+      !zz9k_audio_build_stream_feed_desc(
+          &validated, desc->session, desc->src_handle, desc->src_offset,
+          desc->src_length, desc->flags)) {
     return ZZ9K_STATUS_BAD_REQUEST;
   }
 

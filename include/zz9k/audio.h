@@ -106,9 +106,14 @@ static inline int zz9k_audio_build_stream_feed_desc(
     uint32_t src_length,
     uint32_t flags)
 {
+  const uint32_t terminal_flags =
+      ZZ9K_AUDIO_STREAM_FEED_EOF | ZZ9K_AUDIO_STREAM_FEED_DRAIN;
+
   if (!desc || session == 0U || src_handle == ZZ9K_INVALID_HANDLE ||
-      (src_length == 0U && (flags & ZZ9K_AUDIO_STREAM_FEED_EOF) == 0U) ||
-      (flags & ~ZZ9K_AUDIO_STREAM_FEED_EOF) != 0U) {
+      (src_length == 0U && (flags & terminal_flags) == 0U) ||
+      (flags & ~terminal_flags) != 0U ||
+      (flags & terminal_flags) == terminal_flags ||
+      ((flags & ZZ9K_AUDIO_STREAM_FEED_DRAIN) != 0U && src_length != 0U)) {
     return 0;
   }
 
