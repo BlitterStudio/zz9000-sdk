@@ -1983,8 +1983,30 @@ enum ZZ9KMediaStatusPage {
    * answers ZZ9K_STATUS_BAD_REQUEST, which is the intended capability gate —
    * a client seeing that reports the presentation path as unavailable rather
    * than failing playback. */
-  ZZ9K_MEDIA_STATUS_PRESENTATION = 4U
+  ZZ9K_MEDIA_STATUS_PRESENTATION = 4U,
+  /* Per-stage pipeline timing (U7). Each value packs one stage as
+   * (microseconds << 32) | calls, indexed by ZZ9KMediaProfileStage.
+   * Firmware without the page answers BAD_REQUEST, so a client reports
+   * profiling as unavailable rather than failing. */
+  ZZ9K_MEDIA_STATUS_PROFILE = 5U
 };
+
+enum ZZ9KMediaProfileStage {
+  ZZ9K_MEDIA_PROFILE_VIDEO_DECODE = 0,
+  ZZ9K_MEDIA_PROFILE_YUY2_PACK = 1,
+  ZZ9K_MEDIA_PROFILE_PRESENT = 2,
+  ZZ9K_MEDIA_PROFILE_AUDIO_DECODE = 3,
+  ZZ9K_MEDIA_PROFILE_STAGES = 4
+};
+
+/* Profile-page flags: names the live YUY2 pack kernel, so a before/after
+ * comparison states what it measured rather than assuming. */
+enum ZZ9KMediaProfileFlags {
+  ZZ9K_MEDIA_PROFILE_FLAG_NEON_PACK = 1U << 0
+};
+
+#define ZZ9K_MEDIA_PROFILE_US(v) ((uint32_t)((v) >> 32))
+#define ZZ9K_MEDIA_PROFILE_CALLS(v) ((uint32_t)((v) & 0xffffffffU))
 
 /* ZZ9K_MEDIA_STATUS_PRESENTATION `flags` bits. NATIVE distinguishes the FPGA
  * overlay plane from the card-local ARM shadow compositor; OWNED says the

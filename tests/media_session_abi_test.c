@@ -39,6 +39,17 @@ static int test_constants_and_layout(void)
   if (ZZ9K_MEDIA_SESSION_RESULT_AUDIO_UNDERRUN != (1U << 14)) return 24;
   if (ZZ9K_MEDIA_STATUS_AUDIO_OUTPUT != 3U) return 25;
   if (ZZ9K_MEDIA_STATUS_PRESENTATION != 4U) return 26;
+  if (ZZ9K_MEDIA_STATUS_PROFILE != 5U) return 34;
+  if (ZZ9K_MEDIA_PROFILE_STAGES != 4) return 35;
+  /* The packed (microseconds << 32) | calls encoding must round-trip. */
+  if (ZZ9K_MEDIA_PROFILE_US(((uint64_t)1234U << 32) | 56U) != 1234U)
+    return 36;
+  if (ZZ9K_MEDIA_PROFILE_CALLS(((uint64_t)1234U << 32) | 56U) != 56U)
+    return 37;
+  /* A full 32-bit microsecond total must not be truncated or sign-extended. */
+  if (ZZ9K_MEDIA_PROFILE_US(((uint64_t)0xffffffffU << 32) | 1U) !=
+      0xffffffffU)
+    return 38;
   if (ZZ9K_MEDIA_PRESENT_CONFIGURED != (1U << 0)) return 27;
   if (ZZ9K_MEDIA_PRESENT_ACTIVE != (1U << 1)) return 28;
   if (ZZ9K_MEDIA_PRESENT_NATIVE != (1U << 2)) return 29;
@@ -201,7 +212,7 @@ static int test_request_builders(void)
       ZZ9K_STATUS_OK)
     return 18;
   if (zz9k_request_media_session_status(
-          &request, 9U, ZZ9K_MEDIA_STATUS_PRESENTATION + 1U, 0U) !=
+          &request, 9U, ZZ9K_MEDIA_STATUS_PROFILE + 1U, 0U) !=
       ZZ9K_STATUS_BAD_REQUEST)
     return 19;
   return 0;
@@ -339,7 +350,7 @@ static int test_reply_decoders(void)
     return 16;
   reply.opcode = ZZ9K_OP_MEDIA_SESSION_STATUS;
   zz9k_put_be32(&reply.payload.inline_data[8],
-                ZZ9K_MEDIA_STATUS_PRESENTATION + 1U);
+                ZZ9K_MEDIA_STATUS_PROFILE + 1U);
   if (zz9k_reply_media_session_status(&reply, &status_result) !=
       ZZ9K_STATUS_INTERNAL_ERROR)
     return 17;
@@ -362,6 +373,21 @@ static int test_reply_decoders(void)
   if (zz9k_reply_media_session_status(&reply, &status_result) !=
       ZZ9K_STATUS_INTERNAL_ERROR)
     return 19;
+
+  /* The profile page owns its own flag namespace too. Validating one page
+   * against another's mask only appears to work while the bits overlap. */
+  zz9k_put_be32(&reply.payload.inline_data[8], ZZ9K_MEDIA_STATUS_PROFILE);
+  zz9k_put_be32(&reply.payload.inline_data[12],
+                ZZ9K_MEDIA_PROFILE_FLAG_NEON_PACK);
+  if (zz9k_reply_media_session_status(&reply, &status_result) !=
+          ZZ9K_STATUS_OK ||
+      (status_result.flags & ZZ9K_MEDIA_PROFILE_FLAG_NEON_PACK) == 0U)
+    return 20;
+  zz9k_put_be32(&reply.payload.inline_data[12],
+                ZZ9K_MEDIA_SESSION_RESULT_AUDIO_UNDERRUN);
+  if (zz9k_reply_media_session_status(&reply, &status_result) !=
+      ZZ9K_STATUS_INTERNAL_ERROR)
+    return 21;
   return 0;
 }
 

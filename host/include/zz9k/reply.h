@@ -571,6 +571,19 @@ static inline uint32_t zz9k_media_present_known_flags(void)
          ZZ9K_MEDIA_PRESENT_OWNED;
 }
 
+/* Each status page owns its `flags` namespace; validating one page against
+ * another's mask only appears to work while the bits happen to overlap. */
+static inline uint32_t zz9k_media_status_known_flags(uint32_t page)
+{
+  if (page == ZZ9K_MEDIA_STATUS_PRESENTATION) {
+    return zz9k_media_present_known_flags();
+  }
+  if (page == ZZ9K_MEDIA_STATUS_PROFILE) {
+    return ZZ9K_MEDIA_PROFILE_FLAG_NEON_PACK;
+  }
+  return zz9k_media_session_known_result_flags();
+}
+
 static inline int zz9k_reply_media_session_main(
     const ZZ9KMailboxEntry *reply,
     uint16_t opcode,
@@ -684,11 +697,9 @@ static inline int zz9k_reply_media_session_status(
   if (result->session == 0U ||
       result->state < ZZ9K_MEDIA_SESSION_STATE_NEED_INPUT ||
       result->state > ZZ9K_MEDIA_SESSION_STATE_ERROR ||
-      result->page > ZZ9K_MEDIA_STATUS_PRESENTATION ||
-      (result->page == ZZ9K_MEDIA_STATUS_PRESENTATION
-           ? (result->flags & ~zz9k_media_present_known_flags()) != 0U
-           : (result->flags &
-              ~zz9k_media_session_known_result_flags()) != 0U)) {
+      result->page > ZZ9K_MEDIA_STATUS_PROFILE ||
+      (result->flags & ~zz9k_media_status_known_flags(result->page)) !=
+          0U) {
     memset(result, 0, sizeof(*result));
     return ZZ9K_STATUS_INTERNAL_ERROR;
   }
