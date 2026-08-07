@@ -1,8 +1,10 @@
 /*
- * Experimental mpega.library compatibility resident.
+ * mpega.library compatibility resident.
  *
  * The resident can be built either as the side-by-side diagnostic
- * mpega.library.zz9k or as an exact-name mpega.library drop-in.
+ * mpega.library.zz9k or as an exact-name mpega.library drop-in. The
+ * installer ships the drop-in, and it implements the full public MPEGA
+ * API: Open, Close, DecodeFrame, Seek, Time, FindSync and Scale.
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -30,8 +32,21 @@
 #endif /* MPEGA_LIBRARY_NAME */
 
 #define MPEGA_LIBRARY_VERSION 2
-#define MPEGA_LIBRARY_REVISION 123
-#define MPEGA_LIBRARY_ID_STRING "$VER: " MPEGA_LIBRARY_NAME " 2.124 (07.08.2026) ZZ9000 SDK experimental"
+#define MPEGA_LIBRARY_REVISION 124
+#define MPEGA_LIBRARY_DATE "07.08.2026"
+
+/* Derive the $VER: string from the version macros rather than repeating the
+ * numbers. They are the same identity read two ways -- lib_Version and
+ * lib_Revision are what OpenLibrary() version checks see, the $VER: string
+ * is what a user sees -- and hardcoding the string let them drift during the
+ * v2.8 identity freeze: the string moved to 2.124 while lib_Revision stayed
+ * at 123. Deriving it makes that impossible. */
+#define MPEGA_STRINGIFY_(x) #x
+#define MPEGA_STRINGIFY(x) MPEGA_STRINGIFY_(x)
+#define MPEGA_LIBRARY_ID_STRING \
+  "$VER: " MPEGA_LIBRARY_NAME " " MPEGA_STRINGIFY(MPEGA_LIBRARY_VERSION) \
+  "." MPEGA_STRINGIFY(MPEGA_LIBRARY_REVISION) \
+  " (" MPEGA_LIBRARY_DATE ") ZZ9000 SDK"
 
 #define MPEGA_MP3_RING_CAPACITY (128UL * 1024UL)
 #define MPEGA_PCM_RING_CAPACITY (256UL * 1024UL)

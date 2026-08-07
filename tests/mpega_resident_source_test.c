@@ -88,11 +88,18 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "#ifndef MPEGA_LIBRARY_NAME");
   ok &= expect_contains(source, "#define MPEGA_LIBRARY_NAME \"mpega.library.zz9k\"");
   ok &= expect_contains(source, "#endif /* MPEGA_LIBRARY_NAME */");
-  ok &= expect_contains(source, "#define MPEGA_LIBRARY_REVISION 123");
+  ok &= expect_contains(source, "\"$VER: \" MPEGA_LIBRARY_NAME");
+  /* The identity must be derived from the version macros, never repeated as
+   * a literal: lib_Revision and the $VER: string are the same identity read
+   * two ways, and hardcoding the string let them drift apart during the v2.8
+   * freeze. Pin the macros and the derivation, not the rendered text. */
+  ok &= expect_contains(source, "#define MPEGA_LIBRARY_VERSION 2");
+  ok &= expect_contains(source, "#define MPEGA_LIBRARY_REVISION 124");
   ok &= expect_contains(source,
-                        "#define MPEGA_LIBRARY_ID_STRING "
-                        "\"$VER: \" MPEGA_LIBRARY_NAME");
-  ok &= expect_contains(source, "MPEGA_LIBRARY_NAME \" 2.124 (");
+                        "MPEGA_STRINGIFY(MPEGA_LIBRARY_VERSION)");
+  ok &= expect_contains(source,
+                        "MPEGA_STRINGIFY(MPEGA_LIBRARY_REVISION)");
+  ok &= expect_not_contains(source, "ZZ9000 SDK experimental");
   ok &= expect_contains(source, "struct DosLibrary *DOSBase;");
   ok &= expect_contains(source, "typedef struct MPEGACompatStream");
   ok &= expect_contains(source, "MPEGA_STREAM stream;");
