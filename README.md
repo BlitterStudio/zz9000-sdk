@@ -32,9 +32,14 @@ programs:
 - `zz9k.library` plus SDK v2 headers for async calls, shared buffers,
   surfaces, image decode/scale, streaming video, audio, compression, and
   crypto.
+- **ZZPlay**, the media player: MPEG-1 video and MP3/MP2 audio decoded on
+  the card, presented through the P96 video window or a dedicated
+  fullscreen screen, with MHI or AHI output. It installs as a Workbench
+  application in `SYS:Utilities/ZZ9000/`. See
+  [`docs/zzplay.md`](docs/zzplay.md); `zz9k-mp3` remains the low-level MP3
+  diagnostic.
 - End-user tools for service inspection, benchmarking, image viewing,
-  MPEG/MP3 playback, archive extraction, and release smoke checks. `zzplay`
-  is the media player; `zz9k-mp3` remains the low-level MP3 diagnostic.
+  archive extraction, and release smoke checks.
 - `zz9k-picture.datatype` and JPEG/PNG descriptors for optional
   DataTypes integration.
 - `mpega.library` and audio-stream helpers used by the current MHI/MP3
@@ -47,6 +52,9 @@ programs:
 - Zorro 2-aware allocation flags (`HOST_WINDOW` / `CARD_ONLY`) so small
   audio staging buffers can stay CPU-visible while card-only rings avoid
   the 4 MB aperture limit.
+- A readable primary display CLUT: `ZZ9KQueryPalette()` (library revision
+  28) reads back the INDEX8 palette the card was given, which the
+  write-only hardware registers cannot.
 - Docker packaging, host-side tests, ABI drift checks, and release smoke
   documentation.
 
