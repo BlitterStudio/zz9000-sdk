@@ -201,6 +201,25 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "DTM_ASYNCLAYOUT");
   ok &= expect_contains(source, "zz9k_picture_trace");
   ok &= expect_contains(source, "ZZ9K_PICTURE_TRACE_ENABLED 0");
+  /* Render-path traces are gated separately. The trace sinks are dos.library
+   * Open/Write/Close, and GM_RENDER runs with the window layer locked, so
+   * tracing there deadlocks Intuition on resize. Enabling the master switch
+   * alone must not put DOS I/O back on the render path. */
+  ok &= expect_contains(source, "ZZ9K_PICTURE_RENDER_TRACE_ENABLED 0");
+  ok &= expect_contains(
+      source,
+      "static void zz9k_picture_trace_render(const char *message)\n"
+      "{\n"
+      "  if (ZZ9K_PICTURE_RENDER_TRACE_ENABLED) {\n"
+      "    zz9k_picture_trace(message);\n"
+      "  } else {\n"
+      "    (void)message;\n"
+      "  }\n"
+      "}");
+  ok &= expect_contains(
+      source,
+      "  instance->render_trace_mask |= flag;\n"
+      "  zz9k_picture_trace_render(message);");
   ok &= expect_contains(source, "ZZ9K_PICTURE_TRACE_RESET_ENABLED 0");
   ok &= expect_contains(source, "ZZ9K_PICTURE_SOURCE_TRACE_ENABLED 0");
   ok &= expect_contains(source, "\"T:zz9k-picture.datatype.log\"");
