@@ -165,10 +165,10 @@ Failure routing:
 zz9k-mp3 --stats Work:Audio/test.mp3
 zz9k-mpega-smoke --trace --null-api-check
 zz9k-mpega-smoke --trace --stream-info --stats --freq-max 0 --frames 100 Work:Audio/test.mp3
-zzplay --audio=ahi Work:Audio/test.mp3
-zzplay --audio=mhi Work:Audio/test.mp3
-zzplay --audio=auto Work:Audio/test.mp3
-zzplay --audio=none --benchmark Work:Audio/test.mp3
+ZZPlay --audio=ahi Work:Audio/test.mp3
+ZZPlay --audio=mhi Work:Audio/test.mp3
+ZZPlay --audio=auto Work:Audio/test.mp3
+ZZPlay --audio=none --benchmark Work:Audio/test.mp3
 ```
 
 Expected pass signal:

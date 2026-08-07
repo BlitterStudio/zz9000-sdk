@@ -684,16 +684,17 @@ Compressed input is supplied in bounded shared-buffer chunks with
 `ZZ9K_VIDEO_SESSION_WRITE_EOF`. `NEED_INPUT`, `FRAME_READY`, and `DONE` result
 flags drive the client loop without exposing backend-specific state.
 
-`build/zzplay` is the standalone AmigaOS media player:
+`build/zzplay` is the standalone AmigaOS media player. It is packaged and
+installed as `ZZPlay` (the build output keeps the lower-case name):
 
 ```text
-zzplay Work:Video/test.mpg
-zzplay --fps Work:Video/test.mpg
-zzplay --benchmark Work:Video/test.mpg
-zzplay Work:Audio/test.mp3
-zzplay --audio=ahi Work:Audio/test.mp3
-zzplay --audio=mhi Work:Audio/test.mp3
-zzplay --audio=none --benchmark Work:Audio/test.mp3
+ZZPlay Work:Video/test.mpg
+ZZPlay --fps Work:Video/test.mpg
+ZZPlay --benchmark Work:Video/test.mpg
+ZZPlay Work:Audio/test.mp3
+ZZPlay --audio=ahi Work:Audio/test.mp3
+ZZPlay --audio=mhi Work:Audio/test.mp3
+ZZPlay --audio=none --benchmark Work:Audio/test.mp3
 ```
 
 It accepts MPEG-1 Program Streams and standalone Layer III files. MPEG video

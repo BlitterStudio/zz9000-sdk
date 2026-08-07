@@ -22,8 +22,9 @@ reports that clearly and standalone MP3 still works.
 
 ## Starting it
 
-**Shell.** `zzplay [options] <file>` — AmigaDOS is case-insensitive, so the
-lower-case spelling works even though the file installs as `C:ZZPlay`.
+**Shell.** `ZZPlay [options] <file>`. The installer puts it in
+`SYS:Utilities/ZZ9000/` and offers to add that drawer to the command path;
+AmigaDOS is case-insensitive, so `zzplay` works too.
 
 **Workbench.** Drop a media file onto the **ZZPlay** icon, double-click a
 project icon whose default tool is `ZZPlay`, or double-click ZZPlay itself and
@@ -114,10 +115,8 @@ the Workbench would break the effect. Combine it with `--quiet` (already the
 default from Workbench) for a completely silent, chrome-free playback:
 
 ```
-zzplay --fullscreen --quiet Video:intro.mpg
-``` The scaling is done by the FPGA overlay, so the frame rate is
-unaffected. Pressing F again restores the exact window position and size you
-had before.
+ZZPlay --fullscreen --quiet Video:intro.mpg
+```
 
 ### Standalone MP3
 
