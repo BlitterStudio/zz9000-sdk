@@ -69,6 +69,9 @@
 #define ZZ9K_PICTURE_FORCE_ALPHA_RGB_COMPAT 0
 #define ZZ9K_PICTURE_ENABLE_PNG_ALPHA_EXPERIMENTS 0
 #define ZZ9K_PICTURE_TRACE_ENABLED 0
+/* Gates the GM_RENDER traces separately from the master switch above; both
+ * must be on. See zz9k_picture_trace_render() for why render is special. */
+#define ZZ9K_PICTURE_RENDER_TRACE_ENABLED 0
 #define ZZ9K_PICTURE_TRACE_RESET_ENABLED 0
 #define ZZ9K_PICTURE_SOURCE_TRACE_ENABLED 0
 #define ZZ9K_PICTURE_TRACE_STREAM_CHUNKS 0
@@ -388,6 +391,27 @@ static void zz9k_picture_trace(const char *message)
   }
 }
 
+/* Trace sink for the GM_RENDER path only.
+ *
+ * The sinks are dos.library Open/Write/Close, and GM_RENDER runs between
+ * ObtainGIRPort() and ReleaseGIRPort(), i.e. with the window's layer locked.
+ * Tracing there sleeps on a DOS packet reply while holding that lock, which
+ * deadlocks Intuition during a window resize - the very failure this class is
+ * usually being traced to diagnose. So turning on ZZ9K_PICTURE_TRACE_ENABLED
+ * alone stays safe during a resize; opt into render tracing deliberately with
+ * ZZ9K_PICTURE_RENDER_TRACE_ENABLED, and expect resize to hang while it is on.
+ *
+ * Layout and metadata tracing are unaffected: those run in contexts where
+ * blocking is legitimate. */
+static void zz9k_picture_trace_render(const char *message)
+{
+  if (ZZ9K_PICTURE_RENDER_TRACE_ENABLED) {
+    zz9k_picture_trace(message);
+  } else {
+    (void)message;
+  }
+}
+
 static void zz9k_picture_trace_hex(const char *label, uint32_t value)
 {
   static const char hex[] = "0123456789ABCDEF";
@@ -440,7 +464,7 @@ static void zz9k_picture_trace_render_once(ZZ9KPictureInstance *instance,
   }
 
   instance->render_trace_mask |= flag;
-  zz9k_picture_trace(message);
+  zz9k_picture_trace_render(message);
 }
 
 static char zz9k_picture_ascii_lower(char value)
@@ -7607,7 +7631,7 @@ static ULONG zz9k_picture_render(Class *cl, Object *object,
   draw_rect = area;
   if (render_mode == ZZ9K_PICTURE_RENDER_MODE_DRAWCOPY ||
       render_mode == ZZ9K_PICTURE_RENDER_MODE_DRAW) {
-    zz9k_picture_trace(
+    zz9k_picture_trace_render(
         render_mode == ZZ9K_PICTURE_RENDER_MODE_DRAWCOPY ?
         "render: mode drawcopy complete" :
         "render: mode draw complete");
@@ -7625,7 +7649,7 @@ static ULONG zz9k_picture_render(Class *cl, Object *object,
     }
     (void)fit_width;
     (void)fit_height;
-    zz9k_picture_trace("render: mode drawfit complete");
+    zz9k_picture_trace_render("render: mode drawfit complete");
     return 1;
   }
 
@@ -7637,7 +7661,7 @@ static ULONG zz9k_picture_render(Class *cl, Object *object,
           "render: draw rect unavailable; superclass");
       return DoSuperMethodA(cl, object, (Msg)render);
     }
-    zz9k_picture_trace("render: mode drawcenter complete");
+    zz9k_picture_trace_render("render: mode drawcenter complete");
     return 1;
   }
 
