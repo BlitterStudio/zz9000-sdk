@@ -9,6 +9,12 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Set by the logic test, which compiles this file directly to reach the
+ * release requirement helpers without a board. */
+#ifndef ZZ9K_SERVICES_NO_MAIN
+#define ZZ9K_SERVICES_NO_MAIN 0
+#endif
+
 typedef enum ZZ9KServicesMode {
   ZZ9K_SERVICES_MODE_LIST,
   ZZ9K_SERVICES_MODE_LIST_ALL,
@@ -213,12 +219,25 @@ static void print_service(const ZZ9KServiceInfo *service,
   print_service_flags(service->service_id, service->flags);
 }
 
+/* Capabilities the release requires from the firmware as a whole rather
+ * than from any single service registry entry. The firmware advertises
+ * both only in the global capability word -- its audio service reports
+ * AUDIO_DECODE|AUDIO_PLAYBACK and its memory service reports
+ * SHARED_ALLOC|MEMORY_OPS -- so they must not be added to
+ * release_services[], where they would read as missing on correct
+ * firmware. mhizz9000.library refuses to allocate a decoder without
+ * AUDIO_STREAM_DRAIN, and Zorro 2 MHI/mpega staging allocates from the
+ * HOST_WINDOW_HEAP; a firmware image lacking either fails at run time
+ * with no diagnostic of its own. */
+#define ZZ9K_RELEASE_GLOBAL_CAPS \
+  (ZZ9K_CAP_AUDIO_STREAM_DRAIN | ZZ9K_CAP_HOST_WINDOW_HEAP)
+
 static uint32_t release_required_capabilities(void)
 {
   uint32_t required;
   uint32_t i;
 
-  required = 0U;
+  required = ZZ9K_RELEASE_GLOBAL_CAPS;
   for (i = 0U;
        i < (uint32_t)(sizeof(release_services) / sizeof(release_services[0]));
        i++) {
@@ -329,6 +348,7 @@ static int check_release_services(ZZ9KContext *ctx, const ZZ9KCaps *caps)
   return ok;
 }
 
+#if !ZZ9K_SERVICES_NO_MAIN
 int main(int argc, char **argv)
 {
   ZZ9KContext *ctx = 0;
@@ -426,3 +446,4 @@ int main(int argc, char **argv)
   zz9k_close(ctx);
   return 0;
 }
+#endif /* !ZZ9K_SERVICES_NO_MAIN */

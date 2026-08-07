@@ -1325,6 +1325,19 @@ add_test(
           ${CMAKE_CURRENT_SOURCE_DIR}/tools/zz9k-services.c
 )
 
+add_executable(services_release_caps_test
+  tests/services_release_caps_test.c
+)
+
+target_include_directories(services_release_caps_test
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/host/include
+)
+
+target_link_libraries(services_release_caps_test PRIVATE zz9k_host)
+add_test(NAME services_release_caps_test COMMAND services_release_caps_test)
+
 add_executable(info_tool_source_test
   tests/info_tool_source_test.c
 )
