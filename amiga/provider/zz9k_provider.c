@@ -26,7 +26,7 @@
 #include "zz9k_offload.h"
 #endif
 
-#define ZZ9K_PROVIDER_VERSION "0.2.0"
+#define ZZ9K_PROVIDER_VERSION "1.0.0"
 
 static const OSSL_PARAM zz9k_param_types[] = {
   OSSL_PARAM_DEFN(OSSL_PROV_PARAM_NAME, OSSL_PARAM_UTF8_PTR, NULL, 0),

@@ -64,7 +64,7 @@ static uint32_t zzplay_input_staging[
     ZZPLAY_INPUT_BYTES / sizeof(uint32_t)];
 static volatile sig_atomic_t zzplay_ctrl_c_requested;
 
-static const char zzplay_version[] = "$VER: ZZPlay 0.3 (06.08.2026)";
+static const char zzplay_version[] = "$VER: ZZPlay 0.4 (07.08.2026)";
 
 struct ZZPlayTimer {
   struct MsgPort *port;

@@ -92,7 +92,7 @@ int main(int argc, char **argv)
   ok &= expect_contains(source,
                         "#define MPEGA_LIBRARY_ID_STRING "
                         "\"$VER: \" MPEGA_LIBRARY_NAME");
-  ok &= expect_contains(source, "MPEGA_LIBRARY_NAME \" 2.123 (");
+  ok &= expect_contains(source, "MPEGA_LIBRARY_NAME \" 2.124 (");
   ok &= expect_contains(source, "struct DosLibrary *DOSBase;");
   ok &= expect_contains(source, "typedef struct MPEGACompatStream");
   ok &= expect_contains(source, "MPEGA_STREAM stream;");
