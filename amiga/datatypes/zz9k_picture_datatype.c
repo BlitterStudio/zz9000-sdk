@@ -126,6 +126,7 @@ static struct SignalSemaphore zz9k_picture_decode_semaphore;
 static uint8_t zz9k_picture_cached_caps_ready;
 static uint8_t zz9k_picture_cached_image_service_ready;
 static uint8_t zz9k_picture_decode_semaphore_ready;
+static uint8_t zz9k_picture_render_mode_ready;
 
 typedef enum ZZ9KPictureCodec {
   ZZ9K_PICTURE_CODEC_UNKNOWN = 0,
@@ -163,6 +164,9 @@ typedef enum ZZ9KPictureRenderMode {
   ZZ9K_PICTURE_RENDER_MODE_SCALE4,
   ZZ9K_PICTURE_RENDER_MODE_SCALE8
 } ZZ9KPictureRenderMode;
+
+/* Guarded by zz9k_picture_render_mode_ready; see zz9k_picture_render_mode(). */
+static ZZ9KPictureRenderMode zz9k_picture_cached_render_mode;
 
 typedef struct ZZ9KPictureInstance {
   ZZ9KPictureCodec codec;
@@ -614,14 +618,25 @@ static int zz9k_picture_forced_render_mode_allows_env(
          render_mode == ZZ9K_PICTURE_RENDER_MODE_ALPHA_REFERENCE_NOLAYOUT;
 }
 
+/* The ENV override is a diagnostic knob, so it is read once and cached.
+ * GM_RENDER runs between ObtainGIRPort()/ReleaseGIRPort(), i.e. with the
+ * window's layer locked, and Open() on ENV: sleeps waiting for a DOS packet
+ * reply. Re-reading it per render slept while holding that lock, which
+ * deadlocks Intuition during a window resize. The first call comes from
+ * OM_NEW, which is a safe context for DOS I/O. */
 static ZZ9KPictureRenderMode zz9k_picture_render_mode(void)
 {
   ZZ9KPictureRenderMode render_mode;
 
-  if (zz9k_picture_read_render_mode_env(&render_mode)) {
-    return render_mode;
+  if (zz9k_picture_render_mode_ready) {
+    return zz9k_picture_cached_render_mode;
   }
-  return ZZ9K_PICTURE_RENDER_MODE_DATATYPE;
+
+  render_mode = ZZ9K_PICTURE_RENDER_MODE_DATATYPE;
+  (void)zz9k_picture_read_render_mode_env(&render_mode);
+  zz9k_picture_cached_render_mode = render_mode;
+  zz9k_picture_render_mode_ready = 1U;
+  return render_mode;
 }
 
 static void zz9k_picture_source_reset(ZZ9KPictureSource *source)

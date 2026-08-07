@@ -149,12 +149,24 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "zz9k_picture_read_render_mode_env");
   ok &= expect_contains(source, "char value[32];");
   ok &= expect_contains(source, "zz9k_picture_forced_render_mode_allows_env");
+  /* The ENV override must be read once and cached. GM_RENDER runs with the
+   * window layer locked, and Open() on ENV: sleeps on a DOS packet; doing
+   * that per render deadlocks Intuition during a window resize. */
+  ok &= expect_contains(source, "static uint8_t zz9k_picture_render_mode_ready;");
   ok &= expect_contains(
       source,
-      "if (zz9k_picture_read_render_mode_env(&render_mode)) {\n"
-      "    return render_mode;\n"
+      "static ZZ9KPictureRenderMode zz9k_picture_cached_render_mode;");
+  ok &= expect_contains(
+      source,
+      "  if (zz9k_picture_render_mode_ready) {\n"
+      "    return zz9k_picture_cached_render_mode;\n"
       "  }\n"
-      "  return ZZ9K_PICTURE_RENDER_MODE_DATATYPE;");
+      "\n"
+      "  render_mode = ZZ9K_PICTURE_RENDER_MODE_DATATYPE;\n"
+      "  (void)zz9k_picture_read_render_mode_env(&render_mode);\n"
+      "  zz9k_picture_cached_render_mode = render_mode;\n"
+      "  zz9k_picture_render_mode_ready = 1U;\n"
+      "  return render_mode;");
   ok &= expect_not_contains(
       source,
       "#if ZZ9K_PICTURE_FORCE_DATATYPE_V47_TRUECOLOR || \\\n"
