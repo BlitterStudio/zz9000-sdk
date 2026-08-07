@@ -122,7 +122,12 @@ zz9k-services --check-release
 The command requires service discovery, queries the expected SDK v2 services,
 checks required capabilities, service flags, service version major, opcode base,
 and opcode count, and exits nonzero if the SDK and firmware do not match the
-current release contract. A matching firmware ends with:
+current release contract. It also checks the capabilities the firmware
+advertises globally rather than per service — `AUDIO_STREAM_DRAIN`, which
+`mhizz9000.library` requires before it will allocate a decoder, and
+`HOST_WINDOW_HEAP`, which Zorro 2 MHI and `mpega.library` staging allocate
+from. Those two are reported as `release missing firmware capabilities`. A
+matching firmware ends with:
 
 ```text
 release check ok

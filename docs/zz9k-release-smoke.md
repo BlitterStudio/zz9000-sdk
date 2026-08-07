@@ -26,6 +26,10 @@ Failure routing:
 
 - Missing service discovery, required service flags, opcode ranges, or version
   major mismatches are firmware/SDK release-pair blockers.
+- `release missing firmware capabilities: AUDIO_STREAM_DRAIN` or
+  `HOST_WINDOW_HEAP` means the firmware image predates the matched driver set;
+  MHI playback fails at decoder allocation. Reflash a firmware built from the
+  release pair rather than debugging the driver.
 - Mailbox open or query failures belong in the firmware/driver transport path
   before testing higher-level services.
 
