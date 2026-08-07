@@ -9,8 +9,8 @@
 
 #define ZZ9K_LIBRARY_NAME "zz9k.library"
 #define ZZ9K_LIBRARY_VERSION 2
-#define ZZ9K_LIBRARY_REVISION 27
-#define ZZ9K_LIBRARY_ID_STRING "zz9k.library 2.27 (31.07.2026)"
+#define ZZ9K_LIBRARY_REVISION 28
+#define ZZ9K_LIBRARY_ID_STRING "zz9k.library 2.28 (07.08.2026)"
 
 #define ZZ9K_LIBRARY_MIN_REVISION_CALL_ASYNC_BATCH_MSG 1
 #define ZZ9K_LIBRARY_MIN_REVISION_CANCEL_ASYNC 2
@@ -40,6 +40,7 @@
 /* Request validation accepts the resumable AUDIO_STREAM_FEED_DRAIN flag
  * (no new vector; firmware support is gated by the matching capability). */
 #define ZZ9K_LIBRARY_MIN_REVISION_AUDIO_STREAM_DRAIN 27
+#define ZZ9K_LIBRARY_MIN_REVISION_QUERY_PALETTE 28
 
 #define ZZ9K_LVO_OPEN (-6)
 #define ZZ9K_LVO_CLOSE (-12)
@@ -93,7 +94,11 @@
 #define ZZ9K_LVO_CRYPTO_VERIFY (-294)
 #define ZZ9K_LVO_AUDIO_STREAM_PLAY (-300)
 #define ZZ9K_LVO_AUDIO_STREAM_STOP (-306)
+/* The historical palette branch allocated -300, which current master uses for
+ * AUDIO_STREAM_PLAY. Taking the next free vector instead; merging that branch
+ * as-is would have aliased two calls onto one entry. */
+#define ZZ9K_LVO_QUERY_PALETTE (-312)
 
-#define ZZ9K_LVO_FUNCTION_COUNT 47
+#define ZZ9K_LVO_FUNCTION_COUNT 48
 
 #endif /* ZZ9K_LIBRARY_VECTORS_H */

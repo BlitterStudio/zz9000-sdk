@@ -861,6 +861,20 @@ static __inline int __ZZ9KAudioStreamStopInline(
 #define ZZ9KAudioStreamStop(session, flags, result) \
   __ZZ9KAudioStreamStopInline((session), (flags), (result))
 
+static __inline int __ZZ9KQueryPaletteInline(
+    const ZZ9KPaletteQueryDesc *desc)
+{
+  register uint32_t zz9k_d0 __asm("d0");
+  register struct Library *zz9k_a6 __asm("a6") = ZZ9KBase;
+  register const ZZ9KPaletteQueryDesc *zz9k_a0 __asm("a0") = desc;
+  __asm volatile("jsr -312(a6)"
+                 : "=r"(zz9k_d0)
+                 : "r"(zz9k_a6), "r"(zz9k_a0)
+                 : ZZ9K_INLINE_CLOBBERS);
+  return (int)zz9k_d0;
+}
+#define ZZ9KQueryPalette(desc) __ZZ9KQueryPaletteInline((desc))
+
 #endif
 
 #ifdef __cplusplus

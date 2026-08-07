@@ -1542,6 +1542,27 @@ int zz9k_copy_surface(ZZ9KContext *ctx, const ZZ9KSurfaceCopyDesc *desc)
   return zz9k_call(ctx, &request, &reply, ZZ9K_DEFAULT_TIMEOUT_TICKS);
 }
 
+int zz9k_query_palette(ZZ9KContext *ctx, const ZZ9KPaletteQueryDesc *desc)
+{
+  ZZ9KRequest request;
+  ZZ9KMailboxEntry reply;
+  int status;
+
+  /* The builder revalidates; checking here too keeps the failure local for
+   * a caller that passed a null context. */
+  if (!ctx || !desc) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  memset(&reply, 0, sizeof(reply));
+  status = zz9k_request_query_palette(&request, desc);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  return zz9k_call(ctx, &request, &reply, ZZ9K_DEFAULT_TIMEOUT_TICKS);
+}
+
 int zz9k_decode_image(ZZ9KContext *ctx, uint32_t opcode,
                       const ZZ9KImageDecodeDesc *desc,
                       ZZ9KImageDecodeResult *result)

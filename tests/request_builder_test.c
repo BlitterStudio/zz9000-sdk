@@ -1285,6 +1285,114 @@ static int test_decompress_batch_builder_encodes_arena(void)
   return 0;
 }
 
+/* KTD9: the palette query is a bulk-reply op, so the builder is the only place
+ * bounds are enforced before firmware sees a request. Cover the first, middle
+ * and last entries and every rejection the descriptor allows. */
+static int test_query_palette_builder_encodes_descriptor(void)
+{
+  ZZ9KPaletteQueryDesc desc;
+  ZZ9KRequest request;
+  const ZZ9KQueryPalettePayload *payload;
+
+  memset(&desc, 0, sizeof(desc));
+  desc.surface = ZZ9K_SURFACE_HANDLE_FRAMEBUFFER;
+  desc.start = 128U;
+  desc.count = 1U;
+  desc.dst_handle = 0x40000007UL;
+  desc.dst_offset = 0x120U;
+  desc.flags = 0U;
+
+  memset(&request, 0xff, sizeof(request));
+  if (zz9k_request_query_palette(&request, &desc) != ZZ9K_STATUS_OK) {
+    return 1;
+  }
+  if (request.entry.opcode != ZZ9K_OP_QUERY_PALETTE) return 2;
+  if (request.entry.payload_len != sizeof(ZZ9KQueryPalettePayload)) return 3;
+  payload =
+      (const ZZ9KQueryPalettePayload *)request.entry.payload.inline_data;
+  if (zz9k_get_be32(payload->surface) != ZZ9K_SURFACE_HANDLE_FRAMEBUFFER) {
+    return 4;
+  }
+  if (zz9k_get_be32(payload->start) != 128U) return 5;
+  if (zz9k_get_be32(payload->count) != 1U) return 6;
+  if (zz9k_get_be32(payload->dst_handle) != 0x40000007UL) return 7;
+  if (zz9k_get_be32(payload->dst_offset) != 0x120U) return 8;
+  if (zz9k_get_be32(payload->flags) != 0U) return 9;
+
+  /* Entry 0 and the whole table. */
+  desc.start = 0U;
+  desc.count = (uint32_t)ZZ9K_PALETTE_MAX_ENTRIES;
+  if (zz9k_request_query_palette(&request, &desc) != ZZ9K_STATUS_OK) {
+    return 10;
+  }
+
+  /* The last entry alone: start + count lands exactly on the bound. */
+  desc.start = (uint32_t)ZZ9K_PALETTE_MAX_ENTRIES - 1U;
+  desc.count = 1U;
+  if (zz9k_request_query_palette(&request, &desc) != ZZ9K_STATUS_OK) {
+    return 11;
+  }
+
+  /* One past the end. */
+  desc.start = (uint32_t)ZZ9K_PALETTE_MAX_ENTRIES;
+  desc.count = 1U;
+  if (zz9k_request_query_palette(&request, &desc) != ZZ9K_STATUS_BAD_REQUEST) {
+    return 12;
+  }
+
+  /* A range that starts inside the table but runs past its end. */
+  desc.start = 200U;
+  desc.count = 100U;
+  if (zz9k_request_query_palette(&request, &desc) != ZZ9K_STATUS_BAD_REQUEST) {
+    return 13;
+  }
+
+  /* start + count must not be allowed to wrap past the bound check. */
+  desc.start = 0xffffffffUL;
+  desc.count = 2U;
+  if (zz9k_request_query_palette(&request, &desc) != ZZ9K_STATUS_BAD_REQUEST) {
+    return 14;
+  }
+
+  desc.start = 0U;
+  desc.count = 0U;
+  if (zz9k_request_query_palette(&request, &desc) != ZZ9K_STATUS_BAD_REQUEST) {
+    return 15;
+  }
+
+  desc.count = (uint32_t)ZZ9K_PALETTE_MAX_ENTRIES + 1U;
+  if (zz9k_request_query_palette(&request, &desc) != ZZ9K_STATUS_BAD_REQUEST) {
+    return 16;
+  }
+
+  desc.count = 16U;
+  desc.dst_handle = ZZ9K_INVALID_HANDLE;
+  if (zz9k_request_query_palette(&request, &desc) != ZZ9K_STATUS_BAD_REQUEST) {
+    return 17;
+  }
+
+  desc.dst_handle = 0x40000007UL;
+  desc.flags = 0x80000000UL;
+  if (zz9k_request_query_palette(&request, &desc) != ZZ9K_STATUS_BAD_REQUEST) {
+    return 18;
+  }
+
+  /* The secondary bit is a defined flag: the builder passes it through and
+   * firmware is what answers UNSUPPORTED. */
+  desc.flags = (uint32_t)ZZ9K_PALETTE_QUERY_FLAG_SECONDARY;
+  if (zz9k_request_query_palette(&request, &desc) != ZZ9K_STATUS_OK) {
+    return 19;
+  }
+
+  if (zz9k_request_query_palette(NULL, &desc) != ZZ9K_STATUS_BAD_REQUEST) {
+    return 20;
+  }
+  if (zz9k_request_query_palette(&request, NULL) != ZZ9K_STATUS_BAD_REQUEST) {
+    return 21;
+  }
+  return 0;
+}
+
 int main(void)
 {
   int result;
@@ -1339,6 +1447,9 @@ int main(void)
 
   result = test_decompress_batch_builder_encodes_arena();
   if (result) return 270 + result;
+
+  result = test_query_palette_builder_encodes_descriptor();
+  if (result) return 290 + result;
 
   return 0;
 }

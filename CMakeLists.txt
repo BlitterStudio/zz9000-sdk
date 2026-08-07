@@ -1345,6 +1345,16 @@ add_test(
           ${CMAKE_CURRENT_SOURCE_DIR}/tools/zz9k-surface-info.c
 )
 
+add_executable(palette_tool_source_test
+  tests/palette_tool_source_test.c
+)
+
+add_test(
+  NAME palette_tool_source_test
+  COMMAND palette_tool_source_test
+          ${CMAKE_CURRENT_SOURCE_DIR}/tools/zz9k-palette.c
+)
+
 add_executable(mp3_tool_source_test
   tests/mp3_tool_source_test.c
 )
@@ -1515,6 +1525,12 @@ add_executable(zz9k_surface_info
 )
 
 target_link_libraries(zz9k_surface_info PRIVATE zz9k_host)
+
+add_executable(zz9k_palette
+  tools/zz9k-palette.c
+)
+
+target_link_libraries(zz9k_palette PRIVATE zz9k_host)
 
 add_executable(zz9k_fbtest
   tools/zz9k-fbtest.c

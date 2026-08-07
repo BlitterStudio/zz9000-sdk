@@ -261,6 +261,8 @@ static int zz9k_lib_audio_stream_stop(REG(a6, struct ZZ9KBase *base),
                                       REG(d0, uint32_t session),
                                       REG(d1, uint32_t flags),
                                       REG(a0, ZZ9KAudioStreamResult *result));
+static int zz9k_lib_query_palette(REG(a6, struct ZZ9KBase *base),
+                                  REG(a0, const ZZ9KPaletteQueryDesc *desc));
 
 static const APTR zz9k_lib_vectors[] = {
   (APTR)zz9k_lib_open,
@@ -314,6 +316,7 @@ static const APTR zz9k_lib_vectors[] = {
   (APTR)zz9k_lib_crypto_verify,
   (APTR)zz9k_lib_audio_stream_play,
   (APTR)zz9k_lib_audio_stream_stop,
+  (APTR)zz9k_lib_query_palette,
   (APTR)-1
 };
 
@@ -1680,6 +1683,19 @@ static int zz9k_lib_audio_stream_stop(REG(a6, struct ZZ9KBase *base),
     return status;
   }
   status = ZZ9KAudioStreamStop(&base->core, session, flags, result);
+  zz9k_lib_leave(base);
+  return status;
+}
+
+static int zz9k_lib_query_palette(REG(a6, struct ZZ9KBase *base),
+                                  REG(a0, const ZZ9KPaletteQueryDesc *desc))
+{
+  int status = zz9k_lib_enter(base);
+
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  status = ZZ9KQueryPalette(&base->core, desc);
   zz9k_lib_leave(base);
   return status;
 }

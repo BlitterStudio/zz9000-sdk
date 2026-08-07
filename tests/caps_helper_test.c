@@ -357,6 +357,30 @@ static int test_service_flag_names(void)
                    "timeline-90khz")) {
     return 24;
   }
+  if (!expect_name(zz9k_service_flag_name(
+                       ZZ9K_SERVICE_SURFACE,
+                       ZZ9K_SERVICE_FLAG_SURFACE_PALETTE_QUERY),
+                   "palette-query")) {
+    return 25;
+  }
+  /* Service flag bits are a per-service namespace, not a global one: bit 16
+   * is palette-query on the surface service and mpeg1 on video. The lookup
+   * must therefore key on both, or zz9k-services would report the wrong
+   * capability name for whichever service it saw second. */
+  if (ZZ9K_SERVICE_FLAG_SURFACE_PALETTE_QUERY !=
+      ZZ9K_SERVICE_FLAG_VIDEO_MPEG1) {
+    return 26;
+  }
+  if (!expect_name(zz9k_service_flag_name(
+                       ZZ9K_SERVICE_VIDEO,
+                       ZZ9K_SERVICE_FLAG_SURFACE_PALETTE_QUERY),
+                   "mpeg1")) {
+    return 27;
+  }
+  /* An unallocated surface bit still has no name. */
+  if (zz9k_service_flag_name(ZZ9K_SERVICE_SURFACE, 0x80000000UL) != 0) {
+    return 28;
+  }
 
   return 0;
 }
@@ -387,6 +411,20 @@ static int test_service_flag_iteration(void)
                                     ZZ9K_SERVICE_FLAG_CRYPTO_X25519),
              "x25519") != 0) {
     return 41;
+  }
+  if (zz9k_known_service_flag_count(ZZ9K_SERVICE_SURFACE) != 5U) {
+    return 42;
+  }
+  if (zz9k_known_service_flag(ZZ9K_SERVICE_SURFACE, 3) !=
+      ZZ9K_SERVICE_FLAG_ZERO_COPY) {
+    return 43;
+  }
+  if (zz9k_known_service_flag(ZZ9K_SERVICE_SURFACE, 4) !=
+      ZZ9K_SERVICE_FLAG_SURFACE_PALETTE_QUERY) {
+    return 44;
+  }
+  if (zz9k_known_service_flag(ZZ9K_SERVICE_SURFACE, 5) != 0U) {
+    return 45;
   }
   if (zz9k_known_service_flag_count(ZZ9K_SERVICE_IMAGE) != 15U) {
     return 5;
