@@ -2,7 +2,7 @@
 
 Copyright (C) 2024-2026, Dimitris Panokostas / BlitterStudio
 
-`zz9k-picture.datatype 42.147` is the validated SDK v2 DataType for
+`zz9k-picture.datatype 42.148` is the validated SDK v2 DataType for
 the current package. It is packaged as a side-by-side subclass of the system
 `picture.datatype` and must not replace `Classes/DataTypes/picture.datatype`.
 OS3.1 remains the minimum target: the class opens against
@@ -82,7 +82,13 @@ palette, publishes a normal `PDTA_BitMap`, and degrades transparent PNG alpha to
 a transparent palette index because the v43/v47 alpha contracts are not
 available there.
 
-`42.147` is a stability-hardening release with no behaviour change on correct
+`42.148` makes `GM_RENDER` lock-safe. The old undocumented framebuffer
+`fill`/`scale*` diagnostic modes synchronously called the SDK mailbox while
+Intuition held the window layer, which could deadlock the GUI during resize.
+Those legacy `ENV:ZZ9K_PICTURE_RENDER_MODE` values now select the validated
+DataType pixel path; the default path is unchanged.
+
+`42.147` was a stability-hardening release with no behaviour change on correct
 input. It fills the superclass-owned LUT8 color tables in place, which fixes
 black output on `picture.datatype v39-v42`; validates firmware tile heights from
 untrusted replies against the allocated tile buffer; adds a missing overflow

@@ -39,11 +39,11 @@
 
 #define ZZ9K_PICTURE_DATATYPE_NAME "zz9k-picture.datatype"
 #define ZZ9K_PICTURE_DATATYPE_VERSION 42
-#define ZZ9K_PICTURE_DATATYPE_REVISION 147
+#define ZZ9K_PICTURE_DATATYPE_REVISION 148
 #define ZZ9K_PICTURE_DATATYPE_ID_STRING \
-  "$VER: zz9k-picture.datatype 42.147 (10.06.2026) ZZ9000 SDK"
+  "$VER: zz9k-picture.datatype 42.148 (08.08.2026) ZZ9000 SDK"
 #define ZZ9K_PICTURE_BUILD_MARKER \
-  "metadata: build 2026-06-10 datatype-v43-os31-v147"
+  "metadata: build 2026-08-08 datatype-render-lock-safe-v148"
 #define ZZ9K_PICTURE_OBJECT_NAME_BYTES 128U
 #define ZZ9K_PICTURE_SMALL_PLACEHOLDER_SIZE 64U
 #define ZZ9K_PICTURE_RGB_BYTES_PER_PIXEL 3U
@@ -91,30 +91,20 @@
 #define ZZ9K_PICTURE_RENDER_TRACE_DRAW_RECT_FAILED (1UL << 4)
 #define ZZ9K_PICTURE_RENDER_TRACE_VISIBLE_FAILED (1UL << 5)
 #define ZZ9K_PICTURE_RENDER_TRACE_DAMAGE_FAILED (1UL << 6)
-#define ZZ9K_PICTURE_RENDER_TRACE_FILL_DESC_FAILED (1UL << 7)
-#define ZZ9K_PICTURE_RENDER_TRACE_FILL_FAILED (1UL << 8)
-#define ZZ9K_PICTURE_RENDER_TRACE_SCALE_FAILED (1UL << 9)
-#define ZZ9K_PICTURE_RENDER_TRACE_COMPLETE (1UL << 10)
 #define ZZ9K_PICTURE_RENDER_TRACE_SCREEN_INFO_FAILED (1UL << 11)
 #define ZZ9K_PICTURE_RENDER_TRACE_SCREEN_BOUNDS_FAILED (1UL << 12)
 #define ZZ9K_PICTURE_RENDER_TRACE_AREA_READY (1UL << 13)
 #define ZZ9K_PICTURE_RENDER_TRACE_DRAW_RECT_READY (1UL << 14)
 #define ZZ9K_PICTURE_RENDER_TRACE_VISIBLE_READY (1UL << 15)
 #define ZZ9K_PICTURE_RENDER_TRACE_DAMAGE_READY (1UL << 16)
-#define ZZ9K_PICTURE_RENDER_TRACE_BEFORE_FILL (1UL << 17)
-#define ZZ9K_PICTURE_RENDER_TRACE_FILL_OK (1UL << 18)
-#define ZZ9K_PICTURE_RENDER_TRACE_BEFORE_SCALE (1UL << 19)
-#define ZZ9K_PICTURE_RENDER_TRACE_SCALE_OK (1UL << 20)
 #define ZZ9K_PICTURE_RENDER_TRACE_MODE_OFF (1UL << 21)
 #define ZZ9K_PICTURE_RENDER_TRACE_MODE_DECODE (1UL << 22)
 #define ZZ9K_PICTURE_RENDER_TRACE_MODE_PROBE (1UL << 23)
-#define ZZ9K_PICTURE_RENDER_TRACE_MODE_FILL_COMPLETE (1UL << 24)
 #define ZZ9K_PICTURE_RENDER_TRACE_MODE_SUBCLASS (1UL << 25)
 #define ZZ9K_PICTURE_RENDER_TRACE_MODE_SUPER (1UL << 26)
 #define ZZ9K_PICTURE_RENDER_TRACE_MODE_SCREEN_COMPLETE (1UL << 27)
 #define ZZ9K_PICTURE_RENDER_TRACE_MODE_AREA_COMPLETE (1UL << 28)
 #define ZZ9K_PICTURE_RENDER_TRACE_MODE_DRAW_COMPLETE (1UL << 29)
-#define ZZ9K_PICTURE_RENDER_TRACE_INCREMENTAL_REDRAW (1UL << 30)
 
 struct ExecBase *SysBase;
 struct DosLibrary *DOSBase;
@@ -156,16 +146,7 @@ typedef enum ZZ9KPictureRenderMode {
   ZZ9K_PICTURE_RENDER_MODE_DRAWCENTER,
   ZZ9K_PICTURE_RENDER_MODE_DRAWTRACE,
   ZZ9K_PICTURE_RENDER_MODE_DRAW,
-  ZZ9K_PICTURE_RENDER_MODE_PROBE,
-  ZZ9K_PICTURE_RENDER_MODE_FILL,
-  ZZ9K_PICTURE_RENDER_MODE_FILL1SUPER,
-  ZZ9K_PICTURE_RENDER_MODE_SURFACEFILL1SUPER,
-  ZZ9K_PICTURE_RENDER_MODE_SCALE,
-  ZZ9K_PICTURE_RENDER_MODE_SCALE1,
-  ZZ9K_PICTURE_RENDER_MODE_SCALE1SUPER,
-  ZZ9K_PICTURE_RENDER_MODE_SCALE2,
-  ZZ9K_PICTURE_RENDER_MODE_SCALE4,
-  ZZ9K_PICTURE_RENDER_MODE_SCALE8
+  ZZ9K_PICTURE_RENDER_MODE_PROBE
 } ZZ9KPictureRenderMode;
 
 /* Guarded by zz9k_picture_render_mode_ready; see zz9k_picture_render_mode(). */
@@ -181,13 +162,11 @@ typedef struct ZZ9KPictureInstance {
   uint32_t source_handle;
   uint8_t *reference_pixels;
   uint32_t render_trace_mask;
-  uint32_t hardware_render_count;
   uint32_t reference_pixel_bytes;
   ZZ9KContext *ctx;
   uint8_t source_ready;
   uint8_t decode_attempted;
   uint8_t render_attrs_ready;
-  uint8_t rendered_once;
   uint8_t datatype_sync_sent;
   uint8_t png_alpha_known;
   uint8_t png_has_alpha;
@@ -514,12 +493,34 @@ static int zz9k_picture_render_mode_matches(const char *value,
   return 1;
 }
 
+static int zz9k_picture_legacy_framebuffer_mode(const char *value,
+                                                LONG length)
+{
+  return zz9k_picture_render_mode_matches(value, length, "fill") ||
+         zz9k_picture_render_mode_matches(value, length, "fill1super") ||
+         zz9k_picture_render_mode_matches(
+             value, length, "surfacefill1super") ||
+         zz9k_picture_render_mode_matches(value, length, "scale") ||
+         zz9k_picture_render_mode_matches(value, length, "scale1") ||
+         zz9k_picture_render_mode_matches(value, length, "scale1super") ||
+         zz9k_picture_render_mode_matches(value, length, "scale2") ||
+         zz9k_picture_render_mode_matches(value, length, "scale4") ||
+         zz9k_picture_render_mode_matches(value, length, "scale8");
+}
+
 static ZZ9KPictureRenderMode zz9k_picture_render_mode_from_env(
     const char *value,
     LONG length)
 {
   if (zz9k_picture_render_mode_matches(value, length, "datatype") ||
       zz9k_picture_render_mode_matches(value, length, "auto")) {
+    return ZZ9K_PICTURE_RENDER_MODE_DATATYPE;
+  }
+  /* These undocumented framebuffer diagnostics issued synchronous SDK
+   * mailbox calls from GM_RENDER while Intuition held the window layer.
+   * Keep old ENV settings safe and useful by selecting the validated
+   * DataType pixel path instead. */
+  if (zz9k_picture_legacy_framebuffer_mode(value, length)) {
     return ZZ9K_PICTURE_RENDER_MODE_DATATYPE;
   }
   if (zz9k_picture_render_mode_matches(value, length, "off")) {
@@ -576,33 +577,6 @@ static ZZ9KPictureRenderMode zz9k_picture_render_mode_from_env(
   }
   if (zz9k_picture_render_mode_matches(value, length, "probe")) {
     return ZZ9K_PICTURE_RENDER_MODE_PROBE;
-  }
-  if (zz9k_picture_render_mode_matches(value, length, "fill")) {
-    return ZZ9K_PICTURE_RENDER_MODE_FILL;
-  }
-  if (zz9k_picture_render_mode_matches(value, length, "fill1super")) {
-    return ZZ9K_PICTURE_RENDER_MODE_FILL1SUPER;
-  }
-  if (zz9k_picture_render_mode_matches(value, length, "surfacefill1super")) {
-    return ZZ9K_PICTURE_RENDER_MODE_SURFACEFILL1SUPER;
-  }
-  if (zz9k_picture_render_mode_matches(value, length, "scale1super")) {
-    return ZZ9K_PICTURE_RENDER_MODE_SCALE1SUPER;
-  }
-  if (zz9k_picture_render_mode_matches(value, length, "scale1")) {
-    return ZZ9K_PICTURE_RENDER_MODE_SCALE1;
-  }
-  if (zz9k_picture_render_mode_matches(value, length, "scale2")) {
-    return ZZ9K_PICTURE_RENDER_MODE_SCALE2;
-  }
-  if (zz9k_picture_render_mode_matches(value, length, "scale4")) {
-    return ZZ9K_PICTURE_RENDER_MODE_SCALE4;
-  }
-  if (zz9k_picture_render_mode_matches(value, length, "scale8")) {
-    return ZZ9K_PICTURE_RENDER_MODE_SCALE8;
-  }
-  if (zz9k_picture_render_mode_matches(value, length, "scale")) {
-    return ZZ9K_PICTURE_RENDER_MODE_SCALE;
   }
   return ZZ9K_PICTURE_RENDER_MODE_OFF;
 }
@@ -3405,20 +3379,6 @@ static int zz9k_picture_enable_hardware_render(Object *object,
       DTA_ObjName, (ULONG)zz9k_picture_object_name(codec),
       TAG_END);
   return 1;
-}
-
-static int zz9k_picture_render_mode_uses_subclass_attrs(
-    ZZ9KPictureRenderMode render_mode)
-{
-  return render_mode != ZZ9K_PICTURE_RENDER_MODE_SCALE &&
-         render_mode != ZZ9K_PICTURE_RENDER_MODE_SCALE1 &&
-         render_mode != ZZ9K_PICTURE_RENDER_MODE_SCALE1SUPER &&
-         render_mode != ZZ9K_PICTURE_RENDER_MODE_SCALE2 &&
-         render_mode != ZZ9K_PICTURE_RENDER_MODE_SCALE4 &&
-         render_mode != ZZ9K_PICTURE_RENDER_MODE_SCALE8 &&
-         render_mode != ZZ9K_PICTURE_RENDER_MODE_FILL1SUPER &&
-         render_mode != ZZ9K_PICTURE_RENDER_MODE_SURFACEFILL1SUPER &&
-         render_mode != ZZ9K_PICTURE_RENDER_MODE_FILL;
 }
 
 static int zz9k_picture_set_object_dimensions(Object *object,
@@ -6772,10 +6732,6 @@ static int zz9k_picture_prepare_hardware(Object *object,
       zz9k_picture_trace("layout: hardware decode only; using placeholder");
       return 0;
     }
-    if (!zz9k_picture_render_mode_uses_subclass_attrs(render_mode)) {
-      zz9k_picture_trace("layout: subclass render skipped");
-      return 1;
-    }
     if (!instance->render_attrs_ready &&
         zz9k_picture_enable_hardware_render(
             object, instance->codec, instance->width, instance->height)) {
@@ -6801,11 +6757,6 @@ static int zz9k_picture_prepare_hardware(Object *object,
   if (render_mode == ZZ9K_PICTURE_RENDER_MODE_DECODE) {
     zz9k_picture_trace("layout: hardware decode only; using placeholder");
     return 0;
-  }
-  if (!zz9k_picture_render_mode_uses_subclass_attrs(render_mode)) {
-    zz9k_picture_trace("layout: subclass render skipped");
-    zz9k_picture_trace("layout: hardware decode ready");
-    return 1;
   }
   if (!zz9k_picture_enable_hardware_render(
           object, instance->codec, instance->width, instance->height)) {
@@ -7355,136 +7306,6 @@ static int zz9k_picture_hardware_screen_ok(
   return 1;
 }
 
-static int zz9k_picture_render_is_full_redraw(
-    ZZ9KPictureInstance *instance,
-    const struct gpRender *render)
-{
-  (void)instance;
-  if (!render || render->gpr_Redraw != GREDRAW_REDRAW) {
-    return 0;
-  }
-  return 1;
-}
-
-static int zz9k_picture_render_should_skip_incremental(
-    ZZ9KPictureInstance *instance,
-    const struct gpRender *render)
-{
-  if (!zz9k_picture_render_is_full_redraw(instance, render) &&
-      instance && instance->rendered_once) {
-    zz9k_picture_trace_render_once(
-        instance, ZZ9K_PICTURE_RENDER_TRACE_INCREMENTAL_REDRAW,
-        "render: incremental redraw skipped");
-    return 1;
-  }
-  return 0;
-}
-
-static int zz9k_picture_render_mode_is_diagnostic_draw(
-    ZZ9KPictureRenderMode render_mode)
-{
-  return render_mode == ZZ9K_PICTURE_RENDER_MODE_SCALE ||
-         render_mode == ZZ9K_PICTURE_RENDER_MODE_SCALE1 ||
-         render_mode == ZZ9K_PICTURE_RENDER_MODE_SCALE1SUPER ||
-         render_mode == ZZ9K_PICTURE_RENDER_MODE_SCALE2 ||
-         render_mode == ZZ9K_PICTURE_RENDER_MODE_SCALE4 ||
-         render_mode == ZZ9K_PICTURE_RENDER_MODE_SCALE8 ||
-         render_mode == ZZ9K_PICTURE_RENDER_MODE_FILL1SUPER ||
-         render_mode == ZZ9K_PICTURE_RENDER_MODE_SURFACEFILL1SUPER ||
-         render_mode == ZZ9K_PICTURE_RENDER_MODE_FILL;
-}
-
-static uint32_t zz9k_picture_render_budget(
-    ZZ9KPictureRenderMode render_mode)
-{
-  if (render_mode == ZZ9K_PICTURE_RENDER_MODE_SCALE1) {
-    return 1U;
-  }
-  if (render_mode == ZZ9K_PICTURE_RENDER_MODE_SCALE1SUPER) {
-    return 1U;
-  }
-  if (render_mode == ZZ9K_PICTURE_RENDER_MODE_FILL1SUPER) {
-    return 1U;
-  }
-  if (render_mode == ZZ9K_PICTURE_RENDER_MODE_SURFACEFILL1SUPER) {
-    return 1U;
-  }
-  if (render_mode == ZZ9K_PICTURE_RENDER_MODE_SCALE2) {
-    return 2U;
-  }
-  if (render_mode == ZZ9K_PICTURE_RENDER_MODE_SCALE4) {
-    return 4U;
-  }
-  if (render_mode == ZZ9K_PICTURE_RENDER_MODE_SCALE8) {
-    return 8U;
-  }
-  return 0U;
-}
-
-static int zz9k_picture_render_budget_uses_superclass(
-    ZZ9KPictureRenderMode render_mode)
-{
-  return render_mode == ZZ9K_PICTURE_RENDER_MODE_SCALE1SUPER ||
-         render_mode == ZZ9K_PICTURE_RENDER_MODE_FILL1SUPER ||
-         render_mode == ZZ9K_PICTURE_RENDER_MODE_SURFACEFILL1SUPER;
-}
-
-static int zz9k_picture_render_should_skip_budget(
-    ZZ9KPictureInstance *instance,
-    ZZ9KPictureRenderMode render_mode)
-{
-  uint32_t budget;
-
-  budget = zz9k_picture_render_budget(render_mode);
-  if (instance && budget != 0U &&
-      instance->hardware_render_count >= budget) {
-    zz9k_picture_trace_render_once(
-        instance, ZZ9K_PICTURE_RENDER_TRACE_INCREMENTAL_REDRAW,
-        zz9k_picture_render_budget_uses_superclass(render_mode) ?
-        "render: budget exhausted; superclass" :
-        "render: budget exhausted");
-    return 1;
-  }
-  return 0;
-}
-
-static int zz9k_picture_render_should_skip_border_drag(
-    ZZ9KPictureInstance *instance,
-    const struct gpRender *render,
-    ZZ9KPictureRenderMode render_mode)
-{
-  const struct Window *window;
-  int32_t mouse_x;
-  int32_t mouse_y;
-  int32_t content_left;
-  int32_t content_top;
-  int32_t content_right;
-  int32_t content_bottom;
-
-  if (!instance || !instance->rendered_once ||
-      !zz9k_picture_render_mode_is_diagnostic_draw(render_mode) ||
-      !render || !render->gpr_GInfo || !render->gpr_GInfo->gi_Window) {
-    return 0;
-  }
-
-  window = render->gpr_GInfo->gi_Window;
-  mouse_x = (int32_t)window->MouseX;
-  mouse_y = (int32_t)window->MouseY;
-  content_left = (int32_t)window->BorderLeft;
-  content_top = (int32_t)window->BorderTop;
-  content_right = (int32_t)window->Width - (int32_t)window->BorderRight;
-  content_bottom = (int32_t)window->Height - (int32_t)window->BorderBottom;
-
-  if (mouse_x < content_left || mouse_y < content_top ||
-      mouse_x >= content_right || mouse_y >= content_bottom) {
-    zz9k_picture_trace_render_once(
-        instance, ZZ9K_PICTURE_RENDER_TRACE_INCREMENTAL_REDRAW,
-        "render: border drag skipped");
-    return 1;
-  }
-  return 0;
-}
-
 static ULONG zz9k_picture_render(Class *cl, Object *object,
                                  struct gpRender *render)
 {
@@ -7498,10 +7319,8 @@ static ULONG zz9k_picture_render(Class *cl, Object *object,
   ZZ9KFbRect clips[ZZ9K_IMAGE_WINDOW_MAX_VISIBLE_CLIPS];
   uint32_t visible_count;
   uint32_t clip_count;
-  uint32_t i;
   uint32_t fit_width;
   uint32_t fit_height;
-  int status;
   ZZ9KPictureRenderMode render_mode;
 
   instance = (ZZ9KPictureInstance *)INST_DATA(cl, object);
@@ -7531,19 +7350,6 @@ static ULONG zz9k_picture_render(Class *cl, Object *object,
                                    ZZ9K_PICTURE_RENDER_TRACE_MODE_DECODE,
                                    "render: mode decode; superclass");
     return DoSuperMethodA(cl, object, (Msg)render);
-  }
-  if (zz9k_picture_render_should_skip_budget(instance, render_mode)) {
-    if (zz9k_picture_render_budget_uses_superclass(render_mode)) {
-      return DoSuperMethodA(cl, object, (Msg)render);
-    }
-    return 1;
-  }
-  if (zz9k_picture_render_should_skip_incremental(instance, render)) {
-    return 1;
-  }
-  if (zz9k_picture_render_should_skip_border_drag(
-          instance, render, render_mode)) {
-    return 1;
   }
   if (render_mode == ZZ9K_PICTURE_RENDER_MODE_SUBCLASS) {
     zz9k_picture_trace_render_once(instance,
@@ -7575,40 +7381,6 @@ static ULONG zz9k_picture_render(Class *cl, Object *object,
         "render: mode screen complete");
     return 1;
   }
-  if (render_mode == ZZ9K_PICTURE_RENDER_MODE_SURFACEFILL1SUPER) {
-    ZZ9KSurfaceFillDesc fill;
-    ZZ9KRect rect;
-
-    rect.x = 0U;
-    rect.y = 0U;
-    rect.w = instance->width;
-    rect.h = instance->height;
-    if (!zz9k_surface_build_fill_desc(
-            &fill, instance->source_handle, &rect,
-            zz9k_surface_color_rgb(0U, 0U, 0U), 0U)) {
-      zz9k_picture_trace_render_once(
-          instance, ZZ9K_PICTURE_RENDER_TRACE_FILL_DESC_FAILED,
-          "render: source fill descriptor failed; superclass");
-      return DoSuperMethodA(cl, object, (Msg)render);
-    }
-    zz9k_picture_trace_render_once(instance,
-                                   ZZ9K_PICTURE_RENDER_TRACE_BEFORE_FILL,
-                                   "render: before source fill");
-    status = zz9k_fill_surface(instance->ctx, &fill);
-    if (status != ZZ9K_STATUS_OK) {
-      zz9k_picture_trace_render_once(
-          instance, ZZ9K_PICTURE_RENDER_TRACE_FILL_FAILED,
-          "render: source fill failed; superclass");
-      return DoSuperMethodA(cl, object, (Msg)render);
-    }
-    zz9k_picture_trace_render_once(instance,
-                                   ZZ9K_PICTURE_RENDER_TRACE_FILL_OK,
-                                   "render: source fill ok");
-    instance->hardware_render_count++;
-    instance->rendered_once = 1U;
-    return DoSuperMethodA(cl, object, (Msg)render);
-  }
-
   zz9k_picture_trace_render_once(instance,
                                  ZZ9K_PICTURE_RENDER_TRACE_BEGIN,
                                  "render: hardware render begin");
@@ -7628,7 +7400,6 @@ static ULONG zz9k_picture_render(Class *cl, Object *object,
     return 1;
   }
 
-  draw_rect = area;
   if (render_mode == ZZ9K_PICTURE_RENDER_MODE_DRAWCOPY ||
       render_mode == ZZ9K_PICTURE_RENDER_MODE_DRAW) {
     zz9k_picture_trace_render(
@@ -7713,66 +7484,10 @@ static ULONG zz9k_picture_render(Class *cl, Object *object,
                                    "render: mode probe complete");
     return 1;
   }
-
-  for (i = 0; i < clip_count; i++) {
-    ZZ9KSurfaceFillDesc fill;
-
-    if (!zz9k_image_window_build_framebuffer_fill_desc(
-            &fill, &clips[i], zz9k_surface_color_rgb(0U, 0U, 0U), 0U)) {
-      zz9k_picture_trace_render_once(
-          instance, ZZ9K_PICTURE_RENDER_TRACE_FILL_DESC_FAILED,
-          "render: fill descriptor failed; superclass");
-      return DoSuperMethodA(cl, object, (Msg)render);
-    }
-    zz9k_picture_trace_render_once(instance,
-                                   ZZ9K_PICTURE_RENDER_TRACE_BEFORE_FILL,
-                                   "render: before fill");
-    status = zz9k_fill_surface(instance->ctx, &fill);
-    if (status != ZZ9K_STATUS_OK) {
-      zz9k_picture_trace_render_once(
-          instance, ZZ9K_PICTURE_RENDER_TRACE_FILL_FAILED,
-          "render: fill failed; superclass");
-      return DoSuperMethodA(cl, object, (Msg)render);
-    }
-    zz9k_picture_trace_render_once(instance,
-                                   ZZ9K_PICTURE_RENDER_TRACE_FILL_OK,
-                                   "render: fill ok");
-  }
-
-  if (render_mode == ZZ9K_PICTURE_RENDER_MODE_FILL ||
-      render_mode == ZZ9K_PICTURE_RENDER_MODE_FILL1SUPER) {
-    zz9k_picture_trace_render_once(
-        instance, ZZ9K_PICTURE_RENDER_TRACE_MODE_FILL_COMPLETE,
-        "render: mode fill complete");
-    instance->hardware_render_count++;
-    instance->rendered_once = 1U;
-    return 1;
-  }
-
-  for (i = 0; i < clip_count; i++) {
-    zz9k_picture_trace_render_once(instance,
-                                   ZZ9K_PICTURE_RENDER_TRACE_BEFORE_SCALE,
-                                   "render: before scale");
-    status = zz9k_image_window_scale_sliced(
-        instance->ctx, instance->source_handle, instance->width,
-        instance->height, &draw_rect, &clips[i], ZZ9K_SCALE_BILINEAR);
-    if (status != ZZ9K_STATUS_OK) {
-      zz9k_picture_trace_render_once(
-          instance, ZZ9K_PICTURE_RENDER_TRACE_SCALE_FAILED,
-          "render: scale failed; superclass");
-      return DoSuperMethodA(cl, object, (Msg)render);
-    }
-    zz9k_picture_trace_render_once(instance,
-                                   ZZ9K_PICTURE_RENDER_TRACE_SCALE_OK,
-                                   "render: scale ok");
-  }
-
-  zz9k_picture_trace_render_once(instance,
-                                 ZZ9K_PICTURE_RENDER_TRACE_COMPLETE,
-                                 "render: hardware render complete");
-  instance->hardware_render_count++;
-  instance->rendered_once = 1U;
-  return 1;
+  /* GM_RENDER runs while Intuition holds the window layer. Keep this final
+   * fallback deliberately mailbox-free even if another diagnostic enum is
+   * added without its own lock-safe handler. */
+  return DoSuperMethodA(cl, object, (Msg)render);
 #endif
 }
 

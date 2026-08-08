@@ -70,6 +70,35 @@ static int expect_not_contains(const char *source, const char *needle)
   return 0;
 }
 
+static int expect_region_not_contains(const char *source,
+                                      const char *begin_needle,
+                                      const char *end_needle,
+                                      const char *needle)
+{
+  const char *begin;
+  const char *end;
+  const char *match;
+
+  begin = strstr(source, begin_needle);
+  if (!begin) {
+    printf("missing region start %s\n", begin_needle);
+    return 0;
+  }
+  end = strstr(begin, end_needle);
+  if (!end) {
+    printf("missing region end %s\n", end_needle);
+    return 0;
+  }
+  match = strstr(begin, needle);
+  if (!match || match >= end) {
+    return 1;
+  }
+
+  printf("unexpected %s between %s and %s\n",
+         needle, begin_needle, end_needle);
+  return 0;
+}
+
 int main(int argc, char **argv)
 {
   char *source;
@@ -109,12 +138,12 @@ int main(int argc, char **argv)
       source, "Copyright (C) 2024-2026, Dimitris Panokostas / BlitterStudio");
   ok &= expect_contains(source, "\"zz9k-picture.datatype\"");
   ok &= expect_contains(source, "ZZ9K_PICTURE_DATATYPE_VERSION 42");
-  ok &= expect_contains(source, "ZZ9K_PICTURE_DATATYPE_REVISION 147");
-  ok &= expect_contains(source, "$VER: zz9k-picture.datatype 42.147");
+  ok &= expect_contains(source, "ZZ9K_PICTURE_DATATYPE_REVISION 148");
+  ok &= expect_contains(source, "$VER: zz9k-picture.datatype 42.148");
   ok &= expect_contains(source, "ZZ9K_PICTURE_BUILD_MARKER");
   ok &= expect_contains(
       source,
-      "\"metadata: build 2026-06-10 datatype-v43-os31-v147\"");
+      "\"metadata: build 2026-08-08 datatype-render-lock-safe-v148\"");
   ok &= expect_contains(source, "ZZ9K_PICTURE_FORCE_ALPHA_RGB_COMPAT 0");
   ok &= expect_contains(source, "ZZ9K_PICTURE_OBJECT_NAME_BYTES 128U");
   ok &= expect_contains(source, "char object_name[ZZ9K_PICTURE_OBJECT_NAME_BYTES];");
@@ -1203,61 +1232,34 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "zz9k_picture_prepare_hardware");
   ok &= expect_contains(source, "zz9k_picture_enable_hardware_render");
   ok &= expect_contains(source, "zz9k_picture_hardware_screen_ok");
-  ok &= expect_contains(source, "zz9k_picture_render_is_full_redraw");
-  ok &= expect_contains(source, "render->gpr_Redraw != GREDRAW_REDRAW");
-  ok &= expect_contains(source, "instance->rendered_once");
-  ok &= expect_contains(source, "instance->hardware_render_count");
-  ok &= expect_contains(source, "zz9k_picture_render_should_skip_incremental");
-  ok &= expect_contains(source, "\"render: incremental redraw skipped\"");
-  ok &= expect_not_contains(source, "\"render: incremental redraw; superclass\"");
-  ok &= expect_not_contains(source, "zz9k_picture_render_should_skip_after_first");
-  ok &= expect_not_contains(source, "\"render: later render skipped\"");
-  ok &= expect_contains(source, "zz9k_picture_render_mode_uses_subclass_attrs");
-  ok &= expect_contains(source, "render_mode != ZZ9K_PICTURE_RENDER_MODE_SCALE");
-  ok &= expect_contains(source, "render_mode != ZZ9K_PICTURE_RENDER_MODE_FILL");
-  ok &= expect_contains(source, "\"layout: subclass render skipped\"");
-  ok &= expect_contains(source, "zz9k_picture_render_should_skip_border_drag");
-  ok &= expect_contains(source, "window->MouseX");
-  ok &= expect_contains(source, "window->MouseY");
-  ok &= expect_contains(source, "\"render: border drag skipped\"");
-  ok &= expect_contains(source, "ZZ9K_PICTURE_RENDER_MODE_FILL1SUPER");
+  ok &= expect_not_contains(source, "zz9k_picture_render_is_full_redraw");
+  ok &= expect_not_contains(source, "instance->rendered_once");
+  ok &= expect_not_contains(source, "instance->hardware_render_count");
+  ok &= expect_not_contains(source, "zz9k_picture_render_should_skip_incremental");
+  ok &= expect_not_contains(source, "zz9k_picture_render_mode_uses_subclass_attrs");
+  ok &= expect_not_contains(source, "zz9k_picture_render_should_skip_border_drag");
+  ok &= expect_not_contains(source, "ZZ9K_PICTURE_RENDER_MODE_FILL1SUPER");
   ok &= expect_contains(source, "ZZ9K_PICTURE_RENDER_MODE_SMALLOFF");
   ok &= expect_contains(source, "ZZ9K_PICTURE_RENDER_MODE_V43SMALL");
-  ok &= expect_contains(source, "ZZ9K_PICTURE_RENDER_MODE_SURFACEFILL1SUPER");
-  ok &= expect_contains(source, "ZZ9K_PICTURE_RENDER_MODE_SCALE1");
-  ok &= expect_contains(source, "ZZ9K_PICTURE_RENDER_MODE_SCALE1SUPER");
-  ok &= expect_contains(source, "ZZ9K_PICTURE_RENDER_MODE_SCALE2");
-  ok &= expect_contains(source, "ZZ9K_PICTURE_RENDER_MODE_SCALE4");
-  ok &= expect_contains(source, "ZZ9K_PICTURE_RENDER_MODE_SCALE8");
-  ok &= expect_contains(source, "zz9k_picture_render_budget");
+  ok &= expect_not_contains(source, "ZZ9K_PICTURE_RENDER_MODE_SURFACEFILL1SUPER");
+  ok &= expect_not_contains(source, "ZZ9K_PICTURE_RENDER_MODE_SCALE1");
+  ok &= expect_not_contains(source, "ZZ9K_PICTURE_RENDER_MODE_SCALE2");
+  ok &= expect_not_contains(source, "ZZ9K_PICTURE_RENDER_MODE_SCALE4");
+  ok &= expect_not_contains(source, "ZZ9K_PICTURE_RENDER_MODE_SCALE8");
+  ok &= expect_not_contains(source, "zz9k_picture_render_budget");
   ok &= expect_contains(source, "\"fill1super\"");
   ok &= expect_contains(source, "\"smalloff\"");
   ok &= expect_contains(source, "\"datatype\"");
   ok &= expect_contains(source, "\"auto\"");
   ok &= expect_contains(source, "\"v43small\"");
   ok &= expect_contains(source, "\"surfacefill1super\"");
-  ok &= expect_contains(source, "\"render: source fill ok\"");
-  ok &= expect_contains(source, "zz9k_surface_build_fill_desc");
+  ok &= expect_not_contains(source, "\"render: source fill ok\"");
+  ok &= expect_not_contains(source, "zz9k_surface_build_fill_desc");
   ok &= expect_contains(source, "\"scale1\"");
   ok &= expect_contains(source, "\"scale1super\"");
   ok &= expect_contains(source, "\"scale2\"");
   ok &= expect_contains(source, "\"scale4\"");
   ok &= expect_contains(source, "\"scale8\"");
-  ok &= expect_contains(source, "\"render: budget exhausted\"");
-  ok &= expect_contains(source, "\"render: budget exhausted; superclass\"");
-  ok &= expect_contains(source, "instance->hardware_render_count++");
-  ok &= expect_contains(source, "render_mode == ZZ9K_PICTURE_RENDER_MODE_FILL");
-  ok &= expect_contains(source, "instance->rendered_once = 1U;");
-  ok &= expect_contains(
-      source,
-      "  if (zz9k_picture_render_should_skip_incremental(instance, render)) {\n"
-      "    return 1;\n"
-      "  }\n"
-      "  if (zz9k_picture_render_should_skip_border_drag(\n"
-      "          instance, render, render_mode)) {\n"
-      "    return 1;\n"
-      "  }\n"
-      "  if (render_mode == ZZ9K_PICTURE_RENDER_MODE_SUBCLASS)");
   ok &= expect_contains(source, "zz9k_picture_window_content_rect");
   ok &= expect_contains(source, "zz9k_picture_intersect_rects");
   ok &= expect_contains(source, "zz9k_picture_clip_rect_to_framebuffer");
@@ -1322,8 +1324,8 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "ZZ9K_PICTURE_RENDER_MODE_DRAWTRACE");
   ok &= expect_contains(source, "ZZ9K_PICTURE_RENDER_MODE_DRAW");
   ok &= expect_contains(source, "ZZ9K_PICTURE_RENDER_MODE_PROBE");
-  ok &= expect_contains(source, "ZZ9K_PICTURE_RENDER_MODE_FILL");
-  ok &= expect_contains(source, "ZZ9K_PICTURE_RENDER_MODE_SCALE");
+  ok &= expect_not_contains(source, "ZZ9K_PICTURE_RENDER_MODE_FILL");
+  ok &= expect_not_contains(source, "ZZ9K_PICTURE_RENDER_MODE_SCALE");
   ok &= expect_contains(source, "zz9k_picture_render_mode()");
   ok &= expect_contains(source, "zz9k_picture_render_mode_from_env");
   ok &= expect_contains(source, "\"render: mode off; superclass\"");
@@ -1342,7 +1344,7 @@ int main(int argc, char **argv)
       "render_mode == ZZ9K_PICTURE_RENDER_MODE_DRAWCOPY ||\n"
       "      render_mode == ZZ9K_PICTURE_RENDER_MODE_DRAW");
   ok &= expect_contains(source, "\"render: mode probe complete\"");
-  ok &= expect_contains(source, "\"render: mode fill complete\"");
+  ok &= expect_not_contains(source, "\"render: mode fill complete\"");
   ok &= expect_contains(source, "return 1;");
   ok &= expect_contains(
       source, "\"layout: hardware decode only; using placeholder\"");
@@ -1397,10 +1399,24 @@ int main(int argc, char **argv)
       source, "zz9k_image_window_choose_draw_rect_in_area(");
   ok &= expect_contains(source, "zz9k_image_window_visible_clips_for_window");
   ok &= expect_contains(source, "zz9k_image_window_build_damage_clips");
-  ok &= expect_contains(source, "zz9k_image_window_build_framebuffer_fill_desc");
-  ok &= expect_contains(source, "zz9k_fill_surface");
-  ok &= expect_contains(source, "zz9k_surface_color_rgb(0U, 0U, 0U)");
-  ok &= expect_contains(source, "zz9k_image_window_scale_sliced");
+  ok &= expect_not_contains(source, "zz9k_image_window_build_framebuffer_fill_desc");
+  ok &= expect_contains(source, "zz9k_picture_legacy_framebuffer_mode");
+  ok &= expect_contains(
+      source,
+      "return ZZ9K_PICTURE_RENDER_MODE_DATATYPE;");
+  ok &= expect_not_contains(source, "zz9k_surface_color_rgb(");
+  /* GM_RENDER owns a locked layer. It may do geometry and superclass work,
+   * but it must never enter either blocking SDK mailbox path. */
+  ok &= expect_region_not_contains(
+      source,
+      "static ULONG zz9k_picture_render(",
+      "static void zz9k_picture_instance_dispose(",
+      "zz9k_fill_surface(");
+  ok &= expect_region_not_contains(
+      source,
+      "static ULONG zz9k_picture_render(",
+      "static void zz9k_picture_instance_dispose(",
+      "zz9k_image_window_scale_sliced(");
   ok &= expect_contains(source, "\"render: source not ready; superclass\"");
   ok &= expect_contains(source, "\"render: screen rejected; superclass\"");
   ok &= expect_contains(source, "\"render: hardware render begin\"");
@@ -1408,18 +1424,18 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "\"render: draw rect ready\"");
   ok &= expect_contains(source, "\"render: visible clips ready\"");
   ok &= expect_contains(source, "\"render: damage clips ready\"");
-  ok &= expect_contains(source, "\"render: before fill\"");
-  ok &= expect_contains(source, "\"render: fill ok\"");
-  ok &= expect_contains(source, "\"render: before scale\"");
-  ok &= expect_contains(source, "\"render: scale ok\"");
+  ok &= expect_not_contains(source, "\"render: before fill\"");
+  ok &= expect_not_contains(source, "\"render: fill ok\"");
+  ok &= expect_not_contains(source, "\"render: before scale\"");
+  ok &= expect_not_contains(source, "\"render: scale ok\"");
   ok &= expect_contains(source, "\"render: render area unavailable; superclass\"");
   ok &= expect_contains(source, "\"render: draw rect unavailable; superclass\"");
   ok &= expect_contains(source, "\"render: visible clips unavailable; superclass\"");
   ok &= expect_contains(source, "\"render: damage clips unavailable; superclass\"");
-  ok &= expect_contains(source, "\"render: fill descriptor failed; superclass\"");
-  ok &= expect_contains(source, "\"render: fill failed; superclass\"");
-  ok &= expect_contains(source, "\"render: scale failed; superclass\"");
-  ok &= expect_contains(source, "\"render: hardware render complete\"");
+  ok &= expect_not_contains(source, "\"render: fill descriptor failed; superclass\"");
+  ok &= expect_not_contains(source, "\"render: fill failed; superclass\"");
+  ok &= expect_not_contains(source, "\"render: scale failed; superclass\"");
+  ok &= expect_not_contains(source, "\"render: hardware render complete\"");
   ok &= expect_contains(source, "gpr_GInfo->gi_Window");
   ok &= expect_contains(source, "ZZ9K_IMAGE_WINDOW_MAX_VISIBLE_CLIPS");
   ok &= expect_not_contains(source, "zz9k-view");
