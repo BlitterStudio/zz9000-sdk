@@ -75,7 +75,9 @@ int main(int argc, char **argv)
   }
 
   ok = 1;
-  ok &= expect_contains(source, "zz9k-picture.datatype 42.147");
+  ok &= expect_contains(source, "zz9k-picture.datatype 42.148");
+  ok &= expect_contains(source, "`GM_RENDER` lock-safe");
+  ok &= expect_contains(source, "legacy `ENV:ZZ9K_PICTURE_RENDER_MODE`");
   ok &= expect_contains(source, "validated SDK v2 DataType");
   ok &= expect_contains(source, "OS3.1");
   ok &= expect_contains(source, "picture.datatype v39-v42");
