@@ -32,8 +32,8 @@
 #endif /* MPEGA_LIBRARY_NAME */
 
 #define MPEGA_LIBRARY_VERSION 2
-#define MPEGA_LIBRARY_REVISION 124
-#define MPEGA_LIBRARY_DATE "07.08.2026"
+#define MPEGA_LIBRARY_REVISION 125
+#define MPEGA_LIBRARY_DATE "13.08.2026"
 
 /* Derive the $VER: string from the version macros rather than repeating the
  * numbers. They are the same identity read two ways -- lib_Version and
@@ -412,7 +412,7 @@ static int mpega_stream_open_source(MPEGACompatStream *state, char *filename)
   MPEGA_ACCESS access;
   LONG end_pos;
 
-  if (!state || !filename) {
+  if (!state || (!filename && !state->ctrl.bs_access)) {
     return 0;
   }
 
@@ -1695,7 +1695,9 @@ static MPEGA_STREAM *mpega_call_open(REG(a6, struct MPEGACompatBase *base),
   MPEGACompatStream *state;
 
   (void)base;
-  if (!filename) {
+  /* A custom bitstream hook owns stream access and may not need a name.
+   * RiVA relies on this original mpega.library behaviour for system streams. */
+  if (!filename && (!ctrl || !ctrl->bs_access)) {
     return 0;
   }
 

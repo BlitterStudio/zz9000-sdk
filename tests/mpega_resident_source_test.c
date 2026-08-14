@@ -94,7 +94,7 @@ int main(int argc, char **argv)
    * two ways, and hardcoding the string let them drift apart during the v2.8
    * freeze. Pin the macros and the derivation, not the rendered text. */
   ok &= expect_contains(source, "#define MPEGA_LIBRARY_VERSION 2");
-  ok &= expect_contains(source, "#define MPEGA_LIBRARY_REVISION 124");
+  ok &= expect_contains(source, "#define MPEGA_LIBRARY_REVISION 125");
   ok &= expect_contains(source,
                         "MPEGA_STRINGIFY(MPEGA_LIBRARY_VERSION)");
   ok &= expect_contains(source,
@@ -233,6 +233,19 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "dst[i] = src[i];");
   ok &= expect_contains(source, "AllocMem(sizeof(*state), MEMF_PUBLIC | MEMF_CLEAR)");
   ok &= expect_contains(source, "AllocMem(MPEGA_STREAM_CHUNK_BYTES");
+  /* RiVA supplies its multiplexed MPEG system stream through bs_access and
+   * deliberately passes a NULL filename.  Match the original mpega.library
+   * contract: a name is mandatory only for the default file-I/O path. */
+  ok &= expect_contains(source,
+                        "if (!filename && (!ctrl || !ctrl->bs_access)) {");
+  ok &= expect_contains(source,
+                        "if (!state || (!filename && "
+                        "!state->ctrl.bs_access)) {");
+  ok &= expect_not_contains(source,
+                            "if (!filename) {\n"
+                            "    return 0;\n"
+                            "  }");
+  ok &= expect_not_contains(source, "if (!state || !filename) {");
   ok &= expect_contains(source, "Open((CONST_STRPTR)filename, MODE_OLDFILE)");
   ok &= expect_not_contains(source,
                             "if (state->ctrl.bs_access) {\n"
