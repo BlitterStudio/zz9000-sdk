@@ -94,7 +94,7 @@ static inline uint32_t zz9k_missing_service_flags(uint32_t available_flags,
 
 static inline uint32_t zz9k_known_capability_count(void)
 {
-  return 24U;
+  return 25U;
 }
 
 static inline uint32_t zz9k_known_capability_bit(uint32_t index)
@@ -148,6 +148,8 @@ static inline uint32_t zz9k_known_capability_bit(uint32_t index)
     return ZZ9K_CAP_MEDIA_SESSION;
   case 23:
     return ZZ9K_CAP_AUDIO_STREAM_DRAIN;
+  case 24:
+    return ZZ9K_CAP_APERTURE_LAYOUT;
   default:
     return 0U;
   }
@@ -377,6 +379,8 @@ static inline const char *zz9k_capability_name(uint32_t capability_bit)
     return "media-session";
   case ZZ9K_CAP_AUDIO_STREAM_DRAIN:
     return "audio-stream-drain";
+  case ZZ9K_CAP_APERTURE_LAYOUT:
+    return "aperture-layout";
   default:
     return 0;
   }

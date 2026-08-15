@@ -77,6 +77,7 @@ struct ZZ9KContext {
   volatile uint16_t *irq_ack;
   volatile uint16_t *sdk_irq_control;
   uint32_t capability_bits;
+  ZZ9KApertureLayout aperture_layout;
   uint32_t request_ring_entries;
   uint32_t completion_ring_entries;
   uint32_t next_request_id;
@@ -84,6 +85,7 @@ struct ZZ9KContext {
   uint32_t offload_timeout_ms;
   uint32_t sync_wait_timeout_ms;   /* armed-wait ENV bound, read once; 0 = unread */
   unsigned char irq_armed;
+  unsigned char aperture_layout_valid;
 #if ZZ9K_HOST_AMIGA
   struct Interrupt irq;
   struct Task *irq_task;
@@ -95,6 +97,107 @@ struct ZZ9KContext {
   int timer_open;
 #endif
 };
+
+static int zz9k_board_range_fits(uint32_t board_size,
+                                 uint32_t board_offset, uint32_t length);
+
+static int zz9k_expected_aperture_layout(uint32_t aperture_size,
+                                         ZZ9KApertureLayout *layout)
+{
+  uint32_t flags;
+
+  if (!layout) {
+    return 0;
+  }
+  memset(layout, 0, sizeof(*layout));
+  flags = ZZ9K_APERTURE_FLAG_VALID | ZZ9K_APERTURE_FLAG_HOST_WINDOW;
+  layout->aperture_size = aperture_size;
+  layout->framebuffer_base = 0x00010000UL;
+  layout->template_size = 0x00010000UL;
+  layout->audio_size = 0x00010000UL;
+
+  switch (aperture_size) {
+  case 0x00200000UL:
+    layout->framebuffer_size = 0x001c0000UL;
+    layout->template_base = 0x001d0000UL;
+    layout->host_base = 0x001e0000UL;
+    layout->host_size = 0x00010000UL;
+    layout->audio_base = 0x001f0000UL;
+    break;
+  case 0x00400000UL:
+    flags |= ZZ9K_APERTURE_FLAG_PIP;
+    layout->framebuffer_size = 0x00388000UL;
+    layout->pip_base = 0x00398000UL;
+    layout->pip_size = 0x00038000UL;
+    layout->template_base = 0x003d0000UL;
+    layout->host_base = 0x003e0000UL;
+    layout->host_size = 0x00010000UL;
+    layout->audio_base = 0x003f0000UL;
+    break;
+  case 0x00800000UL:
+    flags |= ZZ9K_APERTURE_FLAG_PIP;
+    layout->framebuffer_size = 0x00770000UL;
+    layout->pip_base = 0x00780000UL;
+    layout->pip_size = 0x00040000UL;
+    layout->template_base = 0x007c0000UL;
+    layout->host_base = 0x007d0000UL;
+    layout->host_size = 0x00020000UL;
+    layout->audio_base = 0x007f0000UL;
+    break;
+  default:
+    memset(layout, 0, sizeof(*layout));
+    return 0;
+  }
+
+  layout->profile = ZZ9K_APERTURE_PROFILE(
+      ZZ9K_APERTURE_LAYOUT_GENERATION_1, flags);
+  return 1;
+}
+
+static int zz9k_aperture_layout_matches(const ZZ9KBoard *board,
+                                        const ZZ9KApertureLayout *layout)
+{
+  ZZ9KApertureLayout expected;
+
+  if (!board || !layout || board->zorro_version != 2U ||
+      board->board_size == 0U ||
+      layout->aperture_size != board->board_size ||
+      !zz9k_expected_aperture_layout(board->board_size, &expected)) {
+    return 0;
+  }
+  if (!zz9k_board_range_fits(layout->aperture_size,
+                             layout->framebuffer_base,
+                             layout->framebuffer_size) ||
+      !zz9k_board_range_fits(layout->aperture_size,
+                             layout->template_base,
+                             layout->template_size) ||
+      !zz9k_board_range_fits(layout->aperture_size,
+                             layout->host_base,
+                             layout->host_size) ||
+      !zz9k_board_range_fits(layout->aperture_size,
+                             layout->audio_base,
+                             layout->audio_size) ||
+      ((layout->pip_base != 0U || layout->pip_size != 0U) &&
+       !zz9k_board_range_fits(layout->aperture_size,
+                              layout->pip_base,
+                              layout->pip_size))) {
+    return 0;
+  }
+
+  return (layout->profile == expected.profile ||
+          layout->profile ==
+              (expected.profile | ZZ9K_APERTURE_FLAG_ACKED)) &&
+         layout->framebuffer_base == expected.framebuffer_base &&
+         layout->framebuffer_size == expected.framebuffer_size &&
+         layout->pip_base == expected.pip_base &&
+         layout->pip_size == expected.pip_size &&
+         layout->template_base == expected.template_base &&
+         layout->template_size == expected.template_size &&
+         layout->host_base == expected.host_base &&
+         layout->host_size == expected.host_size &&
+         layout->audio_base == expected.audio_base &&
+         layout->audio_size == expected.audio_size;
+}
 
 #if ZZ9K_HOST_AMIGA
 static int zz9k_timer_open(ZZ9KContext *ctx);
@@ -818,6 +921,15 @@ int zz9k_attach_mailbox(ZZ9KContext **ctx, const ZZ9KBoard *board,
   if ((capability_bits & ZZ9K_CAP_MAILBOX) == 0) {
     return ZZ9K_STATUS_UNSUPPORTED;
   }
+  if ((capability_bits & ZZ9K_CAP_APERTURE_LAYOUT) != 0U &&
+      board->zorro_version == 2U) {
+    ZZ9KApertureLayout expected;
+
+    if (board->board_size == 0U ||
+        !zz9k_expected_aperture_layout(board->board_size, &expected)) {
+      return ZZ9K_STATUS_UNSUPPORTED;
+    }
+  }
 
   new_ctx = (ZZ9KContext *)zz9k_alloc_host(sizeof(*new_ctx));
   if (!new_ctx) {
@@ -855,6 +967,23 @@ int zz9k_attach_mailbox(ZZ9KContext **ctx, const ZZ9KBoard *board,
       (volatile ZZ9KMailboxWireEntry *)(base + completion_offset);
 
   *ctx = new_ctx;
+  if ((capability_bits & ZZ9K_CAP_APERTURE_LAYOUT) != 0U &&
+      board->zorro_version == 2U) {
+    ZZ9KApertureLayout layout;
+    ZZ9KCaps caps;
+    int status;
+
+    status = zz9k_query_aperture_layout(new_ctx, &layout);
+    if (status == ZZ9K_STATUS_OK) {
+      status = zz9k_query_caps(new_ctx, &caps);
+    }
+    if (status != ZZ9K_STATUS_OK ||
+        (new_ctx->capability_bits & ZZ9K_CAP_APERTURE_LAYOUT) == 0U) {
+      zz9k_close(new_ctx);
+      *ctx = 0;
+      return status == ZZ9K_STATUS_OK ? ZZ9K_STATUS_INTERNAL_ERROR : status;
+    }
+  }
   return ZZ9K_STATUS_OK;
 }
 
@@ -1141,7 +1270,77 @@ int zz9k_query_caps(ZZ9KContext *ctx, ZZ9KCaps *caps)
   if (status != ZZ9K_STATUS_OK) {
     return status;
   }
-  return zz9k_reply_caps(&reply, caps);
+  status = zz9k_reply_caps(&reply, caps);
+  if (status == ZZ9K_STATUS_OK) {
+    ctx->capability_bits = caps->capability_bits;
+  }
+  return status;
+}
+
+int zz9k_query_aperture_layout(ZZ9KContext *ctx,
+                               ZZ9KApertureLayout *layout)
+{
+  ZZ9KRequest request;
+  ZZ9KMailboxEntry reply;
+  ZZ9KApertureLayout decoded;
+  int status;
+
+  if (!ctx || !layout) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+  memset(layout, 0, sizeof(*layout));
+  if (ctx->aperture_layout_valid &&
+      (ctx->aperture_layout.profile & ZZ9K_APERTURE_FLAG_ACKED) != 0U) {
+    *layout = ctx->aperture_layout;
+    return ZZ9K_STATUS_OK;
+  }
+  memset(&ctx->aperture_layout, 0, sizeof(ctx->aperture_layout));
+  ctx->aperture_layout_valid = 0U;
+  if (ctx->board.zorro_version != 2U ||
+      (ctx->capability_bits & ZZ9K_CAP_APERTURE_LAYOUT) == 0U) {
+    return ZZ9K_STATUS_UNSUPPORTED;
+  }
+
+  memset(&reply, 0, sizeof(reply));
+  status = zz9k_request_query_aperture_layout(&request);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  status = zz9k_call(ctx, &request, &reply, ZZ9K_DEFAULT_TIMEOUT_TICKS);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  status = zz9k_reply_aperture_layout(&reply, &decoded);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  if (!zz9k_aperture_layout_matches(&ctx->board, &decoded)) {
+    return ZZ9K_STATUS_INTERNAL_ERROR;
+  }
+
+  ctx->aperture_layout = decoded;
+  ctx->aperture_layout_valid = 1U;
+  *layout = decoded;
+  return ZZ9K_STATUS_OK;
+}
+
+static int zz9k_refresh_z2_aperture(ZZ9KContext *ctx)
+{
+  ZZ9KApertureLayout layout;
+  ZZ9KCaps caps;
+  int status;
+
+  status = zz9k_query_caps(ctx, &caps);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  if ((ctx->capability_bits & ZZ9K_CAP_APERTURE_LAYOUT) == 0U) {
+    return ZZ9K_STATUS_UNSUPPORTED;
+  }
+  if ((ctx->capability_bits & ZZ9K_CAP_HOST_WINDOW_HEAP) == 0U) {
+    return ZZ9K_STATUS_UNSUPPORTED;
+  }
+  return zz9k_query_aperture_layout(ctx, &layout);
 }
 
 int zz9k_query_service(ZZ9KContext *ctx, uint32_t service_id,
@@ -1221,7 +1420,9 @@ int zz9k_alloc_shared(ZZ9KContext *ctx, uint32_t length, uint32_t alignment,
   ZZ9KMailboxEntry reply;
   ZZ9KSharedBufferInfo info;
   uint32_t arm_addr;
+  uint32_t board_offset;
   int card_only;
+  int negotiated_host_window;
   int status;
 
   if (!ctx || !buffer || length == 0) {
@@ -1236,14 +1437,32 @@ int zz9k_alloc_shared(ZZ9KContext *ctx, uint32_t length, uint32_t alignment,
   if (card_only || ctx->board.zorro_version != 2) {
     flags &= ~(uint32_t)ZZ9K_ALLOC_HOST_WINDOW;
   }
-  /* The firmware heap sits near the top of the standard 4 MB Zorro 2
-   * window; the 2 MB bitstream variants (zorro2-2mb, a500-2mb) cannot
-   * reach it. Refuse up front rather than burn a mailbox round trip on
-   * an alloc that can never map (ZZ9K_HOST_WINDOW_MIN_BOARD_SIZE). */
-  if ((flags & ZZ9K_ALLOC_HOST_WINDOW) != 0U &&
-      ctx->board.board_size < ZZ9K_HOST_WINDOW_MIN_BOARD_SIZE) {
-    memset(buffer, 0, sizeof(*buffer));
-    return ZZ9K_STATUS_UNSUPPORTED;
+  negotiated_host_window = 0;
+  if ((flags & ZZ9K_ALLOC_HOST_WINDOW) != 0U) {
+    if ((ctx->capability_bits & ZZ9K_CAP_APERTURE_LAYOUT) != 0U) {
+      if ((ctx->capability_bits & ZZ9K_CAP_HOST_WINDOW_HEAP) == 0U ||
+          !ctx->aperture_layout_valid ||
+          (ctx->aperture_layout.profile & ZZ9K_APERTURE_FLAG_ACKED) == 0U) {
+        status = zz9k_refresh_z2_aperture(ctx);
+        if (status != ZZ9K_STATUS_OK) {
+          memset(buffer, 0, sizeof(*buffer));
+          return status;
+        }
+      }
+      if ((ctx->capability_bits & ZZ9K_CAP_HOST_WINDOW_HEAP) == 0U ||
+          !ctx->aperture_layout_valid ||
+          (ctx->aperture_layout.profile & ZZ9K_APERTURE_FLAG_ACKED) == 0U) {
+        memset(buffer, 0, sizeof(*buffer));
+        return ZZ9K_STATUS_UNSUPPORTED;
+      }
+      negotiated_host_window = 1;
+    } else if (ctx->board.board_size != ZZ9K_HOST_WINDOW_MIN_BOARD_SIZE) {
+      /* With no layout capability, retain only the historical fixed 4 MB
+       * mapping. A 2 MB or unknown/extended aperture must never inherit the
+       * old absolute heap placement by accident. */
+      memset(buffer, 0, sizeof(*buffer));
+      return ZZ9K_STATUS_UNSUPPORTED;
+    }
   }
 
   memset(buffer, 0, sizeof(*buffer));
@@ -1259,6 +1478,15 @@ int zz9k_alloc_shared(ZZ9KContext *ctx, uint32_t length, uint32_t alignment,
   }
   status = zz9k_reply_shared_buffer(&reply, &info);
   if (status != ZZ9K_STATUS_OK) {
+    if (zz9k_reply_require(&reply, ZZ9K_OP_ALLOC_SHARED, 16U) ==
+        ZZ9K_STATUS_OK) {
+      uint32_t returned_handle =
+          zz9k_get_be32(&reply.payload.inline_data[0]);
+
+      if (returned_handle != ZZ9K_INVALID_HANDLE) {
+        (void)zz9k_free_shared(ctx, returned_handle);
+      }
+    }
     return status;
   }
 
@@ -1272,7 +1500,9 @@ int zz9k_alloc_shared(ZZ9KContext *ctx, uint32_t length, uint32_t alignment,
   }
 
   if (buffer->handle == ZZ9K_INVALID_HANDLE || buffer->length < length ||
-      (!card_only && !buffer->data)) {
+      (!card_only && !buffer->data) ||
+      (negotiated_host_window &&
+       (info.flags & ZZ9K_ALLOC_HOST_WINDOW) == 0U)) {
     /* The card-side allocation exists even when we cannot use it; free
      * it or every failed attempt permanently leaks a shared-heap block
      * (seen on Zorro 2, where the default heap never maps). */
@@ -1281,6 +1511,21 @@ int zz9k_alloc_shared(ZZ9KContext *ctx, uint32_t length, uint32_t alignment,
     }
     memset(buffer, 0, sizeof(*buffer));
     return ZZ9K_STATUS_INTERNAL_ERROR;
+  }
+
+  if (negotiated_host_window) {
+    if (!zz9k_arm_range_to_board_offset(ctx->board.board_size, arm_addr,
+                                        buffer->length, &board_offset) ||
+        board_offset < ctx->aperture_layout.host_base ||
+        board_offset - ctx->aperture_layout.host_base >=
+            ctx->aperture_layout.host_size ||
+        buffer->length > ctx->aperture_layout.host_size -
+                             (board_offset -
+                              ctx->aperture_layout.host_base)) {
+      (void)zz9k_free_shared(ctx, buffer->handle);
+      memset(buffer, 0, sizeof(*buffer));
+      return ZZ9K_STATUS_INTERNAL_ERROR;
+    }
   }
 
   return ZZ9K_STATUS_OK;
@@ -2538,6 +2783,30 @@ int zz9k_read_diag_sched(ZZ9KContext *ctx, ZZ9KDiagSchedInfo *sched)
     return status;
   }
   return zz9k_reply_diag_sched(&reply, sched);
+}
+
+int zz9k_read_diag_memory(ZZ9KContext *ctx, ZZ9KDiagMemoryInfo *memory)
+{
+  ZZ9KRequest request;
+  ZZ9KMailboxEntry reply;
+  int status;
+
+  if (!ctx || !memory) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  memset(memory, 0, sizeof(*memory));
+  memset(&reply, 0, sizeof(reply));
+  status = zz9k_request_diag_memory(&request);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  status = zz9k_call(ctx, &request, &reply, ZZ9K_DEFAULT_TIMEOUT_TICKS);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  return zz9k_reply_diag_memory(&reply, memory);
 }
 
 static int zz9k_enqueue_request_locked(ZZ9KContext *ctx, ZZ9KRequest *request,

@@ -11,8 +11,8 @@
  * The context wraps the SDK board handle plus persistent shared scratch
  * buffers: zz9k_alloc_shared/zz9k_free_shared are a full mailbox round trip
  * each, so per-operation allocation would multiply the documented ~6 ms call
- * latency by the buffer count. The scratch is allocated lazily, grows
- * geometrically, and is released by zz9k_offload_close.
+ * latency by the buffer count. Scratch uses exact aligned HOST_WINDOW growth
+ * and is released by zz9k_offload_close.
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

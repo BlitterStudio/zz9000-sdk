@@ -448,6 +448,11 @@ int main(int argc, char **argv)
       "ZZ9K_PICTURE_DIRECT_DATATYPE_SURFACE_MAX_BYTES \\\n"
       "  (512UL * 1024UL)");
   ok &= expect_contains(source, "ZZ9K_PICTURE_STAGING_BYTES (256UL * 1024UL)");
+  ok &= expect_contains(source, "ZZ9K_PICTURE_Z2_STAGING_BYTES (24UL * 1024UL)");
+  ok &= expect_contains(source,
+                        "ZZ9K_PICTURE_Z2_TILE_TARGET_BYTES (32UL * 1024UL)");
+  ok &= expect_contains(source, "ZZ9K_CAP_APERTURE_LAYOUT");
+  ok &= expect_contains(source, "ZZ9K_ALLOC_HOST_WINDOW : 0U");
   ok &= expect_contains(source, "ZZ9K_PICTURE_READ_CHUNK_BYTES (256UL * 1024UL)");
   ok &= expect_contains(source, "zz9k_picture_stream_input_bytes");
   ok &= expect_contains(source, "zz9k_picture_file_size");

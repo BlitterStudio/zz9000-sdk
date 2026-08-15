@@ -76,6 +76,12 @@ testing confirmed the validated decode path with no regressions. On
 superclass. The transparent PNG alpha path is the active validated DataType
 route, not a diagnostic-only experiment.
 
+With a negotiated Zorro 2 aperture, compressed input is capped at a 24 KiB
+host-window buffer and output is emitted through geometry-derived tiles capped
+at 32 KiB. A single row that cannot fit that cap fails the hardware path
+without allocating outside the driver-reserved window. Zorro 3 keeps the
+existing larger staging and tile targets.
+
 On `picture.datatype v39-v42`, the class decodes into a legacy 8-bit remapped
 bitmap instead of aborting PNG decode. That OS3.1 fallback uses a 216-color
 palette, publishes a normal `PDTA_BitMap`, and degrades transparent PNG alpha to

@@ -13,8 +13,9 @@
  * Shared-buffer allocation is a synchronous mailbox round trip (~6 ms,
  * docs/zz9k-crypto-acceleration.md), so the context keeps one persistent
  * scratch buffer per role and only the crypto call itself touches the mailbox
- * on a warm path. The buffers grow geometrically when a larger record arrives
- * and are released by zz9k_offload_close.
+ * on a warm path. Buffers use exact aligned capacities so a negotiated Z2 host
+ * window is not lost to geometric over-allocation; all are released by
+ * zz9k_offload_close.
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -56,8 +57,9 @@ typedef struct {
   ZZ9KSharedBuffer dst;
 } ZZ9KOffloadCtx;
 
-/* Make sure `b` exists and holds at least `need` bytes, growing geometrically
- * so a long TLS session settles into zero allocation round trips. */
+/* Make sure `b` exists and holds at least `need` bytes. Exact aligned growth
+ * keeps the persistent TLS scratch set comfortably inside the compact Z2 host
+ * window while preserving the allocation-free warm path. */
 static int zz9k_offload_ensure(ZZ9KOffloadCtx *o, ZZ9KSharedBuffer *b,
                                uint32_t need)
 {
@@ -69,15 +71,16 @@ static int zz9k_offload_ensure(ZZ9KOffloadCtx *o, ZZ9KSharedBuffer *b,
   if (b->handle != 0U && b->length >= need) {
     return 1;
   }
-  cap = b->length != 0U ? b->length : 32U;
-  while (cap < need) {
-    cap *= 2U;
+  if (need > 0xffffffffUL - (ZZ9K_OFFLOAD_ALIGN - 1U)) {
+    return 0;
   }
+  cap = (need + ZZ9K_OFFLOAD_ALIGN - 1U) & ~(ZZ9K_OFFLOAD_ALIGN - 1U);
   if (b->handle != 0U) {
     zz9k_free_shared(o->sdk, b->handle);
     memset(b, 0, sizeof(*b));
   }
-  if (zz9k_alloc_shared(o->sdk, cap, ZZ9K_OFFLOAD_ALIGN, 0, b) !=
+  if (zz9k_alloc_shared(o->sdk, cap, ZZ9K_OFFLOAD_ALIGN,
+                        ZZ9K_ALLOC_HOST_WINDOW, b) !=
       ZZ9K_STATUS_OK) {
     memset(b, 0, sizeof(*b));
     return 0;
@@ -176,6 +179,12 @@ void *zz9k_offload_open(unsigned int *service_flags)
   o->sdk = sdk;
   zz9k_set_offload_timeout_ms(
       sdk, zz9k_env_u32("ZZ9K_OFFLOAD_TIMEOUT_MS", ZZ9K_OFFLOAD_TIMEOUT_MS));
+  /* Do not advertise hardware-owned algorithms until a CPU-visible scratch
+   * allocation has proved that this SDK/driver/firmware layout is usable. */
+  if (!zz9k_offload_ensure(o, &o->small, 32U)) {
+    zz9k_offload_close(o);
+    return NULL;
+  }
   if (service_flags != NULL) {
     *service_flags = svc.flags;
   }

@@ -2,11 +2,14 @@
 
 #include "zzplay-video.h"
 
+#define ZZPLAY_PIP_MIN_DIM 16U
+#define ZZPLAY_PIP_MAX_DIM 4096U
+
 ZZPlayVideoSinkStatus zzplay_video_sink_check(
     int board_found, uint32_t zorro_version,
     int p96_available, int pip_available)
 {
-  if (!board_found || zorro_version != 3U) {
+  if (!board_found || (zorro_version != 2U && zorro_version != 3U)) {
     return ZZPLAY_VIDEO_SINK_UNSUPPORTED_BOARD;
   }
   if (!p96_available) {
@@ -16,6 +19,37 @@ ZZPlayVideoSinkStatus zzplay_video_sink_check(
     return ZZPLAY_VIDEO_SINK_PIP_UNAVAILABLE;
   }
   return ZZPLAY_VIDEO_SINK_READY;
+}
+
+int zzplay_video_z2_aperture_ready(const ZZ9KApertureLayout *layout,
+                                   uint32_t width, uint32_t height)
+{
+  uint32_t flags;
+  uint32_t pitch;
+  uint32_t bytes;
+  uint32_t required = ZZ9K_APERTURE_FLAG_VALID |
+                      ZZ9K_APERTURE_FLAG_ACKED |
+                      ZZ9K_APERTURE_FLAG_PIP;
+
+  if (!layout) {
+    return 0;
+  }
+  flags = layout->profile & ZZ9K_APERTURE_LAYOUT_FLAGS_MASK;
+  if (((layout->profile & ZZ9K_APERTURE_LAYOUT_GENERATION_MASK) >>
+       ZZ9K_APERTURE_LAYOUT_GENERATION_SHIFT) !=
+          ZZ9K_APERTURE_LAYOUT_GENERATION_1 ||
+      (flags & required) != required || layout->pip_size == 0U ||
+      width < ZZPLAY_PIP_MIN_DIM || height < ZZPLAY_PIP_MIN_DIM ||
+      width > ZZPLAY_PIP_MAX_DIM || height > ZZPLAY_PIP_MAX_DIM ||
+      (width & 1U) != 0U) {
+    return 0;
+  }
+  pitch = width * 2U;
+  if (height > 0xffffffffUL / pitch) {
+    return 0;
+  }
+  bytes = pitch * height;
+  return bytes <= layout->pip_size;
 }
 
 int zzplay_video_backend_available(uint32_t flags)

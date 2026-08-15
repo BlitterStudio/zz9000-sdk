@@ -88,6 +88,10 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "Max request:");
   ok &= expect_contains(source, "zz9k_read_diag_sched");
   ok &= expect_contains(source, "Scheduler:");
+  ok &= expect_contains(source, "zz9k_query_aperture_layout");
+  ok &= expect_contains(source, "Aperture layout:");
+  ok &= expect_contains(source, "zz9k_read_diag_memory");
+  ok &= expect_contains(source, "Aperture memory:");
 
   free(source);
   return ok ? 0 : 1;

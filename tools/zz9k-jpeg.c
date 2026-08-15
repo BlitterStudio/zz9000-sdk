@@ -11,7 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define ZZ9K_JPEG_STAGING_BYTES (64UL * 1024UL)
+#define ZZ9K_JPEG_STAGING_BYTES (32UL * 1024UL)
 #define ZZ9K_JPEG_TILE_TARGET_BYTES (256UL * 1024UL)
 #define ZZ9K_JPEG_DEFAULT_TILE_ROWS 32U
 #define ZZ9K_JPEG_DEFAULT_FRAMEBUFFER_HOLD_TICKS 100U
@@ -1926,7 +1926,8 @@ static int zz9k_jpeg_run_streaming(ZZ9KContext *ctx,
 	print_diag(ctx, "before input alloc");
 
 	staging_bytes = zz9k_jpeg_staging_bytes();
-	status = zz9k_alloc_shared(ctx, staging_bytes, 16U, 0, &staging);
+	status = zz9k_alloc_shared(ctx, staging_bytes, 16U,
+	                          ZZ9K_ALLOC_HOST_WINDOW, &staging);
 	if (status != ZZ9K_STATUS_OK) {
 		printf("zz9k-jpeg: input alloc failed: %s (%d)\n",
 		       zz9k_status_name(status), status);
@@ -2218,8 +2219,8 @@ int zz9k_jpeg_decode_viewer_image(ZZ9KContext *ctx,
 		goto cleanup;
 	}
 
-	status = zz9k_alloc_shared(ctx, ZZ9K_JPEG_STAGING_BYTES, 16U, 0,
-	                          &staging);
+	status = zz9k_alloc_shared(ctx, ZZ9K_JPEG_STAGING_BYTES, 16U,
+	                          ZZ9K_ALLOC_HOST_WINDOW, &staging);
 	if (status != ZZ9K_STATUS_OK) {
 		printf("zz9k-view: JPEG staging alloc failed: %s (%d)\n",
 		       zz9k_status_name(status), status);

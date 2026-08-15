@@ -98,6 +98,11 @@ host unit tests. Two things make them use the hardware:
   uses software. The context also holds persistent shared scratch buffers:
   allocation is a full mailbox round trip, so a warm operation costs exactly
   one round trip — the figure the published benchmarks measured.
+  Before exposing the service flags, opening the context completes a small
+  `HOST_WINDOW` allocation. If a Zorro 2 layout is absent, unacknowledged, or
+  exhausted, the context is discarded and AmiSSL stays on its default
+  provider. Scratch grows to exact 16-byte-aligned sizes rather than powers of
+  two so normal TLS records fit the compact shared window.
 
 ## Source files
 

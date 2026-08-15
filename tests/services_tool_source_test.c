@@ -83,10 +83,13 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "ZZ9K_SERVICES_MODE_CHECK_RELEASE");
   ok &= expect_contains(source, "ReleaseServiceRequirement");
   ok &= expect_contains(source, "check_release_services");
+  ok &= expect_contains(source, "zz9k_find_board");
+  ok &= expect_contains(source, "board.zorro_version");
   ok &= expect_contains(source, "--check-release");
   ok &= expect_contains(source, "release check ok");
   ok &= expect_contains(source, "release check failed");
   ok &= expect_contains(source, "ZZ9K_CAP_SERVICE_DISCOVERY");
+  ok &= expect_contains(source, "ZZ9K_CAP_APERTURE_LAYOUT");
   ok &= expect_contains(source, "ZZ9K_SERVICE_CORE");
   ok &= expect_contains(source, "ZZ9K_SERVICE_MEMORY");
   ok &= expect_contains(source, "ZZ9K_SERVICE_SURFACE");

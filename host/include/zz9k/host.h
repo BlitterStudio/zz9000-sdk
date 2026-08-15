@@ -87,6 +87,36 @@ typedef struct ZZ9KDiagSchedInfo {
   uint32_t decode_us;        /* version 2+: cumulative decode microseconds; 0 on v1 firmware */
 } ZZ9KDiagSchedInfo;
 
+typedef struct ZZ9KApertureLayout {
+  uint32_t profile;
+  uint32_t aperture_size;
+  uint32_t framebuffer_base;
+  uint32_t framebuffer_size;
+  uint32_t pip_base;
+  uint32_t pip_size;
+  uint32_t template_base;
+  uint32_t template_size;
+  uint32_t host_base;
+  uint32_t host_size;
+  uint32_t audio_base;
+  uint32_t audio_size;
+} ZZ9KApertureLayout;
+
+typedef struct ZZ9KDiagMemoryInfo {
+  uint32_t version;
+  uint32_t layout_state;
+  uint32_t aperture_size;
+  uint32_t aperture_info;
+  uint32_t host_board_base;
+  uint32_t host_arm_base;
+  uint32_t host_total;
+  uint32_t host_free;
+  uint32_t host_largest_free;
+  uint32_t allocations;
+  uint32_t allocator_invalid_slots;
+  uint32_t reserved;
+} ZZ9KDiagMemoryInfo;
+
 typedef struct ZZ9KServiceInfo {
   uint32_t service_id;
   uint32_t version;
@@ -125,6 +155,8 @@ void zz9k_set_offload_timeout_ms(ZZ9KContext *ctx, uint32_t timeout_ms);
  * tests can pin the schedule. */
 uint32_t zz9k_idle_backoff_limit(uint32_t ticks);
 int zz9k_query_caps(ZZ9KContext *ctx, ZZ9KCaps *caps);
+int zz9k_query_aperture_layout(ZZ9KContext *ctx,
+                               ZZ9KApertureLayout *layout);
 int zz9k_query_service(ZZ9KContext *ctx, uint32_t service_id,
                        ZZ9KServiceInfo *service);
 int zz9k_ping(ZZ9KContext *ctx, const uint8_t *payload,
@@ -286,6 +318,7 @@ int zz9k_decompress_stream_close(ZZ9KContext *ctx, uint32_t session,
 int zz9k_read_diag(ZZ9KContext *ctx, ZZ9KDiagInfo *diag);
 int zz9k_read_diag_timing(ZZ9KContext *ctx, ZZ9KDiagTimingInfo *timing);
 int zz9k_read_diag_sched(ZZ9KContext *ctx, ZZ9KDiagSchedInfo *sched);
+int zz9k_read_diag_memory(ZZ9KContext *ctx, ZZ9KDiagMemoryInfo *memory);
 int zz9k_completion_irq_supported(ZZ9KContext *ctx);
 int zz9k_completion_irq_enable(ZZ9KContext *ctx, int enable);
 

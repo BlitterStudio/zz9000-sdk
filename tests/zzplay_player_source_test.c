@@ -117,6 +117,10 @@ int main(int argc, char **argv)
        strstr(source, "zzplay_probe_media_file(") &&
        strstr(source, "zzplay_mp3_run(") &&
        strstr(source, "ZZPLAY_MEDIA_KIND_MP3") &&
+       strstr(source, "ZZPLAY_Z2_INPUT_BYTES (24U * 1024U)") &&
+       strstr(source, "ZZPLAY_Z2_PCM_BYTES (32U * 1024U)") &&
+       strstr(source, "zz9k_query_aperture_layout(") &&
+       strstr(source, "zzplay_video_z2_aperture_ready(") &&
        strstr(source, "zzplay_resource_release(") &&
        !strstr(source, "zzplay_open_pip(&info");
   if (!ok) {

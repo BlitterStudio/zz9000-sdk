@@ -4,7 +4,7 @@
 #ifndef ZZPLAY_VIDEO_H
 #define ZZPLAY_VIDEO_H
 
-#include "zz9k/abi.h"
+#include "zz9k/host.h"
 
 #include <stdint.h>
 
@@ -35,6 +35,8 @@ typedef struct ZZPlayVideoSinkOps {
 ZZPlayVideoSinkStatus zzplay_video_sink_check(
     int board_found, uint32_t zorro_version,
     int p96_available, int pip_available);
+int zzplay_video_z2_aperture_ready(const ZZ9KApertureLayout *layout,
+                                   uint32_t width, uint32_t height);
 int zzplay_video_backend_available(uint32_t flags);
 int zzplay_video_result_has_frame(uint32_t flags);
 ZZPlayVideoResultAction zzplay_video_result_action(uint32_t flags);

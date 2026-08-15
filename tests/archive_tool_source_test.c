@@ -91,6 +91,11 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "zz9k_decompress_stream_feed");
   ok &= expect_contains(source, "zz9k_decompress_stream_read");
   ok &= expect_contains(source, "zz9k_decompress_stream_close");
+  ok &= expect_contains(source,
+                        "#define ZZ9K_ARCHIVE_STREAM_HOST_BUDGET (48U * 1024U)");
+  ok &= expect_contains(source, "ZZ9K_ALLOC_HOST_WINDOW, &input");
+  ok &= expect_contains(source, "ZZ9K_ALLOC_HOST_WINDOW, &decoded");
+  ok &= expect_contains(source, ": ZZ9K_ALLOC_CARD_ONLY");
   ok &= expect_contains(source, "zz9k_archive_decompress_stream_to_file");
   ok &= expect_contains(source, "zz9k_archive_decompress_feed_stream_to_file");
   ok &= expect_contains(source,
@@ -147,6 +152,7 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "zz9k_archive_extract_lha_lh5");
   ok &= expect_contains(source, "zz9k_archive_lha_list");
   ok &= expect_contains(source, "zz9k_archive_handle_lha");
+  ok &= expect_contains(source, "board.zorro_version == 2U");
   ok &= expect_contains(source, "zz9k_archive_lha_join_dir_name");
   ok &= expect_contains(source, "ext_size");
   ok &= expect_contains(source, "lha method unsupported");

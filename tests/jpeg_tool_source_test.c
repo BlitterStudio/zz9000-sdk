@@ -184,6 +184,8 @@ int main(int argc, char **argv)
   ok &= expect_contains(source,
                         "zz9k_jpeg_choose_tile_rows(jpeg_input->width,");
   ok &= expect_contains(source, "zz9k_jpeg_decode_viewer_image");
+  ok &= expect_contains(source, "#define ZZ9K_JPEG_STAGING_BYTES (32UL * 1024UL)");
+  ok &= expect_contains(source, "ZZ9K_ALLOC_HOST_WINDOW, &staging");
   ok &= expect_contains(source, "ZZ9KPictureViewerImage");
   ok &= expect_contains(source, "ZZ9K_PICTURE_VIEWER_CODEC_JPEG");
   ok &= expect_contains(source, "output_bpp");

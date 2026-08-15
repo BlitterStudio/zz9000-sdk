@@ -74,6 +74,31 @@ static void print_caps(const ZZ9KCaps *caps)
          (unsigned long)caps->completion_ring_entries);
 }
 
+static void print_aperture_layout(const ZZ9KApertureLayout *layout)
+{
+  printf("Aperture layout:      generation %lu flags=0x%04lx\n",
+         (unsigned long)(layout->profile >>
+                         ZZ9K_APERTURE_LAYOUT_GENERATION_SHIFT),
+         (unsigned long)(layout->profile & ZZ9K_APERTURE_LAYOUT_FLAGS_MASK));
+  printf("  Aperture:          0x%08lx bytes\n",
+         (unsigned long)layout->aperture_size);
+  printf("  Framebuffer:       0x%08lx + 0x%08lx\n",
+         (unsigned long)layout->framebuffer_base,
+         (unsigned long)layout->framebuffer_size);
+  printf("  PIP source pool:   0x%08lx + 0x%08lx\n",
+         (unsigned long)layout->pip_base,
+         (unsigned long)layout->pip_size);
+  printf("  Template staging:  0x%08lx + 0x%08lx\n",
+         (unsigned long)layout->template_base,
+         (unsigned long)layout->template_size);
+  printf("  Host window heap:  0x%08lx + 0x%08lx\n",
+         (unsigned long)layout->host_base,
+         (unsigned long)layout->host_size);
+  printf("  Audio buffers:     0x%08lx + 0x%08lx\n",
+         (unsigned long)layout->audio_base,
+         (unsigned long)layout->audio_size);
+}
+
 static void print_services(ZZ9KContext *ctx, const ZZ9KCaps *caps)
 {
   uint32_t i;
@@ -217,6 +242,41 @@ static void print_diag_sched(const ZZ9KDiagSchedInfo *sched)
   }
 }
 
+static const char *layout_state_name(uint32_t state)
+{
+  switch (state) {
+  case ZZ9K_APERTURE_LAYOUT_LEGACY:
+    return "legacy";
+  case ZZ9K_APERTURE_LAYOUT_UNACKNOWLEDGED:
+    return "unacknowledged";
+  case ZZ9K_APERTURE_LAYOUT_ACTIVE:
+    return "active";
+  case ZZ9K_APERTURE_LAYOUT_INVALID:
+    return "invalid";
+  default:
+    return "unknown";
+  }
+}
+
+static void print_diag_memory(const ZZ9KDiagMemoryInfo *memory)
+{
+  printf("Aperture memory:      state=%s (%lu) size=0x%08lx info=0x%08lx\n",
+         layout_state_name(memory->layout_state),
+         (unsigned long)memory->layout_state,
+         (unsigned long)memory->aperture_size,
+         (unsigned long)memory->aperture_info);
+  printf("  Host heap bases:   board=0x%08lx ARM=0x%08lx\n",
+         (unsigned long)memory->host_board_base,
+         (unsigned long)memory->host_arm_base);
+  printf("  Host heap usage:   total=%lu free=%lu largest=%lu allocations=%lu\n",
+         (unsigned long)memory->host_total,
+         (unsigned long)memory->host_free,
+         (unsigned long)memory->host_largest_free,
+         (unsigned long)memory->allocations);
+  printf("  Invalid host slots: %lu\n",
+         (unsigned long)memory->allocator_invalid_slots);
+}
+
 int main(void)
 {
   ZZ9KContext *ctx = 0;
@@ -224,6 +284,8 @@ int main(void)
   ZZ9KDiagInfo diag;
   ZZ9KDiagTimingInfo timing;
   ZZ9KDiagSchedInfo sched;
+  ZZ9KApertureLayout layout;
+  ZZ9KDiagMemoryInfo memory;
   int status;
 
   printf("zz9k-info: opening SDK mailbox\n");
@@ -246,6 +308,15 @@ int main(void)
   }
 
   print_caps(&caps);
+  if ((caps.capability_bits & ZZ9K_CAP_APERTURE_LAYOUT) != 0U) {
+    status = zz9k_query_aperture_layout(ctx, &layout);
+    if (status == ZZ9K_STATUS_OK) {
+      print_aperture_layout(&layout);
+    } else if (status != ZZ9K_STATUS_UNSUPPORTED) {
+      printf("Aperture layout:      %s (%d)\n",
+             zz9k_status_name(status), status);
+    }
+  }
   print_services(ctx, &caps);
 
   printf("zz9k-info: reading diagnostics\n");
@@ -271,6 +342,14 @@ int main(void)
     print_diag_sched(&sched);
   } else if (status != ZZ9K_STATUS_UNSUPPORTED) {
     printf("Scheduler diagnostics: %s (%d)\n",
+           zz9k_status_name(status), status);
+  }
+
+  status = zz9k_read_diag_memory(ctx, &memory);
+  if (status == ZZ9K_STATUS_OK) {
+    print_diag_memory(&memory);
+  } else if (status != ZZ9K_STATUS_UNSUPPORTED) {
+    printf("Memory diagnostics:   %s (%d)\n",
            zz9k_status_name(status), status);
   }
 

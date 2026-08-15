@@ -17,7 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define ZZ9K_PNG_STAGING_BYTES (64UL * 1024UL)
+#define ZZ9K_PNG_STAGING_BYTES (32UL * 1024UL)
 #define ZZ9K_PNG_DEFAULT_CHUNK_BYTES (16UL * 1024UL)
 #define ZZ9K_PNG_DEFAULT_FRAMEBUFFER_HOLD_TICKS 100U
 #define ZZ9K_PNG_MAX_FRAMEBUFFER_HOLD_TICKS 1000U
@@ -1417,8 +1417,8 @@ static int zz9k_png_run_streaming(ZZ9KContext *ctx,
 
 	zz9k_png_trace_step(png_input, ZZ9K_PNG_STEP_ALLOC_INPUT,
 	                     "allocating shared input buffer");
-	status = zz9k_alloc_shared(ctx, ZZ9K_PNG_STAGING_BYTES, 16U, 0U,
-	                           &staging);
+	status = zz9k_alloc_shared(ctx, ZZ9K_PNG_STAGING_BYTES, 16U,
+	                           ZZ9K_ALLOC_HOST_WINDOW, &staging);
 	if (status != ZZ9K_STATUS_OK) {
 		printf("zz9k-png: input alloc failed: %s (%d)\n",
 		       zz9k_status_name(status), status);
@@ -1691,8 +1691,8 @@ int zz9k_png_decode_viewer_image(ZZ9KContext *ctx,
 		goto cleanup;
 	}
 
-	status = zz9k_alloc_shared(ctx, ZZ9K_PNG_STAGING_BYTES, 16U, 0U,
-	                           &staging);
+	status = zz9k_alloc_shared(ctx, ZZ9K_PNG_STAGING_BYTES, 16U,
+	                           ZZ9K_ALLOC_HOST_WINDOW, &staging);
 	if (status != ZZ9K_STATUS_OK) {
 		printf("zz9k-view: PNG staging alloc failed: %s (%d)\n",
 		       zz9k_status_name(status), status);

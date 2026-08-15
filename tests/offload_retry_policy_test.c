@@ -17,6 +17,9 @@ static uint32_t g_env_fallback;
 static const char *g_env_name;
 static uint32_t g_set_timeout_ms;
 static int g_set_timeout_calls;
+static uint32_t g_alloc_flags_or;
+static uint32_t g_last_alloc_length;
+static int g_alloc_calls;
 
 static int next_crypto_status(void)
 {
@@ -59,7 +62,9 @@ int zz9k_alloc_shared(ZZ9KContext *ctx, uint32_t length, uint32_t alignment,
 {
   (void)ctx;
   (void)alignment;
-  (void)flags;
+  g_alloc_flags_or |= flags;
+  g_last_alloc_length = length;
+  g_alloc_calls++;
   buffer->handle = 1U;
   buffer->length = length;
   buffer->data = malloc(length ? length : 1U);
@@ -159,6 +164,9 @@ static int test_open_sets_timeout_from_env_parser(void)
   g_env_fallback = 0U;
   g_set_timeout_ms = 0U;
   g_set_timeout_calls = 0;
+  g_alloc_flags_or = 0U;
+  g_last_alloc_length = 0U;
+  g_alloc_calls = 0;
 
   ctx = zz9k_offload_open(0);
   if (!ctx) return 1;
@@ -173,6 +181,12 @@ static int test_open_sets_timeout_from_env_parser(void)
   if (g_set_timeout_calls != 1 || g_set_timeout_ms != 1234U) {
     zz9k_offload_close(ctx);
     return 4;
+  }
+  if (g_alloc_calls != 1 ||
+      (g_alloc_flags_or & ZZ9K_ALLOC_HOST_WINDOW) == 0U ||
+      g_last_alloc_length != 32U) {
+    zz9k_offload_close(ctx);
+    return 5;
   }
 
   zz9k_offload_close(ctx);

@@ -67,6 +67,16 @@ static inline int zz9k_request_query_caps(ZZ9KRequest *request)
   return ZZ9K_STATUS_OK;
 }
 
+static inline int zz9k_request_query_aperture_layout(ZZ9KRequest *request)
+{
+  if (!request) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  zz9k_request_init(request, ZZ9K_OP_QUERY_APERTURE_LAYOUT);
+  return ZZ9K_STATUS_OK;
+}
+
 static inline int zz9k_request_alloc_shared(ZZ9KRequest *request,
                                             uint32_t length,
                                             uint32_t alignment,
@@ -1278,6 +1288,16 @@ static inline int zz9k_request_diag_sched(ZZ9KRequest *request)
   }
 
   zz9k_request_init(request, ZZ9K_OP_DIAG_SCHED);
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_request_diag_memory(ZZ9KRequest *request)
+{
+  if (!request) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  zz9k_request_init(request, ZZ9K_OP_DIAG_MEMORY);
   return ZZ9K_STATUS_OK;
 }
 
