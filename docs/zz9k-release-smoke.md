@@ -7,6 +7,12 @@ SDK line.
 Run the checks from the installed AmigaOS package. Replace sample paths with
 local files that are known to load on the test system.
 
+This checklist covers the full Zorro III service surface. On Zorro II, first
+read the [Zorro II service matrix](zz9k-zorro2-services.md) and run only the
+adapted clients for the negotiated profile. Several low-level diagnostics use
+the legacy default shared heap and are intentionally not Zorro II qualification
+tools even when the corresponding production client is supported.
+
 ## Service Contract
 
 ```text
@@ -43,6 +49,10 @@ zz9k-surface-info
 zz9k-surfaceops --hold-ticks 0 --loops 1000 --stats --stats-interval 100
 ```
 
+Run this generic shared-buffer/surface group on Zorro III. On Zorro II,
+`zz9k-info` plus the adapted client sections below are authoritative;
+`zz9k-smoke` still requests legacy default shared buffers.
+
 Expected pass signal:
 
 - All commands complete without timeout or SDK status errors.
@@ -65,6 +75,10 @@ zz9k-hash --alg poly1305
 zz9k-chacha
 zz9k-aead
 ```
+
+Those low-level vector tools still allocate from the legacy default shared
+heap and are Zorro III diagnostics. On Zorro II, qualify the adapted path with
+the accelerated AmiSSL provider self-test or a real AmiSSL TLS application.
 
 With the accelerated drop-in `amissl.library` installed (the headline v2.2.0
 TLS-offload feature, shipped by the drivers package), also confirm end-to-end
@@ -107,6 +121,11 @@ zz9k-archive t Archives/split-lzma2.7z
 zz9k-archive x --dry-run -o RAM:zz9k-split Archives/split-lzma2.7z
 ```
 
+`zz9k-inflate --selftest` uses legacy default shared buffers and is a Zorro III
+diagnostic. On Zorro II, run the `zz9k-archive` streamed test/extract cases;
+large LHA batch arenas are expected to take their documented per-member or
+software fallback instead of consuming the compact host heap.
+
 Expected pass signal:
 
 - `zz9k-inflate --selftest` completes all built-in compressed payload checks.
@@ -147,9 +166,16 @@ MultiView Work:Pictures/test.jpg
 MultiView Work:Pictures/test.png
 ```
 
+Bus/profile note: plain `zz9k-jpeg Work:Pictures/test.jpg` uses a
+legacy-default CPU-visible output tile and is a Zorro III diagnostic. On Zorro
+II, skip that command; `zz9k-jpeg --fb`, both `zz9k-png` forms, `zz9k-view`,
+and the DataType clients are the adapted checks.
+
 Expected pass signal:
 
-- JPEG and PNG decode paths complete without SDK status errors.
+- On Zorro III, all listed JPEG and PNG decode paths complete without SDK
+  status errors. On Zorro II, all listed image checks except the plain
+  `zz9k-jpeg` command complete without SDK status errors.
 - `zz9k-view` opens one resizable viewer window, displays each image, and the
   next/previous keys navigate between the images.
 - Viewer resize and occlusion redraw through visible clips without corrupting
@@ -179,6 +205,11 @@ ZZPlay --audio=auto Work:Audio/test.mp3
 ZZPlay --audio=none --benchmark Work:Audio/test.mp3
 ZZPlay --audio=ahi Work:Video/test.mpg
 ```
+
+The low-level `zz9k-mp3` tool still uses legacy default shared buffers and is
+a Zorro III diagnostic. On Zorro II, qualify accelerated MP3 through
+`mpega.library`, MHI, or ZZPlay, all of which use the negotiated compact
+host-window/card-only layouts.
 
 Expected pass signal:
 
@@ -217,7 +248,14 @@ zzplay --benchmark Work:Video/test.mpg
 For firmware with the native FPGA overlay, also resize the playing PIP window
 away from its exact source dimensions and then return it to 1:1. Exact-size,
 fully visible presentation is eligible for the native plane; resized or
-clipped presentation uses the ARM compositor fallback.
+clipped presentation uses the overlay's hardware scaler when the geometry can
+be expressed, with the card-local compositor reserved for unsupported cases.
+
+The 2 MiB Zorro II profile has no PIP pool and must skip this section. On a
+matched 4 MiB Zorro II stack, begin with 352x288 YUY2 or another frame whose
+full aligned allocation fits the 224 KiB pool. An oversized source such as
+640x360 must be rejected cleanly without reserving memory or changing overlay
+state.
 
 While playback is active, cycle the live `ZZScanlines` modes and bring a
 native Amiga PAL/NTSC screen to the front, then return to the P96 RTG screen.

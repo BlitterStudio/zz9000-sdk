@@ -17,8 +17,12 @@ The format is chosen by inspecting the file, not by its name. MPEG-1
 elementary streams, standalone MP2, MPEG-2 and other codecs are rejected with
 a specific message rather than being half-played.
 
-Video requires Zorro III and the Picasso96 overlay. On Zorro II ZZPlay
-reports that clearly and standalone MP3 still works.
+Video requires the Picasso96 overlay. Zorro III uses the normal firmware
+surface allocator. On a matched 4 MiB Zorro II stack, ZZPlay can instead use
+the driver-reserved 224 KiB PIP source pool when one complete aligned YUY2
+frame fits; 352x288 fits, while 640x360 does not. The 2 MiB profile has no PIP
+pool. Unsupported Zorro II geometry is reported clearly, and standalone MP3
+continues to work on both shipped Zorro II profiles.
 
 ## Starting it
 

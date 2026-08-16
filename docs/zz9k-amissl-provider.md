@@ -95,14 +95,23 @@ host unit tests. Two things make them use the hardware:
   `ZZ9K_SERVICE_FLAG_CRYPTO_*` bit, so firmware that lacks one algorithm never
   pays a failing mailbox round trip for it. If the board (or the crypto
   service) is absent the provider still loads and every operation transparently
-  uses software. The context also holds persistent shared scratch buffers:
-  allocation is a full mailbox round trip, so a warm operation costs exactly
-  one round trip — the figure the published benchmarks measured.
-  Before exposing the service flags, opening the context completes a small
-  `HOST_WINDOW` allocation. If a Zorro 2 layout is absent, unacknowledged, or
-  exhausted, the context is discarded and AmiSSL stays on its default
-  provider. Scratch grows to exact 16-byte-aligned sizes rather than powers of
-  two so normal TLS records fit the compact shared window.
+  uses software. The context holds persistent shared scratch buffers:
+  allocation is a full mailbox round trip, so a warm operation whose slots are
+  already present costs exactly one round trip — the figure the published
+  benchmarks measured. Before exposing the service flags, opening the context
+  allocates a 32-byte `HOST_WINDOW` probe. If a Zorro 2 layout is absent,
+  unacknowledged, or that probe cannot be allocated, the context is discarded
+  and AmiSSL stays on its default provider. Other scratch slots grow lazily to
+  exact 16-byte-aligned sizes rather than powers of two, so normal TLS records
+  fit the compact shared window; an allocation miss later falls back to
+  software for that operation.
+
+  Both shipped 2 MiB and 4 MiB Zorro II profiles provide the negotiated 64 KiB
+  host window needed by this path. That heap is shared with other CPU-visible
+  SDK clients, so close idle image, archive, audio, or DataType users when
+  qualifying offload. A provider whose 32-byte open-time probe cannot be
+  allocated advertises no hardware path; later shared-heap contention can
+  instead make an individual operation use AmiSSL software.
 
 ## Source files
 
