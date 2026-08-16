@@ -72,22 +72,18 @@ The provider operation files are portable OpenSSL 3 code and are shared with the
 host unit tests. Two things make them use the hardware:
 
 * **`-DZZ9K_PROVIDER_OFFLOAD`** at compile time enables the offload hooks. With
-  it set, each accelerated operation (`zz9k_prov_x25519`, `zz9k_prov_aead`) is
-  **offload-or-fail**: it runs through `zz9k_offload_*` and does *not* fall back
-  to the bundled software reference (an in-library software ChaCha tag
-  miscomputes under the base-relative library link, and silent wrong crypto is
-  worse than a failed record). The provider only *advertises* operations the
-  board can serve, so one that would fail is never offered — it resolves to
-  AmiSSL's software default instead (see *Fallback semantics*). With the macro
-  undefined (the host build) every operation uses the software reference, which
-  is why the host unit tests stay meaningful. (The **P-256 key exchange** and the
-  **ECDSA-P256 / RSA-2048 verify** paths are the exception — they are
-  *offload-or-fallback*, not offload-or-fail: on an offload miss the P-256
-  keygen/derive and ECDSA verify fall back to the *default provider* and RSA
-  verify to the in-library software reference rather than failing the handshake.
-  See *Fallback semantics*. The non-accelerated EC/RSA operations do not touch
-  the board at all — they delegate to AmiSSL's default provider — so they are
-  unaffected by this macro.)
+  it set, X25519 is **offload-or-fail**: `zz9k_prov_x25519` runs through
+  `zz9k_offload_x25519` and does not fall back to the bundled software
+  reference. Record crypto behaves differently: `zz9k_prov_aead` sends
+  qualifying records to the board, but small records and failed offloads use
+  AmiSSL's default provider. It never uses the bundled AEAD reference inside
+  the base-relative library because that path miscomputes ChaCha tags there.
+  With the macro undefined (the host build), operations use the portable
+  references so the host parity tests remain meaningful. The **P-256 key
+  exchange** and **ECDSA-P256 / RSA-2048 verify** paths also use an
+  *offload-or-fallback* policy and delegate misses to the default provider.
+  See *Fallback semantics*. Non-accelerated EC/RSA operations do not touch the
+  board at all; they also delegate directly to AmiSSL's default provider.
 * **An open offload context.** `zz9k_provider_init` opens the board once for
   the provider's lifetime (`zz9k_offload_open`), keeps it only when the
   firmware's crypto service responds, and records the advertised service
@@ -103,15 +99,19 @@ host unit tests. Two things make them use the hardware:
   unacknowledged, or that probe cannot be allocated, the context is discarded
   and AmiSSL stays on its default provider. Other scratch slots grow lazily to
   exact 16-byte-aligned sizes rather than powers of two, so normal TLS records
-  fit the compact shared window; an allocation miss later falls back to
-  software for that operation.
+  fit the compact shared window. A later allocation miss follows the
+  operation's failure semantics: P-256 keygen/derive, ECDSA-P256 verify,
+  RSA-2048 verify, and record crypto (AES-GCM and ChaCha20-Poly1305) fall back
+  to software; X25519 is offload-or-fail and returns failure once advertised.
 
   Both shipped 2 MiB and 4 MiB Zorro II profiles provide the negotiated 64 KiB
   host window needed by this path. That heap is shared with other CPU-visible
   SDK clients, so close idle image, archive, audio, or DataType users when
   qualifying offload. A provider whose 32-byte open-time probe cannot be
-  allocated advertises no hardware path; later shared-heap contention can
-  instead make an individual operation use AmiSSL software.
+  allocated advertises no hardware path. If later shared-heap contention
+  prevents a scratch allocation, P-256 keygen/derive, ECDSA-P256 verify,
+  RSA-2048 verify, and record crypto (AES-GCM and ChaCha20-Poly1305) use their
+  software fallback, while X25519 is offload-or-fail.
 
 ## Source files
 
@@ -302,22 +302,24 @@ machine without the board — transparently uses AmiSSL's software.
   keygen) are still served — the keymgmt **delegates** them to the default
   provider (forcing `provider=default`). So owning EC/RSA accelerates the
   handshake without removing any operation the default provider offered.
-* The **record crypto and X25519 key exchange** are **offload-or-fail**: the
-  in-library software crypto paths are deliberately not used (they are compiled
-  only into the host build, for the parity tests), so a record either offloads to
-  the board or fails — silent wrong crypto is worse than a failed record. A
-  decrypt whose tag does not authenticate is correctly rejected.
+* **X25519 key exchange** is **offload-or-fail** once advertised. Its portable
+  software reference is compiled only into the host build for parity tests, so
+  an allocation, mailbox, or firmware failure returns an operation failure.
+* **Record crypto is offload-or-fallback.** AES-GCM and ChaCha20-Poly1305
+  records below the offload threshold use AmiSSL's default provider directly;
+  allocation, mailbox, and firmware failures after an offload attempt also
+  delegate there. A decrypt whose tag does not authenticate is rejected by the
+  fallback path too, so authentication is never skipped.
 * The **handshake asymmetric crypto is offload-or-fallback** instead. The P-256
   key exchange and the ECDSA-P256 / RSA-2048 certificate verify still offload
   first, but on a miss — the firmware lacks the capability, or a mailbox reply
   arrives after the poll timeout because the board is busy driving the display —
-  they fall back rather than fail: P-256 keygen/derive and ECDSA verify to the
-  *default provider* (fast), RSA verify to the in-library software reference
-  (~1.4 s). This keeps a contended board from stalling a page load on the slow
-  in-tree reference (an ECDSA-P256 software verify is ~19× slower than the
-  default provider), at no loss of correctness — a fallback still verifies the
-  same certificate or computes the same shared secret. Fallback is never silently
-  wrong: it recomputes the operation in software, it does not skip it.
+  they fall back to the *default provider* rather than fail. This keeps a
+  contended board from stalling a page load on the slow in-tree references (an
+  ECDSA-P256 software verify is ~19× slower than the default provider), at no
+  loss of correctness — a fallback still verifies the same certificate or
+  computes the same shared secret. Fallback is never silently wrong: it
+  recomputes the operation in software, it does not skip it.
 * `ENV:ZZ9K_DISABLE_OFFLOAD` forces the no-board path at registration: the
   provider loads and is preferred but never opens the board, so every operation
   runs in AmiSSL software. A zero-rebuild A/B switch for isolating a regression
