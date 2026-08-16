@@ -397,10 +397,14 @@ implementation (Zorro II vs III, accelerator bus bridges).
 ## Image Scaling
 
 `ZZ9KScaleImage()` scales a same-format source surface into another SDK surface
-or the mapped framebuffer. `ZZ9K_SCALE_NEAREST` is the compatibility path.
-Firmware builds with the bilinear scaler also accept `ZZ9K_SCALE_BILINEAR` for
-32-bit formats such as the native BGRA RTG framebuffer. Bicubic and Lanczos
-constants are reserved but still return `UNSUPPORTED`.
+or the mapped framebuffer. Firmware that advertises
+`ZZ9K_SERVICE_FLAG_IMAGE_SCALE_BGRA_TO_RGB555_RGB565` also converts BGRA8888
+sources to RGB565 or RGB555 destinations while scaling, allowing viewers to
+render into 16-bit and 15-bit RTG framebuffers. `ZZ9K_SCALE_NEAREST` is the
+compatibility path. Firmware builds with the bilinear scaler also accept
+`ZZ9K_SCALE_BILINEAR` for 32-bit formats and for the advertised BGRA-to-RGB15/16
+conversion. Bicubic and Lanczos constants are reserved but still return
+`UNSUPPORTED`.
 Programs can check `ZZ9K_SERVICE_FLAG_IMAGE_SCALE_BILINEAR` on the image
 service descriptor before submitting bilinear jobs, or use
 `zz9k_image_scale_filter_supported_by_service()`.
@@ -534,6 +538,9 @@ backend capabilities:
   `ZZ9K_SCALE_BILINEAR` for 32-bit surfaces.
 - `ZZ9K_SERVICE_FLAG_IMAGE_SCALE_CLIPPED`: the scaler accepts clipped
   destination jobs through `ZZ9KScaleImageClipped()`.
+- `ZZ9K_SERVICE_FLAG_IMAGE_SCALE_BGRA_TO_RGB555_RGB565`: the scaler converts
+  BGRA8888 sources into RGB565 or RGB555 destinations for 16-bit and 15-bit
+  RTG screens.
 - `ZZ9K_SERVICE_FLAG_IMAGE_STREAMING_INPUT`: compressed input can be fed in
   bounded chunks through an image session.
 - `ZZ9K_SERVICE_FLAG_IMAGE_TILE_OUTPUT`: image sessions can emit bounded
@@ -628,7 +635,9 @@ zz9k-view Work:Pictures/test.jpg Work:Pictures/test.png
 Use Space/Right/Down for next image navigation, Left/Up/Backspace for previous,
 `r` to redraw/refit, and `q`, Esc, or the close gadget to exit. The lower-level
 `zz9k-jpeg --view` and `zz9k-png --view` commands remain useful codec smoke
-paths; `zz9k-view` is the user-facing demo viewer.
+paths; `zz9k-view` is the user-facing demo viewer. With firmware advertising
+`ZZ9K_SERVICE_FLAG_IMAGE_SCALE_BGRA_TO_RGB555_RGB565`, it supports RGB555,
+RGB565, and native 32-bit BGRA RTG screens.
 
 These CLI tools are hardware smoke tests. User-facing viewer and DataType output should
 enumerate visible layer or damage clip regions and submit clipped scale bands

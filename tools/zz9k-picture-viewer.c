@@ -6,6 +6,7 @@
 
 #include "zz9k-picture-viewer.h"
 
+#include "zz9k/caps.h"
 #include "zz9k/image_geometry.h"
 #include <stdio.h>
 #include <string.h>
@@ -149,6 +150,41 @@ ZZ9KPictureViewerAction zz9k_picture_viewer_action_from_keys(
 		return ZZ9K_PICTURE_VIEWER_ACTION_REDRAW;
 
 	return ZZ9K_PICTURE_VIEWER_ACTION_NONE;
+}
+
+uint32_t zz9k_picture_viewer_decode_format(void)
+{
+	return zz9k_surface_native_rtg_format();
+}
+
+int zz9k_picture_viewer_framebuffer_format_supported(uint32_t format)
+{
+	return format == zz9k_picture_viewer_decode_format() ||
+	       format == ZZ9K_SURFACE_FORMAT_RGB565 ||
+	       format == ZZ9K_SURFACE_FORMAT_RGB555;
+}
+
+int zz9k_picture_viewer_framebuffer_requires_conversion(uint32_t format)
+{
+	return zz9k_picture_viewer_framebuffer_format_supported(format) &&
+	       format != zz9k_picture_viewer_decode_format();
+}
+
+int zz9k_picture_viewer_image_service_supported(uint32_t opcode_count,
+                                                uint32_t service_flags,
+                                                uint32_t framebuffer_format)
+{
+	if (!zz9k_picture_viewer_framebuffer_format_supported(
+		    framebuffer_format) ||
+	    !zz9k_image_service_supports_clipped_scale(
+		    opcode_count, service_flags, ZZ9K_SCALE_BILINEAR)) {
+		return 0;
+	}
+	return !zz9k_picture_viewer_framebuffer_requires_conversion(
+		       framebuffer_format) ||
+	       zz9k_has_service_flag(
+		       service_flags,
+		       ZZ9K_SERVICE_FLAG_IMAGE_SCALE_BGRA_TO_RGB555_RGB565);
 }
 
 void zz9k_picture_viewer_image_init(ZZ9KPictureViewerImage *image)

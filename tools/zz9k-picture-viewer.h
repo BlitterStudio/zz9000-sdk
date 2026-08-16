@@ -60,6 +60,12 @@ uint32_t zz9k_picture_viewer_previous_index(uint32_t index, uint32_t count);
 ZZ9KPictureViewerAction zz9k_picture_viewer_action_from_keys(
 	uint32_t vanilla_key,
 	uint32_t raw_key);
+uint32_t zz9k_picture_viewer_decode_format(void);
+int zz9k_picture_viewer_framebuffer_format_supported(uint32_t format);
+int zz9k_picture_viewer_framebuffer_requires_conversion(uint32_t format);
+int zz9k_picture_viewer_image_service_supported(uint32_t opcode_count,
+                                                uint32_t service_flags,
+                                                uint32_t framebuffer_format);
 void zz9k_picture_viewer_image_init(ZZ9KPictureViewerImage *image);
 void zz9k_picture_viewer_image_free(ZZ9KContext *ctx,
                                     ZZ9KPictureViewerImage *image);

@@ -268,6 +268,9 @@ int main(void)
   if (ZZ9K_SERVICE_FLAG_CODEC_ZLIB_FEED != (1U << 26)) return 26;
   if (ZZ9K_SERVICE_FLAG_CODEC_GZIP_FEED != (1U << 27)) return 27;
   if (ZZ9K_SERVICE_FLAG_IMAGE_RGB888_OUTPUT != (1U << 26)) return 47;
+  if (ZZ9K_SERVICE_FLAG_IMAGE_SCALE_BGRA_TO_RGB555_RGB565 != (1U << 27)) {
+    return 114;
+  }
   if (ZZ9K_SURFACE_FORMAT_RGB888 != 8U) return 48;
   if (ZZ9K_DECOMPRESS_FLAG_FEED_INPUT != (1U << 1)) return 28;
   if (ZZ9K_DECOMPRESS_STREAM_FEED_EOF != (1U << 0)) return 29;

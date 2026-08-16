@@ -104,6 +104,8 @@ int main(int argc, char **argv)
   ok &= expect_contains(source,
                         "next/previous keys navigate between the images");
   ok &= expect_contains(source,
+                        "RGB555 (15-bit), RGB565 (16-bit), and BGRA8888");
+  ok &= expect_contains(source,
                         "resize and occlusion redraw through visible clips");
   ok &= expect_contains(source, "zz9k-dtprobe");
   ok &= expect_contains(source, "MultiView");

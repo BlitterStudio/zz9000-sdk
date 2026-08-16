@@ -2235,15 +2235,7 @@ int zz9k_jpeg_decode_viewer_image(ZZ9KContext *ctx,
 		goto cleanup;
 	}
 
-	output_format = framebuffer->format;
-	if (!zz9k_surface_is_native_rtg_format(output_format)) {
-		printf("zz9k-view: framebuffer is not native RTG "
-		       "(framebuffer %lu x %lu format=%lu)\n",
-		       (unsigned long)framebuffer->width,
-		       (unsigned long)framebuffer->height,
-		       (unsigned long)framebuffer->format);
-		goto cleanup;
-	}
+	output_format = zz9k_picture_viewer_decode_format();
 	if (!zz9k_surface_min_pitch(decode_width, output_format,
 	                            &decode_pitch)) {
 		printf("zz9k-view: invalid JPEG decode surface pitch\n");

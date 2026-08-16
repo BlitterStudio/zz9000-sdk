@@ -78,7 +78,8 @@ static int zz9k_view_require_caps(uint32_t caps)
 	       zz9k_view_require_cap(caps, ZZ9K_CAP_SURFACE_OPS);
 }
 
-static int zz9k_view_require_image_service(ZZ9KContext *ctx)
+static int zz9k_view_require_image_service(ZZ9KContext *ctx,
+                                           uint32_t framebuffer_format)
 {
 	ZZ9KServiceInfo service;
 	int status;
@@ -92,10 +93,10 @@ static int zz9k_view_require_image_service(ZZ9KContext *ctx)
 		       zz9k_status_name(status), status);
 		return 0;
 	}
-	if (!zz9k_image_service_supports_clipped_scale(
-		    service.opcode_count, service.flags, ZZ9K_SCALE_BILINEAR)) {
+	if (!zz9k_picture_viewer_image_service_supported(
+		    service.opcode_count, service.flags, framebuffer_format)) {
 		printf("zz9k-view: image service does not support clipped "
-		       "bilinear scaling\n");
+		       "bilinear scaling for this framebuffer format\n");
 		return 0;
 	}
 	return 1;
@@ -382,8 +383,7 @@ int main(int argc, char **argv)
 		       zz9k_status_name(status), status);
 		goto cleanup;
 	}
-	if (!zz9k_view_require_caps(caps.capability_bits) ||
-	    !zz9k_view_require_image_service(ctx)) {
+	if (!zz9k_view_require_caps(caps.capability_bits)) {
 		goto cleanup;
 	}
 
@@ -393,8 +393,9 @@ int main(int argc, char **argv)
 		       zz9k_status_name(status), status);
 		goto cleanup;
 	}
-	if (!zz9k_surface_is_native_rtg_format(framebuffer.format)) {
-		printf("zz9k-view: framebuffer is not native RTG "
+	if (!zz9k_picture_viewer_framebuffer_format_supported(
+		    framebuffer.format)) {
+		printf("zz9k-view: unsupported framebuffer format "
 		       "(framebuffer %lu x %lu format=%lu %s)\n",
 		       (unsigned long)framebuffer.width,
 		       (unsigned long)framebuffer.height,
@@ -402,6 +403,8 @@ int main(int argc, char **argv)
 		       zz9k_surface_format_text(framebuffer.format));
 		goto cleanup;
 	}
+	if (!zz9k_view_require_image_service(ctx, framebuffer.format))
+		goto cleanup;
 
 	if (!zz9k_view_startup_image(ctx, &framebuffer, &args, &ui,
 	                             &window_open, &image, &current_index)) {
