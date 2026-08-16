@@ -114,7 +114,7 @@ static int aead_roundtrip(const char *alg, const char *enc_props,
    * right after EVP_CipherInit_ex, then updates AAD then data), and it is the
    * order a one-shot offload decrypt needs the tag for. (The documented generic
    * EVP idiom sets the tag AFTER the data update; no TLS version drives decrypt
-   * that way, and the board's offload-or-fail path deliberately rejects it.)
+   * that way, and the provider's one-shot decrypt path deliberately rejects it.)
    * With the tag up front this exercises the board's offload decrypt+verify —
    * the operation a browser performs on every server response. */
   dctx = EVP_CIPHER_CTX_new();

@@ -39,10 +39,13 @@ Matched 2 MiB and 4 MiB Zorro II stacks are supported through the negotiated
 64 KiB host window. Provider open uses a persistent 32-byte `HOST_WINDOW`
 probe to decide whether to advertise the board path; if that probe cannot be
 allocated, AmiSSL continues in software. Other persistent scratch slots grow
-lazily to exact 16-byte-aligned sizes, and an allocation miss later makes only
-that operation use software. The host window is shared with other CPU-visible
-clients, so contention can cause either outcome. Keep firmware, SDK payloads,
-and drivers from the same release when qualifying Zorro II.
+lazily to exact 16-byte-aligned sizes. A later allocation miss follows the
+operation's failure semantics: P-256 keygen/derive, ECDSA-P256 verify,
+RSA-2048 verify, and record crypto (AES-GCM and ChaCha20-Poly1305) fall back to
+software; X25519 is offload-or-fail and returns failure once advertised. The
+host window is shared with other CPU-visible clients, so contention can trigger
+those operation-specific outcomes. Keep firmware, SDK payloads, and drivers
+from the same release when qualifying Zorro II.
 
 `AMISSL_REF` pins the upstream AmiSSL commit the patch is validated against
 (currently AmiSSL 5.27 + 1). To track a newer AmiSSL: bump `AMISSL_REF`, re-run,
