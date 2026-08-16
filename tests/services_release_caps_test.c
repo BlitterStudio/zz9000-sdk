@@ -11,27 +11,38 @@
 
 /* mhizz9000.library refuses to allocate a decoder unless the firmware
  * advertises AUDIO_STREAM_DRAIN, and Zorro 2 MHI/mpega staging needs the
- * HOST_WINDOW_HEAP allocator. A release image missing either one fails at
- * run time with no diagnostic of its own, so --check-release has to say so. */
+ * HOST_WINDOW_HEAP allocator plus an acknowledged APERTURE_LAYOUT. */
 static int test_release_requires_mhi_capabilities(void)
 {
-  uint32_t required;
+  uint32_t required_z2;
+  uint32_t required_z3;
 
-  required = release_required_capabilities();
+  required_z2 = release_required_capabilities(2U);
+  required_z3 = release_required_capabilities(3U);
 
-  if (!zz9k_has_capability(required, ZZ9K_CAP_AUDIO_STREAM_DRAIN)) {
+  if (!zz9k_has_capability(required_z2, ZZ9K_CAP_AUDIO_STREAM_DRAIN) ||
+      !zz9k_has_capability(required_z3, ZZ9K_CAP_AUDIO_STREAM_DRAIN)) {
     printf("release requirement omits AUDIO_STREAM_DRAIN\n");
     return 1;
   }
-  if (!zz9k_has_capability(required, ZZ9K_CAP_HOST_WINDOW_HEAP)) {
+  if (!zz9k_has_capability(required_z2, ZZ9K_CAP_HOST_WINDOW_HEAP) ||
+      !zz9k_has_capability(required_z3, ZZ9K_CAP_HOST_WINDOW_HEAP)) {
     printf("release requirement omits HOST_WINDOW_HEAP\n");
     return 2;
+  }
+  if (!zz9k_has_capability(required_z2, ZZ9K_CAP_APERTURE_LAYOUT)) {
+    printf("Zorro 2 release requirement omits APERTURE_LAYOUT\n");
+    return 3;
+  }
+  if (zz9k_has_capability(required_z3, ZZ9K_CAP_APERTURE_LAYOUT)) {
+    printf("Zorro 3 release requirement includes Z2-only APERTURE_LAYOUT\n");
+    return 4;
   }
 
   return 0;
 }
 
-/* The firmware advertises both bits in the global capability word only --
+/* The firmware advertises these bits in the global capability word only --
  * its per-service registry entries carry neither (audio reports
  * AUDIO_DECODE|AUDIO_PLAYBACK, memory reports SHARED_ALLOC|MEMORY_OPS).
  * Requiring them per service would report them missing on correct
@@ -39,7 +50,8 @@ static int test_release_requires_mhi_capabilities(void)
 static int test_service_requirements_stay_global_only(void)
 {
   const uint32_t global_only =
-    ZZ9K_CAP_AUDIO_STREAM_DRAIN | ZZ9K_CAP_HOST_WINDOW_HEAP;
+    ZZ9K_CAP_AUDIO_STREAM_DRAIN | ZZ9K_CAP_HOST_WINDOW_HEAP |
+    ZZ9K_CAP_APERTURE_LAYOUT;
   uint32_t i;
 
   for (i = 0U;
@@ -63,13 +75,15 @@ static int test_missing_capabilities_report_by_name(void)
   uint32_t pre_drain_firmware;
   uint32_t missing;
 
-  required = release_required_capabilities();
+  required = release_required_capabilities(2U);
   pre_drain_firmware =
-    required & ~(ZZ9K_CAP_AUDIO_STREAM_DRAIN | ZZ9K_CAP_HOST_WINDOW_HEAP);
+    required & ~(ZZ9K_CAP_AUDIO_STREAM_DRAIN | ZZ9K_CAP_HOST_WINDOW_HEAP |
+                 ZZ9K_CAP_APERTURE_LAYOUT);
 
   missing = zz9k_missing_capabilities(pre_drain_firmware, required);
   if (missing !=
-      (ZZ9K_CAP_AUDIO_STREAM_DRAIN | ZZ9K_CAP_HOST_WINDOW_HEAP)) {
+      (ZZ9K_CAP_AUDIO_STREAM_DRAIN | ZZ9K_CAP_HOST_WINDOW_HEAP |
+       ZZ9K_CAP_APERTURE_LAYOUT)) {
     printf("unexpected missing set 0x%08lx\n", (unsigned long)missing);
     return 1;
   }
@@ -81,6 +95,10 @@ static int test_missing_capabilities_report_by_name(void)
   if (!zz9k_capability_name(ZZ9K_CAP_HOST_WINDOW_HEAP)) {
     printf("HOST_WINDOW_HEAP has no printable name\n");
     return 3;
+  }
+  if (!zz9k_capability_name(ZZ9K_CAP_APERTURE_LAYOUT)) {
+    printf("APERTURE_LAYOUT has no printable name\n");
+    return 4;
   }
 
   return 0;

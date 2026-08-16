@@ -124,9 +124,12 @@ checks required capabilities, service flags, service version major, opcode base,
 and opcode count, and exits nonzero if the SDK and firmware do not match the
 current release contract. It also checks the capabilities the firmware
 advertises globally rather than per service — `AUDIO_STREAM_DRAIN`, which
-`mhizz9000.library` requires before it will allocate a decoder, and
+`mhizz9000.library` requires before it will allocate a decoder,
 `HOST_WINDOW_HEAP`, which Zorro 2 MHI and `mpega.library` staging allocate
-from. Those two are reported as `release missing firmware capabilities`. A
+from, and, when running on Zorro 2, `APERTURE_LAYOUT`, which makes that
+mapping verifiable. Matched Zorro 3 firmware deliberately omits the Z2-only
+layout bit. Missing required bits are reported as
+`release missing firmware capabilities`. A
 matching firmware ends with:
 
 ```text
@@ -298,23 +301,27 @@ mailbox byte order before filling public SDK structs.
   allocatable on Zorro 2, where the default shared heap does not fit in
   the 4 MB board window.
 - `ZZ9K_ALLOC_HOST_WINDOW` — the buffer must be CPU-visible. On Zorro 3
-  the library strips the bit (the whole shared heap already maps). On
-  Zorro 2 it is forwarded to the firmware, which serves the allocation
-  from a small (64 KB, advertised in `ZZ9KCaps.host_window_heap_size`)
-  heap inside the board window; firmware support is advertised as
-  `ZZ9K_CAP_HOST_WINDOW_HEAP`. Older firmware ignores the bit and
-  allocates from the default heap, so the call fails to map on Zorro 2
-  exactly as a plain allocation always has (and the library now frees the
-  card-side handle on that path instead of leaking it). The heap sits
-  near the top of the standard 4 MB Zorro 2 window; on the 2 MB bitstream
-  variants (`zorro2-2mb`, `a500-2mb`) the library answers
-  `ZZ9K_STATUS_UNSUPPORTED` without a mailbox round trip
-  (`ZZ9K_HOST_WINDOW_MIN_BOARD_SIZE`), so those boards keep the plain
-  software paths.
+  the library strips the bit (the whole shared heap already maps). On a
+  matched Zorro 2 stack, `ZZ9K_CAP_APERTURE_LAYOUT` publishes the exact
+  board-relative framebuffer, PIP, template, host, and audio regions. The
+  RTG driver acknowledges that descriptor only after reserving its regions;
+  the library then cross-checks it against the AutoConfig size and validates
+  the full returned allocation against the host region. Canonical 2 MB and
+  4 MB profiles both provide a 64 KB host heap;
+  the software-ready 8 MB profile provides 128 KB. Firmware without the
+  layout capability retains only the historical fixed 4 MB behavior, so a
+  legacy 2 MB request returns `ZZ9K_STATUS_UNSUPPORTED` without a mailbox
+  round trip. Every rejected returned allocation is freed on the card.
+
+`zz9k_query_aperture_layout()` returns the validated generation-1 layout.
+`zz9k_read_diag_memory()` reports the layout state and host-heap total, free,
+largest-block, allocation, and invalid-slot counters used by `zz9k-info`.
 
 Keep host-window allocations small and short-lived: the Zorro 2 heap is
 shared by every host-visible SDK client (the MHI driver's feed staging,
-mpega's staging + compact PCM ring, ...).
+mpega's staging + compact PCM ring, 32 KiB image-view staging, archive stream
+chunks, datatype tiles, and crypto scratch). Card-only rings do not consume
+this window.
 
 ## Surface Jobs
 
@@ -708,6 +715,13 @@ and paces through `timer.device`. Standalone MP3 playback uses the accelerated
 audio-stream service and generic AHI output, or the optional runtime
 `mhizz9000.library` path when ZZ9000AX is available.
 
+On a matched Zorro 2 stack, Program Stream video is enabled only after the
+driver has acknowledged a generation-1 layout with a PIP pool large enough for
+the aligned YUV422 frame. It uses a 24 KiB input window and 32 KiB PCM ring;
+oversized video remains unsupported and P96 rejects any pool overrun. The
+standalone MP3 fallback uses a card-only compressed ring plus 32 KiB PCM and
+16 KiB staging windows.
+
 For standalone MP3, `--audio=auto` tries to acquire MHI before playback and
 falls back to accelerated decode plus AHI only when that pre-play acquisition
 is unavailable. Explicit `--audio=mhi` never falls back. Direct
@@ -802,6 +816,11 @@ removes the requirement to allocate the complete decoded file in the SDK shared
 heap. Current firmware supports `ZZ9K_COMPRESSION_LZMA_ALONE` for LZMA-alone
 files and simple `.7z` LZMA entries, plus `ZZ9K_COMPRESSION_LZMA2` for simple
 `.7z` LZMA2 entries.
+
+`zz9k-archive` caps its two CPU-visible feed buffers to a combined 48 KiB and
+uses a card-only output buffer for verify-only streams. Large LHA batch arenas
+are bypassed on Zorro 2; those jobs retain the existing per-member/software
+fallback chain.
 
 Firmware that also advertises `ZZ9K_SERVICE_FLAG_CODEC_DECOMPRESS_FEED` adds
 `ZZ9K_OP_DECOMPRESS_STREAM_FEED` and `zz9k_decompress_stream_feed()`. A caller

@@ -49,9 +49,10 @@ programs:
 - AmiSSL/OpenSSL 3 provider work for TLS acceleration: X25519, P-256
   ECDHE, P-256 ECDSA verify, RSA-2048 PKCS#1/SHA-256 verify, AES-GCM,
   and ChaCha20-Poly1305 where the board and firmware advertise support.
-- Zorro 2-aware allocation flags (`HOST_WINDOW` / `CARD_ONLY`) so small
-  audio staging buffers can stay CPU-visible while card-only rings avoid
-  the 4 MB aperture limit.
+- Zorro 2-aware allocation flags (`HOST_WINDOW` / `CARD_ONLY`) plus an
+  acknowledged aperture-relative layout, so small audio staging buffers can
+  stay CPU-visible on matched 2/4 MB cards while card-only rings avoid the
+  aperture limit.
 - A readable primary display CLUT: `ZZ9KQueryPalette()` (library revision
   28) reads back the INDEX8 palette the card was given, which the
   write-only hardware registers cannot.
@@ -105,7 +106,8 @@ The package is written to `build/package/amigaos3`. It contains:
 
 SDK v2 requires matching ZZ9000 SDK-service firmware. Firmware v2.2.0 is the
 older baseline for the service ABI, but current matched firmware, SDK payloads,
-and drivers are expected for Zorro 2 host-window audio/MP3 allocation,
+and drivers are expected for acknowledged Zorro 2 aperture layouts and
+host-window audio/MP3 allocation,
 `ZZ9000.CFG` query support, and the newest service capability flags. After
 installing the SDK package and booting that firmware, run this hardware smoke
 check:

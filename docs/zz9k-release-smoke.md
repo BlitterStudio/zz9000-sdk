@@ -19,15 +19,17 @@ Expected pass signal:
 
 - `zz9k-services --check-release` exits with status `0`.
 - The final line is `release check ok`.
-- `zz9k-info` prints the SDK ABI, capability names, service list, and
-  diagnostics without reporting query failures.
+- `zz9k-info` prints the SDK ABI, capability names, validated aperture layout,
+  service list, and memory diagnostics without reporting query failures.
 
 Failure routing:
 
 - Missing service discovery, required service flags, opcode ranges, or version
   major mismatches are firmware/SDK release-pair blockers.
 - `release missing firmware capabilities: AUDIO_STREAM_DRAIN` or
-  `HOST_WINDOW_HEAP` means the firmware image predates the matched driver set;
+  `HOST_WINDOW_HEAP` means the firmware image predates the matched driver set.
+  Missing `APERTURE_LAYOUT` is also a matched-release blocker on Zorro 2;
+  matched Zorro 3 firmware deliberately does not advertise that Z2-only bit.
   MHI playback fails at decoder allocation. Reflash a firmware built from the
   release pair rather than debugging the driver.
 - Mailbox open or query failures belong in the firmware/driver transport path
@@ -155,6 +157,8 @@ Expected pass signal:
 - DataType descriptors are activated from `Storage/DataTypes`, and
   `AddDataTypes LIST` shows `ZZ9000-JPEG` and `ZZ9000-PNG`.
 - DataTypes clients display JPEG and PNG through `zz9k-picture.datatype`.
+- On Zorro 2, `zz9k-info` reports an active acknowledged layout while viewer
+  and datatype decoding run; host-window free space returns after each close.
 
 Failure routing:
 
@@ -173,6 +177,7 @@ ZZPlay --audio=ahi Work:Audio/test.mp3
 ZZPlay --audio=mhi Work:Audio/test.mp3
 ZZPlay --audio=auto Work:Audio/test.mp3
 ZZPlay --audio=none --benchmark Work:Audio/test.mp3
+ZZPlay --audio=ahi Work:Video/test.mpg
 ```
 
 Expected pass signal:

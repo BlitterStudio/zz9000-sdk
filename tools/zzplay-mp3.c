@@ -21,6 +21,8 @@
 #include <string.h>
 
 #define ZZPLAY_MP3_PCM_CAPACITY ZZPLAY_MP3_DEFAULT_PCM_CAPACITY
+#define ZZPLAY_MP3_Z2_PCM_CAPACITY (32UL * 1024UL)
+#define ZZPLAY_MP3_Z2_STAGING_CAPACITY (16UL * 1024UL)
 #define ZZPLAY_MP3_DRAIN_GUARD 128U
 
 typedef struct ZZPlayMP3Decode {
@@ -40,6 +42,7 @@ typedef struct ZZPlayMP3Decode {
   uint64_t output_frames;
   uint8_t session_open;
   uint8_t ahi_started;
+  uint8_t compact_z2;
 } ZZPlayMP3Decode;
 
 static int zzplay_mp3_should_stop(const ZZPlayMP3Decode *decode)
@@ -117,13 +120,12 @@ static int zzplay_mp3_controls_paused_thunk(void *user)
   return bridge ? zzplay_mp3_controls_paused(bridge->controls) : 0;
 }
 
-static int zzplay_mp3_service_ready(ZZ9KContext *ctx)
+static int zzplay_mp3_service_ready(ZZ9KContext *ctx, ZZ9KCaps *caps)
 {
-  ZZ9KCaps caps;
   ZZ9KServiceInfo service;
 
-  return zz9k_query_caps(ctx, &caps) == ZZ9K_STATUS_OK &&
-         (caps.capability_bits & ZZ9K_CAP_AUDIO_DECODE) != 0U &&
+  return caps && zz9k_query_caps(ctx, caps) == ZZ9K_STATUS_OK &&
+         (caps->capability_bits & ZZ9K_CAP_AUDIO_DECODE) != 0U &&
          zz9k_query_service(ctx, ZZ9K_SERVICE_AUDIO, &service) ==
              ZZ9K_STATUS_OK &&
          (service.flags & ZZ9K_SERVICE_FLAG_AUDIO_MP3_DECODE) != 0U &&
@@ -299,17 +301,28 @@ static int zzplay_mp3_decode_once(ZZPlayMP3Decode *decode)
 {
   ZZ9KAudioStreamBeginDesc begin;
   static uint8_t chunk[ZZPLAY_MP3_FEED_MAX_BYTES];
+  uint32_t pcm_capacity;
+  uint32_t staging_capacity;
+  uint32_t host_flags;
   int status;
   unsigned flush_guard;
 
   memset(&decode->result, 0, sizeof(decode->result));
+  pcm_capacity = ZZPLAY_MP3_PCM_CAPACITY;
+  staging_capacity = ZZPLAY_MP3_FEED_MAX_BYTES;
+  host_flags = 0U;
+  if (decode->compact_z2) {
+    pcm_capacity = ZZPLAY_MP3_Z2_PCM_CAPACITY;
+    staging_capacity = ZZPLAY_MP3_Z2_STAGING_CAPACITY;
+    host_flags = ZZ9K_ALLOC_HOST_WINDOW;
+  }
   if (zz9k_alloc_shared(decode->ctx, ZZPLAY_MP3_INPUT_CAPACITY,
-                        16U, 0U, &decode->compressed) !=
+                        16U, ZZ9K_ALLOC_CARD_ONLY, &decode->compressed) !=
           ZZ9K_STATUS_OK ||
-      zz9k_alloc_shared(decode->ctx, ZZPLAY_MP3_PCM_CAPACITY,
-                        16U, 0U, &decode->pcm) != ZZ9K_STATUS_OK ||
-      zz9k_alloc_shared(decode->ctx, ZZPLAY_MP3_FEED_MAX_BYTES,
-                        16U, 0U, &decode->staging) != ZZ9K_STATUS_OK) {
+      zz9k_alloc_shared(decode->ctx, pcm_capacity,
+                        16U, host_flags, &decode->pcm) != ZZ9K_STATUS_OK ||
+      zz9k_alloc_shared(decode->ctx, staging_capacity,
+                        16U, host_flags, &decode->staging) != ZZ9K_STATUS_OK) {
     return 0;
   }
   /* The stream decoder has no rate or channel conversion, so the firmware
@@ -320,7 +333,7 @@ static int zzplay_mp3_decode_once(ZZPlayMP3Decode *decode)
           &begin, decode->compressed.handle, decode->compressed.length,
           decode->pcm.handle, decode->pcm.length, 0U, 0U,
           ZZ9K_AUDIO_SAMPLE_FORMAT_S16BE, 0U,
-          ZZPLAY_MP3_FEED_MAX_BYTES, 0U)) {
+          decode->staging.length, 0U)) {
     return 0;
   }
   status = zz9k_audio_stream_begin(
@@ -360,7 +373,7 @@ static int zzplay_mp3_decode_once(ZZPlayMP3Decode *decode)
                      decode->probe->sample_rate),
           1);
     }
-    got = fread(chunk, 1U, sizeof(chunk), decode->file);
+    got = fread(chunk, 1U, decode->staging.length, decode->file);
     if (got == 0U && ferror(decode->file)) {
       return 0;
     }
@@ -447,12 +460,14 @@ static int zzplay_mp3_accelerated(
     const ZZPlayMP3Controls *controls)
 {
   ZZ9KContext *ctx = 0;
+  ZZ9KCaps caps;
   uint32_t repeats = options->loop_count;
   uint32_t completed = 0U;
   int ok = 0;
 
+  memset(&caps, 0, sizeof(caps));
   if (zz9k_open(&ctx) != ZZ9K_STATUS_OK ||
-      !zzplay_mp3_service_ready(ctx)) {
+      !zzplay_mp3_service_ready(ctx, &caps)) {
     fprintf(stderr,
             "zzplay: accelerated MP3 streaming is unavailable\n");
     goto done;
@@ -465,6 +480,8 @@ static int zzplay_mp3_accelerated(
     memset(&ahi, 0, sizeof(ahi));
     ahi.fill_slot = -1;
     decode.ctx = ctx;
+    decode.compact_z2 =
+        (caps.capability_bits & ZZ9K_CAP_APERTURE_LAYOUT) != 0U;
     decode.probe = info;
     decode.controls = controls;
     decode.file = fopen(path, "rb");

@@ -11,8 +11,8 @@ static int check_video_preflight(void)
           ZZPLAY_VIDEO_SINK_READY ||
       zzplay_video_sink_check(0, 0U, 0, 0) !=
           ZZPLAY_VIDEO_SINK_UNSUPPORTED_BOARD ||
-      zzplay_video_sink_check(1, 2U, 0, 0) !=
-          ZZPLAY_VIDEO_SINK_UNSUPPORTED_BOARD ||
+      zzplay_video_sink_check(1, 2U, 1, 1) !=
+          ZZPLAY_VIDEO_SINK_READY ||
       zzplay_video_sink_check(1, 3U, 0, 0) !=
           ZZPLAY_VIDEO_SINK_P96_UNAVAILABLE ||
       zzplay_video_sink_check(1, 3U, 1, 0) !=
@@ -20,6 +20,35 @@ static int check_video_preflight(void)
     return 0;
   }
   return 1;
+}
+
+static int check_z2_aperture(void)
+{
+  ZZ9KApertureLayout layout;
+
+  memset(&layout, 0, sizeof(layout));
+  layout.profile = ZZ9K_APERTURE_PROFILE(
+      ZZ9K_APERTURE_LAYOUT_GENERATION_1,
+      ZZ9K_APERTURE_FLAG_VALID | ZZ9K_APERTURE_FLAG_ACKED |
+          ZZ9K_APERTURE_FLAG_HOST_WINDOW | ZZ9K_APERTURE_FLAG_PIP);
+  layout.pip_size = 0x38000U;
+
+  if (!zzplay_video_z2_aperture_ready(&layout, 320U, 240U) ||
+      !zzplay_video_z2_aperture_ready(&layout, 368U, 300U) ||
+      !zzplay_video_z2_aperture_ready(&layout, 1024U, 112U) ||
+      zzplay_video_z2_aperture_ready(&layout, 1024U, 113U) ||
+      zzplay_video_z2_aperture_ready(&layout, 640U, 480U) ||
+      zzplay_video_z2_aperture_ready(&layout, 367U, 300U) ||
+      zzplay_video_z2_aperture_ready(&layout, 14U, 300U) ||
+      zzplay_video_z2_aperture_ready(&layout, 4098U, 16U))
+    return 0;
+  layout.profile &= ~ZZ9K_APERTURE_FLAG_ACKED;
+  if (zzplay_video_z2_aperture_ready(&layout, 320U, 240U))
+    return 0;
+  layout.profile |= ZZ9K_APERTURE_FLAG_ACKED;
+  layout.pip_size = 0U;
+  return !zzplay_video_z2_aperture_ready(&layout, 320U, 240U) &&
+         !zzplay_video_z2_aperture_ready(NULL, 320U, 240U);
 }
 
 static int check_selection(ZZPlayMediaAudio media,
@@ -138,8 +167,11 @@ int main(void)
   if (!check_audio_policy()) {
     return 2;
   }
-  if (!check_audio_start_prebuffer()) {
+  if (!check_z2_aperture()) {
     return 3;
+  }
+  if (!check_audio_start_prebuffer()) {
+    return 4;
   }
   return 0;
 }

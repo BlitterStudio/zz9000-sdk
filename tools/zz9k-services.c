@@ -38,7 +38,7 @@ static const ReleaseServiceRequirement release_services[] = {
       ZZ9K_CAP_SERVICE_DISCOVERY,
     ZZ9K_SERVICE_FLAG_FIRMWARE,
     ZZ9K_SERVICE_CORE,
-    5U
+    6U
   },
   {
     ZZ9K_SERVICE_MEMORY,
@@ -114,7 +114,7 @@ static const ReleaseServiceRequirement release_services[] = {
     ZZ9K_CAP_DIAGNOSTICS,
     ZZ9K_SERVICE_FLAG_FIRMWARE,
     ZZ9K_SERVICE_DIAG,
-    2U
+    4U
   }
 };
 
@@ -221,23 +221,27 @@ static void print_service(const ZZ9KServiceInfo *service,
 
 /* Capabilities the release requires from the firmware as a whole rather
  * than from any single service registry entry. The firmware advertises
- * both only in the global capability word -- its audio service reports
+ * these only in the global capability word -- its audio service reports
  * AUDIO_DECODE|AUDIO_PLAYBACK and its memory service reports
  * SHARED_ALLOC|MEMORY_OPS -- so they must not be added to
  * release_services[], where they would read as missing on correct
  * firmware. mhizz9000.library refuses to allocate a decoder without
  * AUDIO_STREAM_DRAIN, and Zorro 2 MHI/mpega staging allocates from the
- * HOST_WINDOW_HEAP; a firmware image lacking either fails at run time
- * with no diagnostic of its own. */
+ * HOST_WINDOW_HEAP. Safe Zorro 2 mapping additionally requires
+ * APERTURE_LAYOUT, but matched Zorro 3 firmware deliberately omits that
+ * Z2-only capability. */
 #define ZZ9K_RELEASE_GLOBAL_CAPS \
   (ZZ9K_CAP_AUDIO_STREAM_DRAIN | ZZ9K_CAP_HOST_WINDOW_HEAP)
 
-static uint32_t release_required_capabilities(void)
+static uint32_t release_required_capabilities(uint16_t zorro_version)
 {
   uint32_t required;
   uint32_t i;
 
   required = ZZ9K_RELEASE_GLOBAL_CAPS;
+  if (zorro_version == 2U) {
+    required |= ZZ9K_CAP_APERTURE_LAYOUT;
+  }
   for (i = 0U;
        i < (uint32_t)(sizeof(release_services) / sizeof(release_services[0]));
        i++) {
@@ -318,14 +322,15 @@ static int check_release_service(ZZ9KContext *ctx,
   return ok;
 }
 
-static int check_release_services(ZZ9KContext *ctx, const ZZ9KCaps *caps)
+static int check_release_services(ZZ9KContext *ctx, const ZZ9KCaps *caps,
+                                  uint16_t zorro_version)
 {
   uint32_t missing_caps;
   uint32_t i;
   int ok = 1;
 
   missing_caps = zz9k_missing_capabilities(
-      caps->capability_bits, release_required_capabilities());
+      caps->capability_bits, release_required_capabilities(zorro_version));
   if (missing_caps != 0U) {
     print_capability_names("release missing firmware capabilities: ",
                            missing_caps);
@@ -353,6 +358,7 @@ int main(int argc, char **argv)
 {
   ZZ9KContext *ctx = 0;
   ZZ9KCaps caps;
+  ZZ9KBoard board;
   uint32_t count;
   uint32_t i;
   ZZ9KServicesMode mode = ZZ9K_SERVICES_MODE_LIST;
@@ -399,7 +405,14 @@ int main(int argc, char **argv)
   if (mode == ZZ9K_SERVICES_MODE_CHECK_RELEASE) {
     int ok;
 
-    ok = check_release_services(ctx, &caps);
+    status = zz9k_find_board(&board);
+    if (status != ZZ9K_STATUS_OK) {
+      printf("zz9k-services: board query failed: %s (%d)\n",
+             zz9k_status_name(status), status);
+      zz9k_close(ctx);
+      return 1;
+    }
+    ok = check_release_services(ctx, &caps, board.zorro_version);
     zz9k_close(ctx);
     return ok ? 0 : 1;
   }

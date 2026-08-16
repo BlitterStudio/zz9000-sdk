@@ -117,6 +117,39 @@ static inline int zz9k_reply_caps(const ZZ9KMailboxEntry *reply,
   return ZZ9K_STATUS_OK;
 }
 
+static inline int zz9k_reply_aperture_layout(
+    const ZZ9KMailboxEntry *reply, ZZ9KApertureLayout *layout)
+{
+  const uint8_t *payload;
+  int status;
+
+  if (!layout) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  memset(layout, 0, sizeof(*layout));
+  status = zz9k_reply_require(reply, ZZ9K_OP_QUERY_APERTURE_LAYOUT,
+                              sizeof(ZZ9KApertureLayoutPayload));
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  payload = reply->payload.inline_data;
+  layout->profile = zz9k_get_be32(&payload[0]);
+  layout->aperture_size = zz9k_get_be32(&payload[4]);
+  layout->framebuffer_base = zz9k_get_be32(&payload[8]);
+  layout->framebuffer_size = zz9k_get_be32(&payload[12]);
+  layout->pip_base = zz9k_get_be32(&payload[16]);
+  layout->pip_size = zz9k_get_be32(&payload[20]);
+  layout->template_base = zz9k_get_be32(&payload[24]);
+  layout->template_size = zz9k_get_be32(&payload[28]);
+  layout->host_base = zz9k_get_be32(&payload[32]);
+  layout->host_size = zz9k_get_be32(&payload[36]);
+  layout->audio_base = zz9k_get_be32(&payload[40]);
+  layout->audio_size = zz9k_get_be32(&payload[44]);
+  return ZZ9K_STATUS_OK;
+}
+
 static inline int zz9k_reply_service_info(const ZZ9KMailboxEntry *reply,
                                           uint32_t expected_service_id,
                                           ZZ9KServiceInfo *service)
@@ -288,6 +321,39 @@ static inline int zz9k_reply_diag_timing(const ZZ9KMailboxEntry *reply,
   timing->last_us = zz9k_get_be32(&payload[36]);
   timing->max_opcode = zz9k_get_be32(&payload[40]);
   timing->max_us = zz9k_get_be32(&payload[44]);
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_reply_diag_memory(const ZZ9KMailboxEntry *reply,
+                                         ZZ9KDiagMemoryInfo *memory)
+{
+  const uint8_t *payload;
+  int status;
+
+  if (!memory) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  memset(memory, 0, sizeof(*memory));
+  status = zz9k_reply_require(reply, ZZ9K_OP_DIAG_MEMORY,
+                              sizeof(ZZ9KDiagMemoryPayload));
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  payload = reply->payload.inline_data;
+  memory->version = zz9k_get_be32(&payload[0]);
+  memory->layout_state = zz9k_get_be32(&payload[4]);
+  memory->aperture_size = zz9k_get_be32(&payload[8]);
+  memory->aperture_info = zz9k_get_be32(&payload[12]);
+  memory->host_board_base = zz9k_get_be32(&payload[16]);
+  memory->host_arm_base = zz9k_get_be32(&payload[20]);
+  memory->host_total = zz9k_get_be32(&payload[24]);
+  memory->host_free = zz9k_get_be32(&payload[28]);
+  memory->host_largest_free = zz9k_get_be32(&payload[32]);
+  memory->allocations = zz9k_get_be32(&payload[36]);
+  memory->allocator_invalid_slots = zz9k_get_be32(&payload[40]);
+  memory->reserved = zz9k_get_be32(&payload[44]);
   return ZZ9K_STATUS_OK;
 }
 

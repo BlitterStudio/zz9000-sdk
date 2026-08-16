@@ -72,6 +72,19 @@ typedef struct ZZ9KMediaClock {
 #define ZZ9K_REG_SDK_DIAG_Z3ADDR    0x0118U
 #define ZZ9K_REG_SDK_MAGIC_VALUE    0x5a39U
 
+/* Direct FPGA bootstrap pair. Reads return the high/low halves of the
+ * compile-time aperture descriptor. After reserving every advertised region,
+ * the RTG driver writes the ACK token to the low half; SDK clients only read
+ * and validate the acknowledged mailbox layout. Board offsets are 0x111c and
+ * 0x111e once the 0x1000 direct-register window base is included. */
+#define ZZ9K_REG_APERTURE_INFO_HI    0x011cU
+#define ZZ9K_REG_APERTURE_INFO_LO_ACK 0x011eU
+#define ZZ9K_APERTURE_ACK_TOKEN      0xa501U
+#define ZZ9K_APERTURE_INFO_LEGACY    0x00000000UL
+#define ZZ9K_APERTURE_INFO_2M        0x5a010502UL
+#define ZZ9K_APERTURE_INFO_4M        0x5a010704UL
+#define ZZ9K_APERTURE_INFO_8M        0x5a010708UL
+
 /*
  * ZZ9000.CFG query interface (firmware ABI >= 2.3): write a key id to
  * CONFIG_KEY, then read the value back from CONFIG_KEY and the
@@ -141,6 +154,7 @@ enum ZZ9KOpcode {
   ZZ9K_OP_PING = ZZ9K_SERVICE_CORE + 0x02,
   ZZ9K_OP_CANCEL = ZZ9K_SERVICE_CORE + 0x03,
   ZZ9K_OP_QUERY_SERVICE = ZZ9K_SERVICE_CORE + 0x04,
+  ZZ9K_OP_QUERY_APERTURE_LAYOUT = ZZ9K_SERVICE_CORE + 0x05,
 
   ZZ9K_OP_ALLOC_SHARED = ZZ9K_SERVICE_MEMORY + 0x00,
   ZZ9K_OP_FREE_SHARED = ZZ9K_SERVICE_MEMORY + 0x01,
@@ -204,7 +218,8 @@ enum ZZ9KOpcode {
 
   ZZ9K_OP_DIAG_READ = ZZ9K_SERVICE_DIAG + 0x00,
   ZZ9K_OP_DIAG_TIMING = ZZ9K_SERVICE_DIAG + 0x01,
-  ZZ9K_OP_DIAG_SCHED = ZZ9K_SERVICE_DIAG + 0x02
+  ZZ9K_OP_DIAG_SCHED = ZZ9K_SERVICE_DIAG + 0x02,
+  ZZ9K_OP_DIAG_MEMORY = ZZ9K_SERVICE_DIAG + 0x03
 };
 
 enum ZZ9KCapability {
@@ -235,7 +250,32 @@ enum ZZ9KCapability {
   ZZ9K_CAP_MEDIA_SESSION = 1U << 22,
   /* AUDIO_STREAM_FEED_DRAIN preserves partial compressed input while
    * draining complete frames and the bound playback tail. */
-  ZZ9K_CAP_AUDIO_STREAM_DRAIN = 1U << 23
+  ZZ9K_CAP_AUDIO_STREAM_DRAIN = 1U << 23,
+  /* The firmware publishes an aperture-relative Zorro 2 memory layout; the
+   * RTG driver acknowledges it before HOST_WINDOW becomes mappable. */
+  ZZ9K_CAP_APERTURE_LAYOUT = 1U << 24
+};
+
+#define ZZ9K_APERTURE_LAYOUT_GENERATION_SHIFT 16U
+#define ZZ9K_APERTURE_LAYOUT_GENERATION_MASK  0xffff0000UL
+#define ZZ9K_APERTURE_LAYOUT_FLAGS_MASK       0x0000ffffUL
+#define ZZ9K_APERTURE_LAYOUT_GENERATION_1     1U
+#define ZZ9K_APERTURE_PROFILE(generation, flags) \
+  ((((uint32_t)(generation)) << ZZ9K_APERTURE_LAYOUT_GENERATION_SHIFT) | \
+   ((uint32_t)(flags) & ZZ9K_APERTURE_LAYOUT_FLAGS_MASK))
+
+enum ZZ9KApertureFlags {
+  ZZ9K_APERTURE_FLAG_VALID = 1U << 0,
+  ZZ9K_APERTURE_FLAG_ACKED = 1U << 1,
+  ZZ9K_APERTURE_FLAG_HOST_WINDOW = 1U << 2,
+  ZZ9K_APERTURE_FLAG_PIP = 1U << 3
+};
+
+enum ZZ9KApertureLayoutState {
+  ZZ9K_APERTURE_LAYOUT_LEGACY = 0,
+  ZZ9K_APERTURE_LAYOUT_UNACKNOWLEDGED = 1,
+  ZZ9K_APERTURE_LAYOUT_ACTIVE = 2,
+  ZZ9K_APERTURE_LAYOUT_INVALID = 3
 };
 
 /*
@@ -245,26 +285,19 @@ enum ZZ9KCapability {
  * is mappable). CARD_ONLY declares that the 68k never touches the buffer
  * contents: the library skips the board-window mapping and leaves
  * ZZ9KSharedBuffer.data NULL, so the buffer is usable by handle only.
- * Firmware older than ZZ9K_CAP_HOST_WINDOW_HEAP stores unknown bits
- * verbatim and allocates from the default shared heap, in which case a
- * HOST_WINDOW allocation on Zorro 2 still fails to map -- callers see the
- * same error they would have seen before the flag existed.
- *
- * The firmware heap sits at a fixed board offset near the top of the
- * standard 4 MB Zorro 2 window. The 2 MB bitstream variants
- * (VARIANT_2MB: zorro2-2mb, a500-2mb) cannot reach it, so the library
- * answers HOST_WINDOW requests with ZZ9K_STATUS_UNSUPPORTED when the
- * autoconfig window is smaller than ZZ9K_HOST_WINDOW_MIN_BOARD_SIZE --
- * without a mailbox round trip. Lifting that would need the firmware to
- * learn the window size (it is an FPGA compile-time constant) and place
- * the heap window-relative; see the discussion on zz9000-firmware PR 45.
+ * Generation-1 firmware publishes a board-relative layout and requires a
+ * bootstrap acknowledgement before the host heap becomes active. The
+ * library accepts only the canonical 2, 4, and software-ready 8 MB profiles,
+ * requires the AutoConfig size to match, and validates every returned range.
+ * Firmware without ZZ9K_CAP_APERTURE_LAYOUT retains the historical fixed
+ * 4 MB behavior; legacy 2 MB HOST_WINDOW requests remain unsupported.
  */
 enum ZZ9KAllocFlags {
   ZZ9K_ALLOC_HOST_WINDOW = 1U << 0,
   ZZ9K_ALLOC_CARD_ONLY = 1U << 1
 };
 
-#define ZZ9K_HOST_WINDOW_MIN_BOARD_SIZE 0x00400000U
+#define ZZ9K_HOST_WINDOW_MIN_BOARD_SIZE 0x00400000U /* legacy fixed profile */
 
 enum ZZ9KServiceFlags {
   ZZ9K_SERVICE_FLAG_FIRMWARE = 1U << 0,
@@ -406,6 +439,36 @@ typedef struct ZZ9KDiagPayload {
   uint8_t surfaces_used[4];
   uint8_t allocator_invalid_slots[4];
 } ZZ9KDiagPayload;
+
+typedef struct ZZ9KDiagMemoryPayload {
+  uint8_t version[4];
+  uint8_t layout_state[4];
+  uint8_t aperture_size[4];
+  uint8_t aperture_info[4];
+  uint8_t host_board_base[4];
+  uint8_t host_arm_base[4];
+  uint8_t host_total[4];
+  uint8_t host_free[4];
+  uint8_t host_largest_free[4];
+  uint8_t allocations[4];
+  uint8_t allocator_invalid_slots[4];
+  uint8_t reserved[4];
+} ZZ9KDiagMemoryPayload;
+
+typedef struct ZZ9KApertureLayoutPayload {
+  uint8_t profile[4];
+  uint8_t aperture_size[4];
+  uint8_t framebuffer_base[4];
+  uint8_t framebuffer_size[4];
+  uint8_t pip_base[4];
+  uint8_t pip_size[4];
+  uint8_t template_base[4];
+  uint8_t template_size[4];
+  uint8_t host_base[4];
+  uint8_t host_size[4];
+  uint8_t audio_base[4];
+  uint8_t audio_size[4];
+} ZZ9KApertureLayoutPayload;
 
 typedef struct ZZ9KDiagTimingPayload {
   uint8_t version[4];
@@ -1040,6 +1103,12 @@ typedef char ZZ9KMemCopyPayload_must_be_48_bytes[
 ];
 typedef char ZZ9KDiagPayload_must_be_48_bytes[
   (sizeof(ZZ9KDiagPayload) == 48U) ? 1 : -1
+];
+typedef char ZZ9KDiagMemoryPayload_must_be_48_bytes[
+  (sizeof(ZZ9KDiagMemoryPayload) == 48U) ? 1 : -1
+];
+typedef char ZZ9KApertureLayoutPayload_must_be_48_bytes[
+  (sizeof(ZZ9KApertureLayoutPayload) == 48U) ? 1 : -1
 ];
 typedef char ZZ9KDiagTimingPayload_must_be_48_bytes[
   (sizeof(ZZ9KDiagTimingPayload) == 48U) ? 1 : -1

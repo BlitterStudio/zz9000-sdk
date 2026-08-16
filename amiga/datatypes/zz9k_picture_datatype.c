@@ -57,6 +57,8 @@
   (512UL * 1024UL)
 #define ZZ9K_PICTURE_STAGING_BYTES (256UL * 1024UL)
 #define ZZ9K_PICTURE_READ_CHUNK_BYTES (256UL * 1024UL)
+#define ZZ9K_PICTURE_Z2_STAGING_BYTES (24UL * 1024UL)
+#define ZZ9K_PICTURE_Z2_TILE_TARGET_BYTES (32UL * 1024UL)
 #define ZZ9K_PICTURE_MAX_SURFACE_BYTES (16UL * 1024UL * 1024UL)
 #define ZZ9K_PICTURE_RENDER_HARDWARE 1
 #define ZZ9K_PICTURE_FORCE_DATATYPE_V47_TRUECOLOR 0
@@ -3840,7 +3842,9 @@ static int zz9k_picture_alloc_stream_input(ZZ9KContext *ctx,
                                            ZZ9KPictureStreamInput *input,
                                            const char **failure_out)
 {
+  ZZ9KCaps caps;
   uint32_t input_bytes;
+  uint32_t allocation_flags;
   int status;
 
   if (!ctx || !source || !input) {
@@ -3849,6 +3853,15 @@ static int zz9k_picture_alloc_stream_input(ZZ9KContext *ctx,
 
   zz9k_picture_init_stream_input(input);
   input_bytes = zz9k_picture_stream_input_bytes(source);
+  allocation_flags = 0U;
+  memset(&caps, 0, sizeof(caps));
+  if (zz9k_picture_query_cached_caps(ctx, &caps) &&
+      (caps.capability_bits & ZZ9K_CAP_APERTURE_LAYOUT) != 0U) {
+    if (input_bytes > ZZ9K_PICTURE_Z2_STAGING_BYTES) {
+      input_bytes = ZZ9K_PICTURE_Z2_STAGING_BYTES;
+    }
+    allocation_flags = ZZ9K_ALLOC_HOST_WINDOW;
+  }
   if (input_bytes == 0U ||
       input_bytes > ZZ9K_PICTURE_STAGING_BYTES) {
     input_bytes = ZZ9K_PICTURE_STAGING_BYTES;
@@ -3857,7 +3870,7 @@ static int zz9k_picture_alloc_stream_input(ZZ9KContext *ctx,
   zz9k_picture_trace_u32("decode: datatype staging bytes", input_bytes);
   zz9k_picture_trace("decode: datatype before staging alloc");
   status = zz9k_alloc_shared(ctx, input_bytes,
-                             16U, 0U, &input->staging);
+                             16U, allocation_flags, &input->staging);
   zz9k_picture_trace_u32(
       "decode: datatype staging alloc status", (uint32_t)status);
   if (status != ZZ9K_STATUS_OK) {
@@ -6098,6 +6111,7 @@ static int zz9k_picture_decode_to_datatype_pixels(
   ZZ9KContext *ctx;
   ZZ9KPictureStreamInput stream_input;
   ZZ9KSharedBuffer tile;
+  ZZ9KCaps caps;
   ZZ9KServiceInfo image_service;
   ZZ9KImageSessionBeginDesc begin;
   ZZ9KImageSessionResult result;
@@ -6124,6 +6138,7 @@ static int zz9k_picture_decode_to_datatype_pixels(
   int scratch_allocated;
   int session_open;
   int decode_lock_held;
+  int compact_z2;
   int ok;
   int status;
   const char *failure;
@@ -6182,6 +6197,7 @@ static int zz9k_picture_decode_to_datatype_pixels(
   ctx = 0;
   zz9k_picture_init_stream_input(&stream_input);
   memset(&tile, 0, sizeof(tile));
+  memset(&caps, 0, sizeof(caps));
   memset(&image_service, 0, sizeof(image_service));
   memset(&begin, 0, sizeof(begin));
   memset(&result, 0, sizeof(result));
@@ -6195,6 +6211,7 @@ static int zz9k_picture_decode_to_datatype_pixels(
   scratch_allocated = 0;
   session_open = 0;
   decode_lock_held = 0;
+  compact_z2 = 0;
   ok = 0;
   status = 0;
   failure = 0;
@@ -6212,6 +6229,10 @@ static int zz9k_picture_decode_to_datatype_pixels(
   if (!zz9k_picture_require_datatype_caps(ctx)) {
     failure = "decode: required capabilities missing";
     goto cleanup;
+  }
+  if (zz9k_picture_query_cached_caps(ctx, &caps) &&
+      (caps.capability_bits & ZZ9K_CAP_APERTURE_LAYOUT) != 0U) {
+    compact_z2 = 1;
   }
   if (!zz9k_picture_require_stream_service(
           ctx, instance->codec, ZZ9K_IMAGE_OUTPUT_TILE_BUFFER,
@@ -6384,6 +6405,16 @@ static int zz9k_picture_decode_to_datatype_pixels(
       goto cleanup;
     }
   }
+  if (compact_z2 && tile_bytes > ZZ9K_PICTURE_Z2_TILE_TARGET_BYTES) {
+    tile_target_bytes = ZZ9K_PICTURE_Z2_TILE_TARGET_BYTES;
+    if (!zz9k_picture_choose_tile_layout(
+            instance->width, tile_bpp, tile_max_rows, tile_target_bytes,
+            &tile_rows, &tile_pitch, &tile_bytes) ||
+        tile_bytes > ZZ9K_PICTURE_Z2_TILE_TARGET_BYTES) {
+      failure = "decode: datatype tile row exceeds Z2 host window";
+      goto cleanup;
+    }
+  }
   target.tile_rows = tile_rows;
   zz9k_picture_trace_u32("decode: datatype tile max rows", tile_max_rows);
   zz9k_picture_trace_u32(
@@ -6398,7 +6429,9 @@ static int zz9k_picture_decode_to_datatype_pixels(
   }
 
   zz9k_picture_trace("decode: datatype before tile alloc");
-  status = zz9k_alloc_shared(ctx, tile_bytes, 16U, 0U, &tile);
+  status = zz9k_alloc_shared(
+      ctx, tile_bytes, 16U,
+      compact_z2 ? ZZ9K_ALLOC_HOST_WINDOW : 0U, &tile);
   zz9k_picture_trace_u32(
       "decode: datatype tile alloc status", (uint32_t)status);
   if (status != ZZ9K_STATUS_OK) {

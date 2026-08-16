@@ -79,7 +79,8 @@
 #define ZZ9K_ARCHIVE_7Z_ID_START_POS 0x18U
 #define ZZ9K_ARCHIVE_7Z_ID_DUMMY 0x19U
 #define ZZ9K_ARCHIVE_PROBE_BYTES 512U
-#define ZZ9K_ARCHIVE_STREAM_CHUNK 32768U
+#define ZZ9K_ARCHIVE_STREAM_HOST_BUDGET (48U * 1024U)
+#define ZZ9K_ARCHIVE_STREAM_CHUNK (ZZ9K_ARCHIVE_STREAM_HOST_BUDGET / 2U)
 #define ZZ9K_ARCHIVE_STREAM_MIN_CHUNK 4096U
 #define ZZ9K_ARCHIVE_TAR_BLOCK 512U
 
@@ -5866,7 +5867,8 @@ static int zz9k_archive_decompress_feed_stream_parts_to_file(
   }
 
   while (input_capacity >= ZZ9K_ARCHIVE_STREAM_MIN_CHUNK) {
-    status = zz9k_alloc_shared(ctx, input_capacity, 16U, 0U, &input);
+    status = zz9k_alloc_shared(ctx, input_capacity, 16U,
+                               ZZ9K_ALLOC_HOST_WINDOW, &input);
     if (status == ZZ9K_STATUS_OK) {
       break;
     }
@@ -5882,7 +5884,8 @@ static int zz9k_archive_decompress_feed_stream_parts_to_file(
     input_capacity /= 2U;
   }
   while (output_capacity >= ZZ9K_ARCHIVE_STREAM_MIN_CHUNK) {
-    status = zz9k_alloc_shared(ctx, output_capacity, 16U, 0U, &decoded);
+    status = zz9k_alloc_shared(ctx, output_capacity, 16U,
+                               ZZ9K_ALLOC_HOST_WINDOW, &decoded);
     if (status == ZZ9K_STATUS_OK) {
       break;
     }
@@ -6148,7 +6151,8 @@ static int zz9k_archive_decompress_feed_file_parts_core(
   }
 
   while (input_capacity >= ZZ9K_ARCHIVE_STREAM_MIN_CHUNK) {
-    status = zz9k_alloc_shared(ctx, input_capacity, 16U, 0U, &input);
+    status = zz9k_alloc_shared(ctx, input_capacity, 16U,
+                               ZZ9K_ALLOC_HOST_WINDOW, &input);
     if (status == ZZ9K_STATUS_OK) {
       break;
     }
@@ -6167,7 +6171,11 @@ static int zz9k_archive_decompress_feed_file_parts_core(
     input_capacity /= 2U;
   }
   while (output_capacity >= ZZ9K_ARCHIVE_STREAM_MIN_CHUNK) {
-    status = zz9k_alloc_shared(ctx, output_capacity, 16U, 0U, &decoded);
+    status = zz9k_alloc_shared(
+        ctx, output_capacity, 16U,
+        (write_output || on_chunk) ? ZZ9K_ALLOC_HOST_WINDOW
+                                   : ZZ9K_ALLOC_CARD_ONLY,
+        &decoded);
     if (status == ZZ9K_STATUS_OK) {
       break;
     }
@@ -7563,6 +7571,7 @@ static void zz9k_archive_lha_batch_run(ZZ9KContext *ctx,
 {
   ZZ9KBatchLayout layout;
   ZZ9KSharedBuffer arena;
+  ZZ9KBoard board;
   uint32_t *members = 0;
   uint8_t *tables = 0;
   uint8_t *results = 0;
@@ -7589,6 +7598,15 @@ static void zz9k_archive_lha_batch_run(ZZ9KContext *ctx,
   } else if (strcmp(command, "x") == 0) {
     mode = ZZ9K_BATCH_MODE_EXTRACT;
   } else {
+    return;
+  }
+
+  memset(&board, 0, sizeof(board));
+  if (zz9k_find_board(&board) == ZZ9K_STATUS_OK &&
+      board.zorro_version == 2U) {
+    /* Batch arenas are deliberately large and CPU-visible. Keep Z2 on the
+       bounded feed-stream/per-member path instead of consuming its compact
+       host window or risking an unmappable shared-heap result. */
     return;
   }
 

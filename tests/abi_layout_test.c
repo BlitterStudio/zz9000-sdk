@@ -35,6 +35,14 @@ typedef char diag_payload_is_48_bytes[
   (sizeof(ZZ9KDiagPayload) == 48U) ? 1 : -1
 ];
 
+typedef char diag_memory_payload_is_48_bytes[
+  (sizeof(ZZ9KDiagMemoryPayload) == 48U) ? 1 : -1
+];
+
+typedef char aperture_layout_payload_is_48_bytes[
+  (sizeof(ZZ9KApertureLayoutPayload) == 48U) ? 1 : -1
+];
+
 typedef char diag_timing_payload_is_48_bytes[
   (sizeof(ZZ9KDiagTimingPayload) == 48U) ? 1 : -1
 ];
@@ -191,6 +199,12 @@ int main(void)
   if (ZZ9K_REG_SDK_DIAG_WRITE != 0x0110U) return 10;
   if (ZZ9K_REG_SDK_DIAG_DATA != 0x0114U) return 11;
   if (ZZ9K_REG_SDK_DIAG_Z3ADDR != 0x0118U) return 12;
+  if (ZZ9K_REG_APERTURE_INFO_HI != 0x011cU) return 103;
+  if (ZZ9K_REG_APERTURE_INFO_LO_ACK != 0x011eU) return 104;
+  if (ZZ9K_APERTURE_ACK_TOKEN != 0xa501U) return 105;
+  if (ZZ9K_APERTURE_INFO_2M != 0x5a010502UL) return 106;
+  if (ZZ9K_APERTURE_INFO_4M != 0x5a010704UL) return 107;
+  if (ZZ9K_APERTURE_INFO_8M != 0x5a010708UL) return 108;
   if (ZZ9K_INTERRUPT_SDK != 0x0008U) return 13;
   if (ZZ9K_CONFIG_ACK_MODE != 0x0008U) return 14;
   if (ZZ9K_CONFIG_ACK_SDK != 0x0080U) return 15;
@@ -230,6 +244,18 @@ int main(void)
   if (ZZ9K_OP_DIAG_SCHED != 0x0902U) {
     return 26;
   }
+  if (ZZ9K_OP_QUERY_APERTURE_LAYOUT != 0x0005U) return 109;
+  if (ZZ9K_OP_DIAG_MEMORY != 0x0903U) return 110;
+  if (ZZ9K_CAP_APERTURE_LAYOUT != (1U << 24)) return 111;
+  if (ZZ9K_APERTURE_PROFILE(ZZ9K_APERTURE_LAYOUT_GENERATION_1,
+                            ZZ9K_APERTURE_FLAG_VALID |
+                            ZZ9K_APERTURE_FLAG_ACKED |
+                            ZZ9K_APERTURE_FLAG_HOST_WINDOW) !=
+      0x00010007UL) return 112;
+  if (ZZ9K_APERTURE_LAYOUT_LEGACY != 0 ||
+      ZZ9K_APERTURE_LAYOUT_UNACKNOWLEDGED != 1 ||
+      ZZ9K_APERTURE_LAYOUT_ACTIVE != 2 ||
+      ZZ9K_APERTURE_LAYOUT_INVALID != 3) return 113;
   if (ZZ9K_SERVICE_FLAG_CODEC_DECOMPRESS_STREAM != (1U << 23)) {
     return 22;
   }

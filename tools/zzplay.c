@@ -46,6 +46,8 @@
 
 #define ZZPLAY_INPUT_BYTES (64U * 1024U)
 #define ZZPLAY_PCM_BYTES (128U * 1024U)
+#define ZZPLAY_Z2_INPUT_BYTES (24U * 1024U)
+#define ZZPLAY_Z2_PCM_BYTES (32U * 1024U)
 #define ZZPLAY_AHI_PERIODS_PER_SECOND 10U
 #define ZZPLAY_MEDIA_MAX_SAMPLE_RATE 48000U
 #define ZZPLAY_MEDIA_PCM_FRAME_BYTES 4U
@@ -1878,6 +1880,27 @@ static void zzplay_capture_audio_totals(
   runtime->audio_totals_captured = 1U;
 }
 
+static uint32_t zzplay_pcm_low_water(uint32_t capacity)
+{
+  uint32_t low = ZZPLAY_PCM_LOW_WATER;
+
+  if (low >= capacity) {
+    low = capacity / 2U;
+  }
+  return low;
+}
+
+static uint32_t zzplay_pcm_high_water(uint32_t capacity)
+{
+  uint32_t high = ZZPLAY_PCM_HIGH_WATER;
+  uint32_t compact = capacity - capacity / 4U;
+
+  if (high > compact) {
+    high = compact;
+  }
+  return high;
+}
+
 static int zzplay_begin_session(struct ZZPlayRuntime *runtime)
 {
   ZZ9KMediaSessionBeginDesc begin;
@@ -1909,8 +1932,8 @@ static int zzplay_begin_session(struct ZZPlayRuntime *runtime)
   if (runtime->audio_enabled) {
     begin.pcm_ring_handle = runtime->pcm.handle;
     begin.pcm_ring_capacity = runtime->pcm.length;
-    begin.pcm_low_water_bytes = ZZPLAY_PCM_LOW_WATER;
-    begin.pcm_high_water_bytes = ZZPLAY_PCM_HIGH_WATER;
+    begin.pcm_low_water_bytes = zzplay_pcm_low_water(runtime->pcm.length);
+    begin.pcm_high_water_bytes = zzplay_pcm_high_water(runtime->pcm.length);
   }
   status = zz9k_media_session_begin(runtime->ctx, &begin, &result);
   if (result.session != 0U) {
@@ -1967,11 +1990,14 @@ int main(int argc, char **argv)
   ZZPlayTransport transport;
   ZZ9KBoard board;
   ZZ9KCaps caps;
+  ZZ9KApertureLayout aperture;
   ZZ9KServiceInfo service;
   ZZ9KMediaSessionWriteDesc write;
   ZZ9KMediaSessionMainResult result;
   ZZPlayBackendDecision audio_decision;
   uint32_t frame_period_us;
+  uint32_t input_bytes;
+  uint32_t pcm_bytes;
   uint32_t held_decode_us = 0U;
   int media_done = 0;
   int cleanup_status;
@@ -1982,6 +2008,7 @@ int main(int argc, char **argv)
   memset(&probe, 0, sizeof(probe));
   memset(&info, 0, sizeof(info));
   memset(&board, 0, sizeof(board));
+  memset(&aperture, 0, sizeof(aperture));
   memset(&result, 0, sizeof(result));
   runtime.audio_origin_pts = ZZ9K_MEDIA_NO_PTS;
   zzplay_core_init(&runtime.core);
@@ -2130,9 +2157,9 @@ int main(int argc, char **argv)
          info.has_audio_pes ? "MP2" : "none");
 
   if (zz9k_find_board(&board) != ZZ9K_STATUS_OK ||
-      board.zorro_version != 3U) {
+      (board.zorro_version != 2U && board.zorro_version != 3U)) {
     zzplay_error(&runtime,
-            "zzplay: the P96 video window currently requires Zorro 3\n");
+            "zzplay: the P96 video window requires a supported ZZ9000 aperture\n");
     zzplay_fail(&runtime, ZZPLAY_FAILURE_UNSUPPORTED_BOARD,
                 ZZ9K_STATUS_UNSUPPORTED);
     goto cleanup;
@@ -2172,6 +2199,18 @@ int main(int argc, char **argv)
                 ZZ9K_STATUS_UNSUPPORTED);
     goto cleanup;
   }
+  if (board.zorro_version == 2U &&
+      (((caps.capability_bits & ZZ9K_CAP_APERTURE_LAYOUT) == 0U) ||
+       zz9k_query_aperture_layout(runtime.ctx, &aperture) !=
+           ZZ9K_STATUS_OK ||
+       !zzplay_video_z2_aperture_ready(
+           &aperture, info.width, info.height))) {
+    zzplay_error(&runtime,
+            "zzplay: video does not fit an acknowledged Zorro 2 PIP pool\n");
+    zzplay_fail(&runtime, ZZPLAY_FAILURE_UNSUPPORTED_BOARD,
+                ZZ9K_STATUS_UNSUPPORTED);
+    goto cleanup;
+  }
   cleanup_status = zz9k_query_service(
       runtime.ctx, ZZ9K_SERVICE_VIDEO, &service);
   if (cleanup_status != ZZ9K_STATUS_OK ||
@@ -2207,8 +2246,12 @@ int main(int argc, char **argv)
          zzplay_audio_backend_name(runtime.audio_backend),
          audio_decision.fell_back ? " (AUTO fallback)" : "");
 
+  input_bytes = board.zorro_version == 2U ? ZZPLAY_Z2_INPUT_BYTES
+                                         : ZZPLAY_INPUT_BYTES;
+  pcm_bytes = board.zorro_version == 2U ? ZZPLAY_Z2_PCM_BYTES
+                                       : ZZPLAY_PCM_BYTES;
   cleanup_status = zz9k_alloc_shared(
-      runtime.ctx, ZZPLAY_INPUT_BYTES, 64U,
+      runtime.ctx, input_bytes, 64U,
       ZZ9K_ALLOC_HOST_WINDOW, &runtime.input);
   if (runtime.input.handle != 0U) {
     (void)zzplay_resource_acquire(
@@ -2222,7 +2265,7 @@ int main(int argc, char **argv)
   }
   if (runtime.audio_enabled) {
     cleanup_status = zz9k_alloc_shared(
-        runtime.ctx, ZZPLAY_PCM_BYTES, 64U,
+        runtime.ctx, pcm_bytes, 64U,
         ZZ9K_ALLOC_HOST_WINDOW, &runtime.pcm);
     if (runtime.pcm.handle != 0U) {
       (void)zzplay_resource_acquire(
