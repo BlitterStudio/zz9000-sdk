@@ -158,7 +158,7 @@ static inline uint32_t zz9k_known_capability_bit(uint32_t index)
 static inline uint32_t zz9k_known_service_flag_count(uint32_t service_id)
 {
   if (service_id == ZZ9K_SERVICE_IMAGE) {
-    return 15U;
+    return 16U;
   }
   if (service_id == ZZ9K_SERVICE_AUDIO) {
     return 9U;
@@ -218,6 +218,8 @@ static inline uint32_t zz9k_known_service_flag(uint32_t service_id,
       return ZZ9K_SERVICE_FLAG_IMAGE_FRAMEBUFFER_OUTPUT;
     case 14:
       return ZZ9K_SERVICE_FLAG_IMAGE_RGB888_OUTPUT;
+    case 15:
+      return ZZ9K_SERVICE_FLAG_IMAGE_SCALE_BGRA_TO_RGB555_RGB565;
     default:
       return 0U;
     }
@@ -426,6 +428,8 @@ static inline const char *zz9k_service_flag_name(uint32_t service_id,
       return "png-direct-bgra";
     case ZZ9K_SERVICE_FLAG_IMAGE_RGB888_OUTPUT:
       return "rgb888-output";
+    case ZZ9K_SERVICE_FLAG_IMAGE_SCALE_BGRA_TO_RGB555_RGB565:
+      return "scale-bgra-to-rgb555-rgb565";
     default:
       return 0;
     }

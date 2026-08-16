@@ -232,6 +232,12 @@ static int test_service_flag_names(void)
                    "rgb888-output")) {
     return 21;
   }
+  if (!expect_name(zz9k_service_flag_name(
+                       ZZ9K_SERVICE_IMAGE,
+                       ZZ9K_SERVICE_FLAG_IMAGE_SCALE_BGRA_TO_RGB555_RGB565),
+                   "scale-bgra-to-rgb555-rgb565")) {
+    return 46;
+  }
   if (zz9k_service_flag_name(ZZ9K_SERVICE_CRYPTO,
                              ZZ9K_SERVICE_FLAG_IMAGE_JPEG_DIRECT_BGRA) != 0) {
     return 4;
@@ -431,7 +437,7 @@ static int test_service_flag_iteration(void)
   if (zz9k_known_service_flag(ZZ9K_SERVICE_SURFACE, 5) != 0U) {
     return 45;
   }
-  if (zz9k_known_service_flag_count(ZZ9K_SERVICE_IMAGE) != 15U) {
+  if (zz9k_known_service_flag_count(ZZ9K_SERVICE_IMAGE) != 16U) {
     return 5;
   }
   if (zz9k_known_service_flag(ZZ9K_SERVICE_IMAGE, 4) !=
@@ -446,9 +452,11 @@ static int test_service_flag_iteration(void)
       ZZ9K_SERVICE_FLAG_IMAGE_RGB888_OUTPUT) {
     return 8;
   }
-  if (zz9k_known_service_flag(ZZ9K_SERVICE_IMAGE, 15) != 0U) {
+  if (zz9k_known_service_flag(ZZ9K_SERVICE_IMAGE, 15) !=
+      ZZ9K_SERVICE_FLAG_IMAGE_SCALE_BGRA_TO_RGB555_RGB565) {
     return 21;
   }
+  if (zz9k_known_service_flag(ZZ9K_SERVICE_IMAGE, 16) != 0U) return 47;
   if (zz9k_known_service_flag_count(ZZ9K_SERVICE_CODEC) != 19U) {
     return 9;
   }

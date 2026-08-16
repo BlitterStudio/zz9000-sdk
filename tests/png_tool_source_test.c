@@ -99,6 +99,8 @@ int main(int argc, char **argv)
 	ok &= expect_contains(source, "output_pitch");
 	ok &= expect_contains(source, "result.output_format != output_format");
 	ok &= expect_contains(source, "zz9k_png_decode_viewer_image");
+	ok &= expect_contains(
+		source, "output_format = zz9k_picture_viewer_decode_format();");
 	ok &= expect_contains(source, "#define ZZ9K_PNG_STAGING_BYTES (32UL * 1024UL)");
 	ok &= expect_contains(source, "ZZ9K_ALLOC_HOST_WINDOW, &staging");
 	ok &= expect_contains(source, "ZZ9KPictureViewerImage");

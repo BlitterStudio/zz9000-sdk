@@ -144,6 +144,63 @@ int main(int argc, char **argv)
 		printf("accepted empty viewer file arg\n");
 		return 14;
 	}
+	if (zz9k_picture_viewer_decode_format() !=
+	        ZZ9K_SURFACE_FORMAT_BGRA8888 ||
+	    !zz9k_picture_viewer_framebuffer_format_supported(
+	        ZZ9K_SURFACE_FORMAT_BGRA8888) ||
+	    !zz9k_picture_viewer_framebuffer_format_supported(
+	        ZZ9K_SURFACE_FORMAT_RGB565) ||
+	    !zz9k_picture_viewer_framebuffer_format_supported(
+	        ZZ9K_SURFACE_FORMAT_RGB555) ||
+	    zz9k_picture_viewer_framebuffer_format_supported(
+	        ZZ9K_SURFACE_FORMAT_INDEX8) ||
+	    zz9k_picture_viewer_framebuffer_format_supported(
+	        ZZ9K_SURFACE_FORMAT_ARGB8888)) {
+		printf("did not classify viewer framebuffer formats\n");
+		return 15;
+	}
+	if (zz9k_picture_viewer_framebuffer_requires_conversion(
+	        ZZ9K_SURFACE_FORMAT_BGRA8888) ||
+	    !zz9k_picture_viewer_framebuffer_requires_conversion(
+	        ZZ9K_SURFACE_FORMAT_RGB565) ||
+	    !zz9k_picture_viewer_framebuffer_requires_conversion(
+	        ZZ9K_SURFACE_FORMAT_RGB555) ||
+	    zz9k_picture_viewer_framebuffer_requires_conversion(
+	        ZZ9K_SURFACE_FORMAT_INDEX8)) {
+		printf("did not classify viewer framebuffer conversion\n");
+		return 16;
+	}
+	{
+		uint32_t scale_flags =
+			ZZ9K_SERVICE_FLAG_IMAGE_SCALE_BILINEAR |
+			ZZ9K_SERVICE_FLAG_IMAGE_SCALE_CLIPPED;
+
+		if (!zz9k_picture_viewer_image_service_supported(
+		        8U, scale_flags, ZZ9K_SURFACE_FORMAT_BGRA8888) ||
+		    zz9k_picture_viewer_image_service_supported(
+		        8U, scale_flags, ZZ9K_SURFACE_FORMAT_RGB565) ||
+		    zz9k_picture_viewer_image_service_supported(
+		        8U, scale_flags, ZZ9K_SURFACE_FORMAT_RGB555) ||
+		    !zz9k_picture_viewer_image_service_supported(
+		        8U,
+		        scale_flags |
+		        ZZ9K_SERVICE_FLAG_IMAGE_SCALE_BGRA_TO_RGB555_RGB565,
+		        ZZ9K_SURFACE_FORMAT_RGB565) ||
+		    !zz9k_picture_viewer_image_service_supported(
+		        8U,
+		        scale_flags |
+		        ZZ9K_SERVICE_FLAG_IMAGE_SCALE_BGRA_TO_RGB555_RGB565,
+		        ZZ9K_SURFACE_FORMAT_RGB555) ||
+		    zz9k_picture_viewer_image_service_supported(
+		        7U, scale_flags, ZZ9K_SURFACE_FORMAT_BGRA8888) ||
+		    zz9k_picture_viewer_image_service_supported(
+		        8U, 0U, ZZ9K_SURFACE_FORMAT_BGRA8888) ||
+		    zz9k_picture_viewer_image_service_supported(
+		        8U, scale_flags, ZZ9K_SURFACE_FORMAT_INDEX8)) {
+			printf("did not gate viewer image service by format\n");
+			return 17;
+		}
+	}
 
 	if (strcmp(zz9k_picture_viewer_basename("Work:Pictures/test.jpg"),
 	           "test.jpg") != 0 ||
@@ -231,6 +288,10 @@ int main(int argc, char **argv)
 	ok &= expect_contains(source, "zz9k_image_window_set_title");
 	ok &= expect_contains(source, "zz9k_view_format_window_title");
 	ok &= expect_contains(source, "ZZ9000 View %lu/%lu %s");
+	ok &= expect_contains(
+		source, "zz9k_picture_viewer_framebuffer_format_supported");
+	ok &= expect_contains(
+		source, "zz9k_picture_viewer_image_service_supported");
 
 	free(source);
 	if (!ok)

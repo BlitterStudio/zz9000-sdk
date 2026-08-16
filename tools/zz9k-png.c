@@ -1662,15 +1662,7 @@ int zz9k_png_decode_viewer_image(ZZ9KContext *ctx,
 		return 0;
 	}
 
-	output_format = framebuffer->format;
-	if (!zz9k_surface_is_native_rtg_format(output_format)) {
-		printf("zz9k-view: framebuffer is not native RTG "
-		       "(framebuffer %lu x %lu format=%lu)\n",
-		       (unsigned long)framebuffer->width,
-		       (unsigned long)framebuffer->height,
-		       (unsigned long)framebuffer->format);
-		return 0;
-	}
+	output_format = zz9k_picture_viewer_decode_format();
 
 	memset(&input, 0, sizeof(input));
 	memset(&staging, 0, sizeof(staging));

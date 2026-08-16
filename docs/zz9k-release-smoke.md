@@ -178,6 +178,8 @@ Expected pass signal:
   `zz9k-jpeg` command complete without SDK status errors.
 - `zz9k-view` opens one resizable viewer window, displays each image, and the
   next/previous keys navigate between the images.
+- Repeat `zz9k-view` in RGB555 (15-bit), RGB565 (16-bit), and BGRA8888
+  (32-bit) RTG modes; JPEG and PNG output has the expected colors in all three.
 - Viewer resize and occlusion redraw through visible clips without corrupting
   surrounding RTG contents.
 - DataType descriptors are activated from `Storage/DataTypes`, and
