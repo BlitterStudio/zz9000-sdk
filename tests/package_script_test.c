@@ -159,11 +159,13 @@ static int check_script(const char *path, const char *name)
   ok &= expect_contains(script, name, "amiga/fd/mpega.fd");
   ok &= expect_contains(script, name, "Developer/Include/fd/mpega.fd");
   ok &= expect_contains(script, name, "docs/zz9k-library.md");
+  ok &= expect_contains(script, name, "docs/zz9k-zorro2-services.md");
   ok &= expect_contains(script, name, "docs/zz9k-modules.md");
   ok &= expect_contains(script, name, "docs/zz9k-picture-datatype.md");
   ok &= expect_contains(script, name, "docs/zz9k-68k-offload.md");
   ok &= expect_contains(script, name, "docs/zz9k-release-smoke.md");
   ok &= expect_contains(script, name, "Docs/zz9k-68k-offload.md");
+  ok &= expect_contains(script, name, "Docs/zz9k-zorro2-services.md");
   ok &= expect_contains(script, name, "Docs/zz9k-release-smoke.md");
   ok &= expect_contains(script, name,
                         "tests/fixtures/archives/split-deflate.7z.b64");

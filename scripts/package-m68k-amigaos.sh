@@ -169,6 +169,7 @@ copy_one "amiga/fd/mpega.fd" "Developer/Include/fd/mpega.fd"
 
 copy_one "README.md" "Docs/README.md"
 copy_one "docs/zz9k-library.md" "Docs/zz9k-library.md"
+copy_one "docs/zz9k-zorro2-services.md" "Docs/zz9k-zorro2-services.md"
 copy_one "docs/zz9k-modules.md" "Docs/zz9k-modules.md"
 copy_one "docs/zz9k-picture-datatype.md" "Docs/zz9k-picture-datatype.md"
 copy_one "docs/zz9k-68k-offload.md" "Docs/zz9k-68k-offload.md"

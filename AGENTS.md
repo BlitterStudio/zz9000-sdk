@@ -111,6 +111,8 @@ container with `libssl-dev` to cover the provider.
 ## Documentation Entry Points
 
 - `docs/zz9k-library.md` — primary reference for AmigaOS-side API usage
+- `docs/zz9k-zorro2-services.md` — negotiated Zorro II profiles, supported
+  production clients, shared-window limits, and hardware qualification status
 - `docs/zz9k-modules.md` — firmware service metadata shape
 - `docs/zz9k-picture-datatype.md` — DataType class details and activation
 - `docs/zz9k-release-smoke.md` — hardware validation checklist

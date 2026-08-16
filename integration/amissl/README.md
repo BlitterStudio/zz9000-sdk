@@ -35,6 +35,15 @@ The board is opened once per OpenSSL context (`zz9k_provider_init`); if it is
 absent or a service is missing, operations fall back to AmiSSL software, so the
 modified library is safe to ship even to users without a ZZ9000.
 
+Matched 2 MiB and 4 MiB Zorro II stacks are supported through the negotiated
+64 KiB host window. Provider open uses a persistent 32-byte `HOST_WINDOW`
+probe to decide whether to advertise the board path; if that probe cannot be
+allocated, AmiSSL continues in software. Other persistent scratch slots grow
+lazily to exact 16-byte-aligned sizes, and an allocation miss later makes only
+that operation use software. The host window is shared with other CPU-visible
+clients, so contention can cause either outcome. Keep firmware, SDK payloads,
+and drivers from the same release when qualifying Zorro II.
+
 `AMISSL_REF` pins the upstream AmiSSL commit the patch is validated against
 (currently AmiSSL 5.27 + 1). To track a newer AmiSSL: bump `AMISSL_REF`, re-run,
 and only re-touch the patch if those two spots moved.
