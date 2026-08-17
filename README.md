@@ -23,56 +23,36 @@ exposed to AmigaOS through `zz9k.library`, with public helper headers under
 fixed-address ARM launcher, standalone ARM examples, and their bare-metal
 support libraries have been removed from this branch.
 
-## What This Fork Adds
+## What Changed Since the Original MNT SDK
 
-Compared with the older MNT ARM SDK, this repository now centers on a
-stable AmigaOS-facing service runtime rather than standalone ARM sample
-programs:
+The original MNT SDK mainly demonstrated how software could launch code on the
+ZZ9000's ARM processor. This independent BlitterStudio fork turns that idea
+into a reusable AmigaOS service platform with applications that ordinary users
+can install and run. The biggest additions are:
 
-- `zz9k.library` plus SDK v2 headers for async calls, shared buffers,
-  surfaces, image decode/scale, streaming video, audio, compression, and
-  crypto.
-- **ZZPlay**, the media player: MPEG-1 video and MP3/MP2 audio decoded on
-  the card, presented through the P96 video window or a dedicated
-  fullscreen screen, with MHI or AHI output. It installs as a Workbench
-  application in `SYS:Utilities/ZZ9000/`. See
-  [`docs/zzplay.md`](docs/zzplay.md); `zz9k-mp3` remains the low-level MP3
-  diagnostic.
-- End-user tools for service inspection, benchmarking, image viewing,
-  archive extraction, and release smoke checks.
-- `zz9k-picture.datatype` and JPEG/PNG descriptors for optional
-  DataTypes integration.
-- `mpega.library` and audio-stream helpers used by the current MHI/MP3
-  stack.
-- LHA/LZH archive decompression offload, including batch verification
-  paths that fall back to software when firmware support is absent.
-- AmiSSL/OpenSSL 3 provider work for TLS acceleration: X25519, P-256
-  ECDHE, P-256 ECDSA verify, RSA-2048 PKCS#1/SHA-256 verify, AES-GCM,
-  and ChaCha20-Poly1305 where the board and firmware advertise support.
-- Zorro 2-aware allocation flags (`HOST_WINDOW` / `CARD_ONLY`) plus an
-  acknowledged aperture-relative layout. Matched 2/4 MB cards can run compact
-  MPEGA/MHI/ZZPlay audio, streamed image and archive clients, the picture
-  DataType, and AmiSSL offload; 4 MB cards also expose one bounded PIP source.
-  See the [Zorro II service matrix](docs/zz9k-zorro2-services.md) for exact
-  limits, fallback behavior, and the diagnostics that still require Zorro III.
-- A readable primary display CLUT: `ZZ9KQueryPalette()` (library revision
-  28) reads back the INDEX8 palette the card was given, which the
-  write-only hardware registers cannot.
-- Docker packaging, host-side tests, ABI drift checks, and release smoke
-  documentation.
+| Improvement | What it delivers |
+|---|---|
+| **ZZPlay** | A Workbench media player that sends MPEG-1 video and MP3/MP2 audio to the ZZ9000's ARM cores for decoding. It supports a resizable hardware video window and a dedicated-screen presentation, while the Amiga remains responsible for the familiar user interface. |
+| **Faster image handling** | Card-assisted JPEG/PNG decoding and scaling powers image-viewing tools and an optional `zz9k-picture.datatype`, allowing DataTypes-aware Amiga applications to benefit without each application learning a private hardware protocol. |
+| **AmiSSL acceleration for existing software** | A drop-in AmiSSL build uses the ZZ9000 for supported TLS key exchange, signature verification and encrypted data. Compatible browsers and network tools benefit without being rewritten; anything unsupported falls back to the Amiga CPU. |
+| **Audio and archive offload** | `mpega.library`, streaming audio helpers and LHA/LZH decompression services move useful work away from the classic Amiga CPU. The archive tools include verification and safe software fallback paths. |
+| **Useful user and diagnostic tools** | The package includes service inspection, release checks, benchmarks, image viewers, media and audio diagnostics, palette-aware display tools, cryptography checks, and archive utilities rather than only developer examples. |
+| **A real application API** | `zz9k.library` and SDK v2 provide one versioned, asynchronous interface for shared memory, images, surfaces, video, audio, compression and cryptography. Applications no longer need to start a private ARM program at a fixed address and hope no other client is using the card. |
+| **Support beyond Zorro III** | Matched 2 MB and 4 MB Zorro II releases can use compact image, archive, audio and AmiSSL services safely. The 4 MB profile also allows one bounded ZZPlay PIP source; the smaller profile deliberately omits it. |
+| **Reproducible packages and compatibility tests** | Docker builds, a checksum manifest, host-side tests, ABI drift checks and a hardware smoke guide make the SDK a releasable product rather than a collection of experiments. |
 
-Start new AmigaOS-side work with [`docs/zz9k-library.md`](docs/zz9k-library.md).
-Firmware-side service metadata is described in
-[`docs/zz9k-modules.md`](docs/zz9k-modules.md); conventions for third-party and
-loadable-module services in the `0x8000+` range are in
+End users normally receive these SDK components through the
+[ZZ9000 Drivers installer](https://github.com/BlitterStudio/zz9000-drivers),
+so they do not need to compile this repository. Developers should start with
+[`docs/zz9k-library.md`](docs/zz9k-library.md); the service catalogue is in
+[`docs/zz9k-modules.md`](docs/zz9k-modules.md), and the exact Zorro II limits
+are in the [Zorro II service matrix](docs/zz9k-zorro2-services.md).
+
+The accelerated AmiSSL design, supported algorithms and measured roadmap are
+documented in [`docs/zz9k-amissl-provider.md`](docs/zz9k-amissl-provider.md)
+and [`docs/zz9k-crypto-acceleration.md`](docs/zz9k-crypto-acceleration.md).
+Third-party or loadable services in the `0x8000+` range are covered by
 [`docs/zz9k-vendor-services.md`](docs/zz9k-vendor-services.md).
-
-Hardware-accelerated TLS — the ZZ9000 crypto-offload OpenSSL provider, shipped
-as a drop-in `amissl.library` so every AmiSSL application gets faster
-handshakes and bulk record crypto with no changes — is covered in
-[`docs/zz9k-amissl-provider.md`](docs/zz9k-amissl-provider.md) and the
-roadmap/measurements in
-[`docs/zz9k-crypto-acceleration.md`](docs/zz9k-crypto-acceleration.md).
 
 ## Quick Start
 
