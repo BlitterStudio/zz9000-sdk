@@ -51,11 +51,26 @@ cmake -B build-cmake && cmake --build build-cmake && ctest --test-dir build-cmak
 | `examples/amiga-*/` | Example programs (library, jpeg-stream, typed-decode, crypto) |
 | `amiga/provider/` | ZZ9000 OpenSSL 3 provider (crypto offload for AmiSSL) |
 | `integration/amissl/` | AmiSSL drop-in build: pinned ref, patch, build script |
-| `tests/` | ~80 C test executables (host-side, CMake-driven) |
+| `tests/` | Large native C/CMake test suite (the exact count varies with optional dependencies) |
 | `docs/` | Prose documentation (`zz9k-library.md`, `zz9k-modules.md`, etc.) |
 | `scripts/` | Build and package scripts (.ps1 + .sh pairs) |
 
 ## Key Conventions & Gotchas
+
+### Matched release and public ABI
+
+- Firmware, bitstreams, drivers, and the SDK payload form one release set when
+  a change affects mailbox services, capability bits, registers, or Zorro II
+  memory layouts. The drivers repo consumes the exact SDK commit recorded in
+  `sdk/SDK_REF`; coordinate and test that pin before a drivers release.
+- Public mailbox opcodes, service IDs, capability bits, structure layouts, and
+  `zz9k.library` LVOs are append-only ABI. Do not reorder or reuse identities.
+  When adding a library vector, keep the version/revision, FD files, clib/proto/
+  inline/pragmas headers, implementations, tests, and documentation in sync.
+- Firmware mirrors part of `include/zz9k/abi.h` by hand. Run
+  `scripts/check-abi-mirror.sh` against the matching firmware checkout whenever
+  either side changes; names present on only one side may be intentional, but a
+  shared name with a different value is always an error.
 
 ### Two Build Systems, Different Purposes
 
@@ -77,17 +92,22 @@ AmigaOS builds use `-noixemul` (no ixemul emulation layer) and `-nostartfiles` f
 
 JPEG/PNG datatype descriptor binaries live as `.b64` files in `amiga/datatypes/descriptors/`. The package scripts decode them during packaging. Do not edit the decoded output — edit the source and re-base64.
 
+`GM_RENDER` runs while Intuition holds the layer lock. Keep that method
+mailbox-free: decoding and cache population must happen outside the render path,
+which may only consume already prepared data.
+
 ### Package Script Path Safety
 
 The PowerShell package script enforces that `$OutputDir` stays under `build/package/`. Changing this path requires modifying the validation logic.
 
-### CI Covers Only the AmiSSL Build
+### CI and release gates
 
-One workflow exists: `.github/workflows/build-amissl-provider.yml` builds the
-ZZ9000-provider-enabled `amissl.library` (see `integration/amissl/`). There is
-no CI for the SDK itself, no pre-commit hooks, no linting config. Quality gates
-are the CMake test suite and manual hardware smoke tests (documented in
-`docs/zz9k-release-smoke.md`).
+`.github/workflows/ci.yml` runs actionlint/shellcheck, compares the SDK mailbox
+ABI with firmware, builds and runs the native CMake suite with OpenSSL 3 enabled,
+and cross-builds/packages the AmigaOS 3 payload. The separate
+`build-amissl-provider.yml` workflow builds the provider-enabled
+`amissl.library` for 68020–68040 and 68060 targets. CI does not replace the
+manual hardware checks in `docs/zz9k-release-smoke.md`.
 
 ### Provider Tests Need OpenSSL 3
 
@@ -96,6 +116,30 @@ development install (`find_package(OpenSSL 3.0)`). On hosts without it (e.g. a
 plain Windows setup) they are silently skipped — run the suite in a Linux
 container with `libssl-dev` to cover the provider.
 
+### Service allocation and Zorro II limits
+
+- Use `ZZ9K_ALLOC_HOST_WINDOW` for compact buffers the Amiga CPU must access and
+  `ZZ9K_ALLOC_CARD_ONLY` for card-owned rings or workspaces. On current Zorro II
+  layouts all clients share one 64 KiB host heap; keep visible working sets
+  compact, release idle clients, and handle exhaustion cleanly.
+- The shipped 4 MiB Zorro II profile has one fixed 224 KiB PIP pool. The 2 MiB
+  profile has no PIP pool, and neither profile provides arbitrary Picasso96
+  off-screen memory. Do not derive service addresses from the end of the board
+  aperture or advertise the unqualified 8 MiB software profile as hardware.
+- Not every low-level diagnostic is Zorro II-safe. Check
+  `docs/zz9k-zorro2-services.md` before changing allocation classes, fallback
+  behavior, or production-client support claims.
+
+### Capability-driven acceleration
+
+- Query advertised service/capability bits before using an accelerator. The
+  current AmiSSL offload set is X25519, P-256 ECDHE, P-256 ECDSA verify,
+  RSA-2048 PKCS#1/SHA-256 verify, AES-GCM, and ChaCha20-Poly1305.
+- Unsupported operations normally fall back to software. Preserve the
+  documented X25519 advertised-allocation semantics and the Zorro II client
+  matrix; do not advertise a new algorithm until firmware, provider, tests, and
+  hardware validation all agree.
+
 ### Third-Party Code Boundary
 
 `tools/lha-unix/` is third-party (LHa for UNIX). Retains original redistribution terms. Do not modify without checking license compatibility.
@@ -103,10 +147,11 @@ container with `libssl-dev` to cover the provider.
 ## Development Workflow
 
 1. Make changes to source files.
-2. Run host tests: `cmake -B build-cmake && cmake --build build-cmake && ctest --test-dir build-cmake`
-3. Cross-compile for AmigaOS: run the appropriate build script.
-4. Package: run the package script (runs build first unless `--skip-build` / `-SkipBuild`).
-5. Hardware validation follows `docs/zz9k-release-smoke.md`.
+2. Run the ABI mirror check when public service definitions changed.
+3. Run host tests: `cmake -B build-cmake && cmake --build build-cmake && ctest --test-dir build-cmake --output-on-failure`
+4. Cross-compile for AmigaOS: run the appropriate build script.
+5. Package: run the package script (runs build first unless `--skip-build` / `-SkipBuild`).
+6. Hardware validation follows `docs/zz9k-release-smoke.md`.
 
 ## Documentation Entry Points
 
@@ -115,4 +160,6 @@ container with `libssl-dev` to cover the provider.
   production clients, shared-window limits, and hardware qualification status
 - `docs/zz9k-modules.md` — firmware service metadata shape
 - `docs/zz9k-picture-datatype.md` — DataType class details and activation
+- `docs/zzplay.md` — ZZPlay usage, playback paths, and troubleshooting
+- `docs/zz9k-amissl-provider.md` — AmiSSL/OpenSSL provider installation and capability behavior
 - `docs/zz9k-release-smoke.md` — hardware validation checklist
