@@ -1,5 +1,4 @@
 build
-docs/superpowers/
 *.lha
 *.o
 *.obj
@@ -9,7 +8,5 @@ docs/superpowers/
 /archive_tool_*
 
 build-cmake
-.omo
 build-host
-docs/plans
 .worktrees
