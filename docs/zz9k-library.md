@@ -794,8 +794,8 @@ opcodes live at the top of the audio range:
 | `ZZ9K_OP_AUDIO_SCENE_WRITE` | `0x050a` | Stage one scene parameter; `ZZ9K_AUDIO_SCENE_WRITE_FLAG_COMMIT` commits the staged group atomically |
 | `ZZ9K_OP_AUDIO_TRIM_SUBMIT` | `0x050b` | Submit this owner's source-trim balance; the reserved `ZZ9K_AUDIO_BALANCE_NEUTRAL` word is the keep-baseline release; result reports the applied pair, the bound, and `ZZ9K_AUDIO_TRIM_RESULT_BOUNDED` |
 | `ZZ9K_OP_AUDIO_METER_READ` | `0x050c` | Read one direction's framed snapshot (generation-checked, read-and-clear peak hold) |
-| `ZZ9K_OP_AUDIO_SCENE_SAVE` | `0x050d` | Persist scenes to `ZZ9000.CFG` (temp-then-replace); result status `ZZ9K_AUDIO_SCENE_SAVE_*` |
-| `ZZ9K_OP_AUDIO_CONTROL_STATE_GET` | `0x050e` | Active scene, scene count, baseline pair, applied trim pair, enforced ceiling |
+| `ZZ9K_OP_AUDIO_SCENE_SAVE` | `0x050d` | Start the non-blocking persist to `ZZ9000.CFG` (temp-then-replace); result status `ZZ9K_AUDIO_SCENE_SAVE_QUEUED` (watch the state get's `save_status`) / `ZZ9K_AUDIO_SCENE_SAVE_BUSY` / `REJECTED`; the machine never blocks the mailbox dispatch |
+| `ZZ9K_OP_AUDIO_CONTROL_STATE_GET` | `0x050e` | Active scene, scene count, baseline pair, applied trim pair, enforced ceiling, and (append-only) the save machine's `save_status` |
 
 All payloads are the shared 48-byte inline convention, big-endian, mirrored
 as `ZZ9KAudio*Payload` structs in `include/zz9k/abi.h`. Staged scene
@@ -826,6 +826,26 @@ firmware replies with the operator baseline pair as applied,
 unbounded, and does not restage the mixer. An absolute 127/127 trim
 request is therefore not expressible; owners that want the baseline
 submit the reserved word.
+
+`ZZ9K_OP_AUDIO_SCENE_SAVE` runs the temp-then-replace SD sequence as a
+firmware state machine stepped by the service loop — at most one FatFs
+call per loop pass — so normal SD traffic interleaves with Zorro service
+instead of holding the mailbox dispatch across the whole save. The
+firmware's SDPS command/read/write polls also carry a two-second
+deadline; a controller that never signals completion returns an I/O
+error instead of spinning core 0 forever (the historical freeze locked
+up the whole Amiga). The reply is therefore immediate:
+`ZZ9K_AUDIO_SCENE_SAVE_QUEUED` (3) when the machine started or queued
+behind an active DSP commit, `ZZ9K_AUDIO_SCENE_SAVE_BUSY` (4) when a
+previous save is still running (the new request is refused — retry
+after the current save settles), or an immediate
+`ZZ9K_AUDIO_SCENE_SAVE_REJECTED` when boundary validation runs before
+the reply. A save queued behind a DSP commit validates only after that
+commit settles, so its rejection is reported asynchronously. Clients
+observe every queued outcome by polling
+`ZZ9K_OP_AUDIO_CONTROL_STATE_GET`: its append-only `save_status` word
+reports `ZZ9K_AUDIO_SCENE_SAVE_QUEUED` while the machine runs and the
+most recent settled status afterwards.
 
 **These opcodes and caps are not advertised yet.** `ZZ9K_CAP_AUDIO_CONTROL`
 (bit 25), `ZZ9K_CAP_AUDIO_METERING` (bit 26), and the audio service flag

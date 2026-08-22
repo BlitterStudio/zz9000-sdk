@@ -889,10 +889,16 @@ typedef struct ZZ9KAudioStreamResultPayload {
 /* This meter read reset the per-direction peak-hold (read-and-clear). */
 #define ZZ9K_AUDIO_METER_RESULT_HOLD_RESET (1U << 0)
 
-/* ZZ9K_OP_AUDIO_SCENE_SAVE result status word. */
+/* ZZ9K_OP_AUDIO_SCENE_SAVE result status word. The save runs as a
+ * non-blocking machine: QUEUED means it started (possibly waiting for
+ * a DSP commit to settle) -- poll ZZ9K_OP_AUDIO_CONTROL_STATE_GET's
+ * save_status for the final outcome. BUSY means a previous save is
+ * still running and this one was not started. */
 #define ZZ9K_AUDIO_SCENE_SAVE_OK       0U
 #define ZZ9K_AUDIO_SCENE_SAVE_REJECTED 1U /* failed boundary validation */
 #define ZZ9K_AUDIO_SCENE_SAVE_IO_ERROR 2U /* temp-then-replace failed */
+#define ZZ9K_AUDIO_SCENE_SAVE_QUEUED   3U /* started; watch state save_status */
+#define ZZ9K_AUDIO_SCENE_SAVE_BUSY     4U /* refused: a save is running */
 
 /* ZZ9K_OP_AUDIO_CONTROL_STATE_GET result flag: the current trim was
  * bounded by scene policy. */
@@ -982,7 +988,9 @@ typedef struct ZZ9KAudioControlStateGetPayload {
 /* active_scene is the current index; baseline and trim are packed
  * balance words; ceiling is the enforced combined-level boundary in
  * mixer-value units (combined levels above it clamp with a
- * gain-reduction event). */
+ * gain-reduction event). save_status (append-only) is the save
+ * machine's report: ZZ9K_AUDIO_SCENE_SAVE_QUEUED while a save runs,
+ * else the most recent settled ZZ9K_AUDIO_SCENE_SAVE_* outcome. */
 typedef struct ZZ9KAudioControlStateResultPayload {
   uint8_t active_scene[4];
   uint8_t scene_count[4];
@@ -990,7 +998,8 @@ typedef struct ZZ9KAudioControlStateResultPayload {
   uint8_t trim[4];
   uint8_t ceiling[4];
   uint8_t flags[4];
-  uint8_t reserved[24];
+  uint8_t reserved[20];
+  uint8_t save_status[4];
 } ZZ9KAudioControlStateResultPayload;
 
 /* Decoder identity and immutable geometry are fixed at BEGIN. DECODE publishes
