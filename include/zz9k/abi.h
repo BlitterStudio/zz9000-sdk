@@ -907,8 +907,10 @@ typedef struct ZZ9KAudioMeterReadPayload {
  * snapshot carry the same generation; differing generations across
  * frames mean the read tore and must be retried. Peaks are unsigned
  * 16.16 (0x00010000 = digital full scale); counters saturate, never
- * wrap. frame_count is 1 while the whole state fits here; future
- * extensions raise it and append frames. */
+ * wrap. frame is the 0-based index of the frame within the snapshot
+ * (single-frame reads carry frame 0); frame_count is 1 while the
+ * whole state fits here; future extensions raise it and append
+ * frames. */
 typedef struct ZZ9KAudioMeterResultPayload {
   uint8_t direction[4];
   uint8_t generation[4];
