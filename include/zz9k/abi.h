@@ -186,6 +186,17 @@ enum ZZ9KOpcode {
   ZZ9K_OP_AUDIO_STREAM_CLOSE = ZZ9K_SERVICE_AUDIO + 0x06,
   ZZ9K_OP_AUDIO_STREAM_PLAY = ZZ9K_SERVICE_AUDIO + 0x07,
   ZZ9K_OP_AUDIO_STREAM_STOP = ZZ9K_SERVICE_AUDIO + 0x08,
+  /* Firmware-authoritative audio control plane (scenes, trims, metering).
+   * SHORT-task dispatch with 48-byte inline payloads; firmware without
+   * these handlers completes ZZ9K_STATUS_UNSUPPORTED. Nothing here is
+   * advertised by a capability word until the on-hardware verification
+   * session passes (see ZZ9K_CAP_AUDIO_CONTROL). */
+  ZZ9K_OP_AUDIO_SCENE_SELECT = ZZ9K_SERVICE_AUDIO + 0x09,
+  ZZ9K_OP_AUDIO_SCENE_WRITE = ZZ9K_SERVICE_AUDIO + 0x0a,
+  ZZ9K_OP_AUDIO_TRIM_SUBMIT = ZZ9K_SERVICE_AUDIO + 0x0b,
+  ZZ9K_OP_AUDIO_METER_READ = ZZ9K_SERVICE_AUDIO + 0x0c,
+  ZZ9K_OP_AUDIO_SCENE_SAVE = ZZ9K_SERVICE_AUDIO + 0x0d,
+  ZZ9K_OP_AUDIO_CONTROL_STATE_GET = ZZ9K_SERVICE_AUDIO + 0x0e,
 
   ZZ9K_OP_DECOMPRESS = ZZ9K_SERVICE_CODEC + 0x00,
   ZZ9K_OP_DECOMPRESS_TEST = ZZ9K_SERVICE_CODEC + 0x01,
@@ -253,7 +264,12 @@ enum ZZ9KCapability {
   ZZ9K_CAP_AUDIO_STREAM_DRAIN = 1U << 23,
   /* The firmware publishes an aperture-relative Zorro 2 memory layout; the
    * RTG driver acknowledges it before HOST_WINDOW becomes mappable. */
-  ZZ9K_CAP_APERTURE_LAYOUT = 1U << 24
+  ZZ9K_CAP_APERTURE_LAYOUT = 1U << 24,
+  /* Audio control plane / metering. Append-only but deliberately NOT
+   * advertised by any capability word until the on-hardware verification
+   * session qualifies them (R12). */
+  ZZ9K_CAP_AUDIO_CONTROL = 1U << 25,
+  ZZ9K_CAP_AUDIO_METERING = 1U << 26
 };
 
 #define ZZ9K_APERTURE_LAYOUT_GENERATION_SHIFT 16U
@@ -323,6 +339,9 @@ enum ZZ9KServiceFlags {
   ZZ9K_SERVICE_FLAG_AUDIO_RESAMPLE = 1U << 18,
   ZZ9K_SERVICE_FLAG_AUDIO_PCM16_STEREO = 1U << 19,
   ZZ9K_SERVICE_FLAG_AUDIO_MP3_STREAM = 1U << 20,
+  /* Control-plane audio opcodes (0x0509+) are dispatchable. Follows the
+   * ZZ9K_CAP_AUDIO_CONTROL gated-advertising discipline. */
+  ZZ9K_SERVICE_FLAG_AUDIO_CONTROL = 1U << 21,
 
   ZZ9K_SERVICE_FLAG_VIDEO_MPEG1 = 1U << 16,
   ZZ9K_SERVICE_FLAG_VIDEO_MPEG_PS = 1U << 17,
@@ -772,6 +791,207 @@ typedef struct ZZ9KAudioStreamResultPayload {
   uint8_t bytes_produced[4];
   uint8_t flags[4];
 } ZZ9KAudioStreamResultPayload;
+
+/* --------------------------------------------------------------------
+ * Firmware-authoritative audio control plane (opcodes 0x0509+).
+ * All payload fields are big-endian, 48 bytes per the inline-payload
+ * convention. The surface ships unadvertised: no capability word or
+ * service flag reports it until the on-hardware verification session
+ * passes (see ZZ9K_CAP_AUDIO_CONTROL / ZZ9K_CAP_AUDIO_METERING).
+ * ------------------------------------------------------------------ */
+
+#define ZZ9K_AUDIO_SCENE_COUNT        8U
+
+/* ZZ9K_OP_AUDIO_SCENE_WRITE stages one parameter per call; the param id
+ * fixes the value word's semantics. Pair values pack like the historical
+ * AP_DSP_SET_VOLUMES register convention: low byte = channel 1,
+ * high byte = channel 2. */
+#define ZZ9K_AUDIO_SCENE_PARAM_LPF        1U  /* cutoff, Hz */
+#define ZZ9K_AUDIO_SCENE_PARAM_EQ_BAND_1  2U  /* gain 0..100, 50 = 0 dB */
+#define ZZ9K_AUDIO_SCENE_PARAM_EQ_BAND_2  3U
+#define ZZ9K_AUDIO_SCENE_PARAM_EQ_BAND_3  4U
+#define ZZ9K_AUDIO_SCENE_PARAM_EQ_BAND_4  5U
+#define ZZ9K_AUDIO_SCENE_PARAM_EQ_BAND_5  6U
+#define ZZ9K_AUDIO_SCENE_PARAM_EQ_BAND_6  7U
+#define ZZ9K_AUDIO_SCENE_PARAM_EQ_BAND_7  8U
+#define ZZ9K_AUDIO_SCENE_PARAM_EQ_BAND_8  9U
+#define ZZ9K_AUDIO_SCENE_PARAM_EQ_BAND_9  10U
+#define ZZ9K_AUDIO_SCENE_PARAM_EQ_BAND_10 11U
+#define ZZ9K_AUDIO_SCENE_PARAM_PREFACTOR  12U
+#define ZZ9K_AUDIO_SCENE_PARAM_VOLUME     13U /* 0..100, 100 = 0 dB
+                                               * (audio_adau_set_vol_pan
+                                               * range; the pair params
+                                               * BASELINE/trim use the
+                                               * 0..255 mixer scale) */
+#define ZZ9K_AUDIO_SCENE_PARAM_PAN        14U
+#define ZZ9K_AUDIO_SCENE_PARAM_BASELINE   15U /* operator Paula/AX pair;
+                                               * scene index is ignored */
+#define ZZ9K_AUDIO_SCENE_PARAM_NAME       16U /* scene name chunk: bits
+                                               * 15..8 = first char,
+                                               * 7..0 = second char,
+                                               * both printable ASCII
+                                               * (0x20-0x7E) or 0x00;
+                                               * a 0x0000 chunk is the
+                                               * terminator. A rename
+                                               * stages the complete
+                                               * name as up to 8
+                                               * chunks (16 chars
+                                               * incl. the NUL), then
+                                               * commits ONCE: the
+                                               * first NAME chunk of
+                                               * a draft clears the
+                                               * name and lands at
+                                               * chunk 0, extra
+                                               * terminator chunks
+                                               * after the first are
+                                               * ignored (zero-padding
+                                               * is safe), and a
+                                               * non-terminator chunk
+                                               * after the terminator
+                                               * restarts at chunk 0.
+                                               * A NAME-only commit
+                                               * issues zero DSP
+                                               * writes. */
+
+/* Staged edits accumulate firmware-side; COMMIT asks for one atomic
+ * glitch-free commit (fade -> ordered verified writes -> restore) of
+ * everything staged for that scene. */
+#define ZZ9K_AUDIO_SCENE_WRITE_FLAG_COMMIT (1U << 0)
+
+/* Balance words: two 0..255 volumes (127 = 0 dB each) in one word,
+ * AP_DSP_SET_VOLUMES packing (low byte = Paula/ch1, high = AX/ch2).
+ * ZZ9K_AUDIO_BALANCE_NEUTRAL (0x7f7f) is RESERVED as keep-baseline:
+ * submitting it for a trim means "no trim from this owner" -- the
+ * firmware answers with the operator baseline pair as applied,
+ * unbounded, without restaging the mixer. An absolute 127/127 trim
+ * request is therefore not expressible. */
+#define ZZ9K_AUDIO_BALANCE_NEUTRAL    0x7f7fU
+#define ZZ9K_AUDIO_BALANCE_CH1(w)     ((uint32_t)(w) & 0xffU)
+#define ZZ9K_AUDIO_BALANCE_CH2(w)     (((uint32_t)(w) >> 8) & 0xffU)
+#define ZZ9K_AUDIO_BALANCE_PACK(ch1, ch2) \
+  ((uint32_t)((uint32_t)(uint8_t)(ch1) | \
+              ((uint32_t)(uint8_t)(ch2) << 8)))
+
+/* ZZ9K_OP_AUDIO_TRIM_SUBMIT result flag: the requested balance was
+ * bounded by scene policy; balance_bound carries the bound applied. */
+#define ZZ9K_AUDIO_TRIM_RESULT_BOUNDED (1U << 0)
+
+#define ZZ9K_AUDIO_METER_DIRECTION_OUTPUT  1U
+#define ZZ9K_AUDIO_METER_DIRECTION_CAPTURE 2U
+
+/* Active source identity per direction; 0 is the legacy/unknown default
+ * for owners that predate the control plane. */
+#define ZZ9K_AUDIO_METER_IDENTITY_UNKNOWN    0U
+#define ZZ9K_AUDIO_METER_IDENTITY_AHI        1U
+#define ZZ9K_AUDIO_METER_IDENTITY_MEDIA      2U
+#define ZZ9K_AUDIO_METER_IDENTITY_SDK_STREAM 3U
+
+/* This meter read reset the per-direction peak-hold (read-and-clear). */
+#define ZZ9K_AUDIO_METER_RESULT_HOLD_RESET (1U << 0)
+
+/* ZZ9K_OP_AUDIO_SCENE_SAVE result status word. */
+#define ZZ9K_AUDIO_SCENE_SAVE_OK       0U
+#define ZZ9K_AUDIO_SCENE_SAVE_REJECTED 1U /* failed boundary validation */
+#define ZZ9K_AUDIO_SCENE_SAVE_IO_ERROR 2U /* temp-then-replace failed */
+
+/* ZZ9K_OP_AUDIO_CONTROL_STATE_GET result flag: the current trim was
+ * bounded by scene policy. */
+#define ZZ9K_AUDIO_CONTROL_FLAG_TRIM_BOUNDED (1U << 0)
+
+typedef struct ZZ9KAudioSceneSelectPayload {
+  uint8_t scene[4];
+  uint8_t flags[4];
+  uint8_t reserved[40];
+} ZZ9KAudioSceneSelectPayload;
+
+/* Stage one parameter of one scene; firmware accumulates. COMMIT asks
+ * for one atomic glitch-free commit of the staged group. */
+typedef struct ZZ9KAudioSceneWritePayload {
+  uint8_t scene[4];
+  uint8_t param[4];
+  uint8_t value[4];
+  uint8_t flags[4];
+  uint8_t reserved[32];
+} ZZ9KAudioSceneWritePayload;
+
+/* Owner source trim on top of the operator baseline. balance is the
+ * requested absolute composed pair (a plain balance word per the
+ * packing above); the reserved ZZ9K_AUDIO_BALANCE_NEUTRAL word is the
+ * keep-baseline release -- "no trim from this owner", answered with
+ * the baseline pair applied and no mixer restage. */
+typedef struct ZZ9KAudioTrimSubmitPayload {
+  uint8_t balance[4];
+  uint8_t flags[4];
+  uint8_t reserved[40];
+} ZZ9KAudioTrimSubmitPayload;
+
+typedef struct ZZ9KAudioTrimResultPayload {
+  uint8_t balance_applied[4];
+  uint8_t balance_bound[4];
+  uint8_t flags[4];
+  uint8_t reserved[36];
+} ZZ9KAudioTrimResultPayload;
+
+typedef struct ZZ9KAudioMeterReadPayload {
+  uint8_t direction[4];
+  uint8_t flags[4];
+  uint8_t reserved[40];
+} ZZ9KAudioMeterReadPayload;
+
+/* One framed, non-tearing snapshot of one direction. All frames of a
+ * snapshot carry the same generation; differing generations across
+ * frames mean the read tore and must be retried. Peaks are unsigned
+ * 16.16 (0x00010000 = digital full scale); counters saturate, never
+ * wrap. frame is the 0-based index of the frame within the snapshot
+ * (single-frame reads carry frame 0); frame_count is 1 while the
+ * whole state fits here; future extensions raise it and append
+ * frames. */
+typedef struct ZZ9KAudioMeterResultPayload {
+  uint8_t direction[4];
+  uint8_t generation[4];
+  uint8_t frame[4];
+  uint8_t frame_count[4];
+  uint8_t flags[4];
+  uint8_t identity[4];
+  uint8_t clip_count[4];
+  uint8_t underrun_count[4];
+  uint8_t overrun_count[4];
+  uint8_t gain_reduction_events[4];
+  uint8_t peak_hold_ch1[4];
+  uint8_t peak_hold_ch2[4];
+} ZZ9KAudioMeterResultPayload;
+
+typedef struct ZZ9KAudioSceneSavePayload {
+  uint8_t scene[4];
+  uint8_t flags[4];
+  uint8_t reserved[40];
+} ZZ9KAudioSceneSavePayload;
+
+typedef struct ZZ9KAudioSceneSaveResultPayload {
+  uint8_t status[4];
+  uint8_t scene[4];
+  uint8_t flags[4];
+  uint8_t reserved[36];
+} ZZ9KAudioSceneSaveResultPayload;
+
+typedef struct ZZ9KAudioControlStateGetPayload {
+  uint8_t flags[4];
+  uint8_t reserved[44];
+} ZZ9KAudioControlStateGetPayload;
+
+/* active_scene is the current index; baseline and trim are packed
+ * balance words; ceiling is the enforced combined-level boundary in
+ * mixer-value units (combined levels above it clamp with a
+ * gain-reduction event). */
+typedef struct ZZ9KAudioControlStateResultPayload {
+  uint8_t active_scene[4];
+  uint8_t scene_count[4];
+  uint8_t baseline[4];
+  uint8_t trim[4];
+  uint8_t ceiling[4];
+  uint8_t flags[4];
+  uint8_t reserved[24];
+} ZZ9KAudioControlStateResultPayload;
 
 /* Decoder identity and immutable geometry are fixed at BEGIN. DECODE publishes
  * a decoder-owned frame to the active P96 overlay; client-visible bitmap
@@ -1247,6 +1467,26 @@ typedef char ZZ9KDecompressBatchPayload_must_be_48_bytes[
     (sizeof(ZZ9KDecompressBatchPayload) == 48U) ? 1 : -1];
 typedef char ZZ9KDecompressBatchResultPayload_must_be_48_bytes[
     (sizeof(ZZ9KDecompressBatchResultPayload) == 48U) ? 1 : -1];
+typedef char ZZ9KAudioSceneSelectPayload_must_be_48_bytes[
+    (sizeof(ZZ9KAudioSceneSelectPayload) == 48U) ? 1 : -1];
+typedef char ZZ9KAudioSceneWritePayload_must_be_48_bytes[
+    (sizeof(ZZ9KAudioSceneWritePayload) == 48U) ? 1 : -1];
+typedef char ZZ9KAudioTrimSubmitPayload_must_be_48_bytes[
+    (sizeof(ZZ9KAudioTrimSubmitPayload) == 48U) ? 1 : -1];
+typedef char ZZ9KAudioTrimResultPayload_must_be_48_bytes[
+    (sizeof(ZZ9KAudioTrimResultPayload) == 48U) ? 1 : -1];
+typedef char ZZ9KAudioMeterReadPayload_must_be_48_bytes[
+    (sizeof(ZZ9KAudioMeterReadPayload) == 48U) ? 1 : -1];
+typedef char ZZ9KAudioMeterResultPayload_must_be_48_bytes[
+    (sizeof(ZZ9KAudioMeterResultPayload) == 48U) ? 1 : -1];
+typedef char ZZ9KAudioSceneSavePayload_must_be_48_bytes[
+    (sizeof(ZZ9KAudioSceneSavePayload) == 48U) ? 1 : -1];
+typedef char ZZ9KAudioSceneSaveResultPayload_must_be_48_bytes[
+    (sizeof(ZZ9KAudioSceneSaveResultPayload) == 48U) ? 1 : -1];
+typedef char ZZ9KAudioControlStateGetPayload_must_be_48_bytes[
+    (sizeof(ZZ9KAudioControlStateGetPayload) == 48U) ? 1 : -1];
+typedef char ZZ9KAudioControlStateResultPayload_must_be_48_bytes[
+    (sizeof(ZZ9KAudioControlStateResultPayload) == 48U) ? 1 : -1];
 
 typedef union ZZ9KEntryPayload {
   uint8_t inline_data[48];
