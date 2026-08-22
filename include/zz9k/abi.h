@@ -818,7 +818,11 @@ typedef struct ZZ9KAudioStreamResultPayload {
 #define ZZ9K_AUDIO_SCENE_PARAM_EQ_BAND_9  10U
 #define ZZ9K_AUDIO_SCENE_PARAM_EQ_BAND_10 11U
 #define ZZ9K_AUDIO_SCENE_PARAM_PREFACTOR  12U
-#define ZZ9K_AUDIO_SCENE_PARAM_VOLUME     13U /* 0..255, 127 = 0 dB */
+#define ZZ9K_AUDIO_SCENE_PARAM_VOLUME     13U /* 0..100, 100 = 0 dB
+                                               * (audio_adau_set_vol_pan
+                                               * range; the pair params
+                                               * BASELINE/trim use the
+                                               * 0..255 mixer scale) */
 #define ZZ9K_AUDIO_SCENE_PARAM_PAN        14U
 #define ZZ9K_AUDIO_SCENE_PARAM_BASELINE   15U /* operator Paula/AX pair;
                                                * scene index is ignored */

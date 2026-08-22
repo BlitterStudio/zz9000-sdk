@@ -779,6 +779,56 @@ if (ZZ9KDecodeMp3(&desc, &result) == ZZ9K_STATUS_OK) {
 rate and channel count. Callers that need this resident LVO should check
 `ZZ9K_LIBRARY_MIN_REVISION_AUDIO_DECODE`.
 
+## Audio Control Plane and Metering
+
+Firmware can expose a firmware-authoritative control plane over the audio
+service: named scenes own the master DSP chain (LPF, 10-band EQ, prefactor,
+output volume/pan), stream owners submit policy-bounded source trims on top
+of an operator baseline, per-direction metering is readable as non-tearing
+snapshots, and scene state persists in `ZZ9000.CFG` from firmware. The
+opcodes live at the top of the audio range:
+
+| Opcode | Value | Purpose |
+| --- | --- | --- |
+| `ZZ9K_OP_AUDIO_SCENE_SELECT` | `0x0509` | Make a scene active (glitch-free commit) |
+| `ZZ9K_OP_AUDIO_SCENE_WRITE` | `0x050a` | Stage one scene parameter; `ZZ9K_AUDIO_SCENE_WRITE_FLAG_COMMIT` commits the staged group atomically |
+| `ZZ9K_OP_AUDIO_TRIM_SUBMIT` | `0x050b` | Submit this owner's source-trim balance; result reports the applied pair, the bound, and `ZZ9K_AUDIO_TRIM_RESULT_BOUNDED` |
+| `ZZ9K_OP_AUDIO_METER_READ` | `0x050c` | Read one direction's framed snapshot (generation-checked, read-and-clear peak hold) |
+| `ZZ9K_OP_AUDIO_SCENE_SAVE` | `0x050d` | Persist scenes to `ZZ9000.CFG` (temp-then-replace); result status `ZZ9K_AUDIO_SCENE_SAVE_*` |
+| `ZZ9K_OP_AUDIO_CONTROL_STATE_GET` | `0x050e` | Active scene, scene count, baseline pair, applied trim pair, enforced ceiling |
+
+All payloads are the shared 48-byte inline convention, big-endian, mirrored
+as `ZZ9KAudio*Payload` structs in `include/zz9k/abi.h`. Staged scene
+parameters use the `ZZ9K_AUDIO_SCENE_PARAM_*` ids; note the value-word
+ranges deliberately differ per parameter: EQ/prefactor are 0..100 with 50 as
+0 dB, scene volume is 0..100 with 100 as 0 dB (the `audio_adau_set_vol_pan`
+range), while the pair parameters — baseline and trim balances — pack two
+0..255 mixer legs (127 = 0 dB each) like the historical
+`AP_DSP_SET_VOLUMES` register convention.
+
+**These opcodes and caps are not advertised yet.** `ZZ9K_CAP_AUDIO_CONTROL`
+(bit 25), `ZZ9K_CAP_AUDIO_METERING` (bit 26), and the audio service flag
+`ZZ9K_SERVICE_FLAG_AUDIO_CONTROL` (bit 21) are defined but no capability
+word or service descriptor reports them until the firmware's on-hardware
+verification session passes. The handlers dispatch normally on firmware
+that implements them; clients must still gate exactly like every other
+surface:
+
+```c
+if (!zz9k_has_capabilities(caps.capability_bits, ZZ9K_CAP_AUDIO_CONTROL)) {
+  /* normal old-firmware result: fall back, never corrupt playback */
+}
+```
+
+Metering snapshots (`ZZ9KAudioMeterResultPayload`) frame one direction per
+reply: peaks are unsigned 16.16 (0x00010000 = digital full scale), counters
+saturate rather than wrap, `generation` must agree across frames of one
+read, and `ZZ9K_AUDIO_METER_RESULT_HOLD_RESET` marks the read-and-clear
+peak hold. The enforced combined-level ceiling the trim/scene paths clamp
+against, its bench-measured value, method, and the flip-after-pass runbook
+are documented in the firmware repo's
+`docs/audio-saturation-ceiling.md`.
+
 ## Decompression Jobs
 
 SDK v2 reserves a buffer-to-buffer decompression job shape for archive tools:
