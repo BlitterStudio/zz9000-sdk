@@ -806,6 +806,18 @@ range), while the pair parameters — baseline and trim balances — pack two
 0..255 mixer legs (127 = 0 dB each) like the historical
 `AP_DSP_SET_VOLUMES` register convention.
 
+Scene **names** are user labels carried beside the master-chain
+parameters. They flow through two paths and no opcode of their own:
+`ZZ9K_AUDIO_SCENE_PARAM_NAME` (16) stages a name chunk through
+`ZZ9K_OP_AUDIO_SCENE_WRITE` (bits 15..8 = first char, 7..0 = second
+char, printable ASCII or the `0x0000` terminator; a rename stages the
+complete name — up to 8 chunks, 16 characters — then commits once,
+and the commit issues no DSP writes), and the `audio_scene<N>_nm1..8`
+keys persist names in `ZZ9000.CFG` with the same packing.
+`ZZ9K_OP_AUDIO_CONTROL_STATE_GET` deliberately does not report names:
+editors read them from the CFG file (or their own staged edits). An
+absent or empty name keeps the firmware's built-in `Scene N` label.
+
 For `ZZ9K_OP_AUDIO_TRIM_SUBMIT`, the balance word is the requested
 absolute composed pair (baseline-relative deltas are computed by the
 firmware). `ZZ9K_AUDIO_BALANCE_NEUTRAL` (`0x7f7f`) is reserved as
