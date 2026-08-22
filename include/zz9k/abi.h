@@ -833,7 +833,12 @@ typedef struct ZZ9KAudioStreamResultPayload {
 #define ZZ9K_AUDIO_SCENE_WRITE_FLAG_COMMIT (1U << 0)
 
 /* Balance words: two 0..255 volumes (127 = 0 dB each) in one word,
- * AP_DSP_SET_VOLUMES packing (low byte = Paula/ch1, high = AX/ch2). */
+ * AP_DSP_SET_VOLUMES packing (low byte = Paula/ch1, high = AX/ch2).
+ * ZZ9K_AUDIO_BALANCE_NEUTRAL (0x7f7f) is RESERVED as keep-baseline:
+ * submitting it for a trim means "no trim from this owner" -- the
+ * firmware answers with the operator baseline pair as applied,
+ * unbounded, without restaging the mixer. An absolute 127/127 trim
+ * request is therefore not expressible. */
 #define ZZ9K_AUDIO_BALANCE_NEUTRAL    0x7f7fU
 #define ZZ9K_AUDIO_BALANCE_CH1(w)     ((uint32_t)(w) & 0xffU)
 #define ZZ9K_AUDIO_BALANCE_CH2(w)     (((uint32_t)(w) >> 8) & 0xffU)
@@ -883,7 +888,11 @@ typedef struct ZZ9KAudioSceneWritePayload {
   uint8_t reserved[32];
 } ZZ9KAudioSceneWritePayload;
 
-/* Owner source trim on top of the operator baseline. */
+/* Owner source trim on top of the operator baseline. balance is the
+ * requested absolute composed pair (a plain balance word per the
+ * packing above); the reserved ZZ9K_AUDIO_BALANCE_NEUTRAL word is the
+ * keep-baseline release -- "no trim from this owner", answered with
+ * the baseline pair applied and no mixer restage. */
 typedef struct ZZ9KAudioTrimSubmitPayload {
   uint8_t balance[4];
   uint8_t flags[4];

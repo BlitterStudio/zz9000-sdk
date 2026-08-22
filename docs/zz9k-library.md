@@ -792,7 +792,7 @@ opcodes live at the top of the audio range:
 | --- | --- | --- |
 | `ZZ9K_OP_AUDIO_SCENE_SELECT` | `0x0509` | Make a scene active (glitch-free commit) |
 | `ZZ9K_OP_AUDIO_SCENE_WRITE` | `0x050a` | Stage one scene parameter; `ZZ9K_AUDIO_SCENE_WRITE_FLAG_COMMIT` commits the staged group atomically |
-| `ZZ9K_OP_AUDIO_TRIM_SUBMIT` | `0x050b` | Submit this owner's source-trim balance; result reports the applied pair, the bound, and `ZZ9K_AUDIO_TRIM_RESULT_BOUNDED` |
+| `ZZ9K_OP_AUDIO_TRIM_SUBMIT` | `0x050b` | Submit this owner's source-trim balance; the reserved `ZZ9K_AUDIO_BALANCE_NEUTRAL` word is the keep-baseline release; result reports the applied pair, the bound, and `ZZ9K_AUDIO_TRIM_RESULT_BOUNDED` |
 | `ZZ9K_OP_AUDIO_METER_READ` | `0x050c` | Read one direction's framed snapshot (generation-checked, read-and-clear peak hold) |
 | `ZZ9K_OP_AUDIO_SCENE_SAVE` | `0x050d` | Persist scenes to `ZZ9000.CFG` (temp-then-replace); result status `ZZ9K_AUDIO_SCENE_SAVE_*` |
 | `ZZ9K_OP_AUDIO_CONTROL_STATE_GET` | `0x050e` | Active scene, scene count, baseline pair, applied trim pair, enforced ceiling |
@@ -805,6 +805,15 @@ ranges deliberately differ per parameter: EQ/prefactor are 0..100 with 50 as
 range), while the pair parameters — baseline and trim balances — pack two
 0..255 mixer legs (127 = 0 dB each) like the historical
 `AP_DSP_SET_VOLUMES` register convention.
+
+For `ZZ9K_OP_AUDIO_TRIM_SUBMIT`, the balance word is the requested
+absolute composed pair (baseline-relative deltas are computed by the
+firmware). `ZZ9K_AUDIO_BALANCE_NEUTRAL` (`0x7f7f`) is reserved as
+keep-baseline: submitting it means "no trim from this owner" -- the
+firmware replies with the operator baseline pair as applied,
+unbounded, and does not restage the mixer. An absolute 127/127 trim
+request is therefore not expressible; owners that want the baseline
+submit the reserved word.
 
 **These opcodes and caps are not advertised yet.** `ZZ9K_CAP_AUDIO_CONTROL`
 (bit 25), `ZZ9K_CAP_AUDIO_METERING` (bit 26), and the audio service flag
