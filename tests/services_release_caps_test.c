@@ -25,6 +25,13 @@ static int test_release_requires_mhi_capabilities(void)
     printf("release requirement omits AUDIO_STREAM_DRAIN\n");
     return 1;
   }
+  if (!zz9k_has_capability(required_z2, ZZ9K_CAP_AUDIO_CONTROL) ||
+      !zz9k_has_capability(required_z3, ZZ9K_CAP_AUDIO_CONTROL) ||
+      !zz9k_has_capability(required_z2, ZZ9K_CAP_AUDIO_METERING) ||
+      !zz9k_has_capability(required_z3, ZZ9K_CAP_AUDIO_METERING)) {
+    printf("release requirement omits calibrated audio capabilities\n");
+    return 5;
+  }
   if (!zz9k_has_capability(required_z2, ZZ9K_CAP_HOST_WINDOW_HEAP) ||
       !zz9k_has_capability(required_z3, ZZ9K_CAP_HOST_WINDOW_HEAP)) {
     printf("release requirement omits HOST_WINDOW_HEAP\n");
@@ -65,6 +72,29 @@ static int test_service_requirements_stay_global_only(void)
   }
 
   return 0;
+}
+
+static int test_audio_service_requires_calibrated_surface(void)
+{
+  uint32_t i;
+
+  for (i = 0U;
+       i < (uint32_t)(sizeof(release_services) / sizeof(release_services[0]));
+       i++) {
+    if (release_services[i].service_id != ZZ9K_SERVICE_AUDIO)
+      continue;
+    if ((release_services[i].required_caps &
+         (ZZ9K_CAP_AUDIO_CONTROL | ZZ9K_CAP_AUDIO_METERING)) !=
+        (ZZ9K_CAP_AUDIO_CONTROL | ZZ9K_CAP_AUDIO_METERING) ||
+        (release_services[i].required_flags &
+         ZZ9K_SERVICE_FLAG_AUDIO_CONTROL) == 0U ||
+        release_services[i].min_opcode_count != 15U) {
+      printf("audio service omits calibrated control surface\n");
+      return 1;
+    }
+    return 0;
+  }
+  return 2;
 }
 
 /* The whole point is a reader-friendly report: print_capability_names()
@@ -120,6 +150,12 @@ int main(void)
     return 1;
   }
 
+  rc = test_audio_service_requires_calibrated_surface();
+  if (rc != 0) {
+    printf("test_audio_service_requires_calibrated_surface failed (%d)\n",
+           rc);
+    return 1;
+  }
   rc = test_missing_capabilities_report_by_name();
   if (rc != 0) {
     printf("test_missing_capabilities_report_by_name failed (%d)\n", rc);

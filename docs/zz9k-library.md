@@ -857,13 +857,11 @@ observe every queued outcome by polling
 reports `ZZ9K_AUDIO_SCENE_SAVE_QUEUED` while the machine runs and the
 most recent settled status afterwards.
 
-**These opcodes and caps are not advertised yet.** `ZZ9K_CAP_AUDIO_CONTROL`
-(bit 25), `ZZ9K_CAP_AUDIO_METERING` (bit 26), and the audio service flag
-`ZZ9K_SERVICE_FLAG_AUDIO_CONTROL` (bit 21) are defined but no capability
-word or service descriptor reports them until the firmware's on-hardware
-verification session passes. The handlers dispatch normally on firmware
-that implements them; clients must still gate exactly like every other
-surface:
+Calibrated matched firmware advertises `ZZ9K_CAP_AUDIO_CONTROL` (bit
+25), `ZZ9K_CAP_AUDIO_METERING` (bit 26), and
+`ZZ9K_SERVICE_FLAG_AUDIO_CONTROL` (bit 21). Its audio service reports
+15 opcodes through `0x050e`. Older or uncalibrated firmware omits the
+bits, so clients must still gate exactly like every other surface:
 
 ```c
 if (!zz9k_has_capabilities(caps.capability_bits, ZZ9K_CAP_AUDIO_CONTROL)) {
