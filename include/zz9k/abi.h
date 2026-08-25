@@ -852,6 +852,17 @@ typedef struct ZZ9KAudioStreamResultPayload {
                                                * A NAME-only commit
                                                * issues zero DSP
                                                * writes. */
+#define ZZ9K_AUDIO_SCENE_PARAM_CALIBRATION 17U /* per-card measured clean
+                                                * ceilings: Paula low 16,
+                                                * AX high 16; scene ignored */
+
+#define ZZ9K_AUDIO_CEILING_MIN 1U
+#define ZZ9K_AUDIO_CEILING_MAX 4095U
+#define ZZ9K_AUDIO_CALIBRATION_PAULA(w) ((uint32_t)(w) & 0xffffU)
+#define ZZ9K_AUDIO_CALIBRATION_AX(w) (((uint32_t)(w) >> 16) & 0xffffU)
+#define ZZ9K_AUDIO_CALIBRATION_PACK(paula, ax) \
+  ((uint32_t)((uint32_t)(uint16_t)(paula) | \
+              ((uint32_t)(uint16_t)(ax) << 16)))
 
 /* Staged edits accumulate firmware-side; COMMIT asks for one atomic
  * glitch-free commit (fade -> ordered verified writes -> restore) of
@@ -986,11 +997,11 @@ typedef struct ZZ9KAudioControlStateGetPayload {
 } ZZ9KAudioControlStateGetPayload;
 
 /* active_scene is the current index; baseline and trim are packed
- * balance words; ceiling is the enforced combined-level boundary in
- * mixer-value units (combined levels above it clamp with a
- * gain-reduction event). save_status (append-only) is the save
- * machine's report: ZZ9K_AUDIO_SCENE_SAVE_QUEUED while a save runs,
- * else the most recent settled ZZ9K_AUDIO_SCENE_SAVE_* outcome. */
+ * balance words. ceiling is the enforced boundary in AX-equivalent
+ * mixer units. ceiling_paula and ceiling_ax are the persisted per-card
+ * clean ceilings; firmware derives Paula weight as ceiling_ax /
+ * ceiling_paula and boundary as 3/4 of ceiling_ax. save_status stays
+ * the append-only tail word and reports the save machine outcome. */
 typedef struct ZZ9KAudioControlStateResultPayload {
   uint8_t active_scene[4];
   uint8_t scene_count[4];
@@ -998,7 +1009,9 @@ typedef struct ZZ9KAudioControlStateResultPayload {
   uint8_t trim[4];
   uint8_t ceiling[4];
   uint8_t flags[4];
-  uint8_t reserved[20];
+  uint8_t ceiling_paula[4];
+  uint8_t ceiling_ax[4];
+  uint8_t reserved[12];
   uint8_t save_status[4];
 } ZZ9KAudioControlStateResultPayload;
 

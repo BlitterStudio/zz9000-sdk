@@ -795,7 +795,7 @@ opcodes live at the top of the audio range:
 | `ZZ9K_OP_AUDIO_TRIM_SUBMIT` | `0x050b` | Submit this owner's source-trim balance; the reserved `ZZ9K_AUDIO_BALANCE_NEUTRAL` word is the keep-baseline release; result reports the applied pair, the bound, and `ZZ9K_AUDIO_TRIM_RESULT_BOUNDED` |
 | `ZZ9K_OP_AUDIO_METER_READ` | `0x050c` | Read one direction's framed snapshot (generation-checked, read-and-clear peak hold) |
 | `ZZ9K_OP_AUDIO_SCENE_SAVE` | `0x050d` | Start the non-blocking persist to `ZZ9000.CFG` (temp-then-replace); result status `ZZ9K_AUDIO_SCENE_SAVE_QUEUED` (watch the state get's `save_status`) / `ZZ9K_AUDIO_SCENE_SAVE_BUSY` / `REJECTED`; the machine never blocks the mailbox dispatch |
-| `ZZ9K_OP_AUDIO_CONTROL_STATE_GET` | `0x050e` | Active scene, scene count, baseline pair, applied trim pair, enforced ceiling, and (append-only) the save machine's `save_status` |
+| `ZZ9K_OP_AUDIO_CONTROL_STATE_GET` | `0x050e` | Active scene, baseline/applied pairs, derived AX-equivalent boundary, per-card Paula/AX clean ceilings, flags, and append-only save status |
 
 All payloads are the shared 48-byte inline convention, big-endian, mirrored
 as `ZZ9KAudio*Payload` structs in `include/zz9k/abi.h`. Staged scene
@@ -805,6 +805,16 @@ ranges deliberately differ per parameter: EQ/prefactor are 0..100 with 50 as
 range), while the pair parameters — baseline and trim balances — pack two
 0..255 mixer legs (127 = 0 dB each) like the historical
 `AP_DSP_SET_VOLUMES` register convention.
+
+Per-card gain calibration uses `ZZ9K_AUDIO_SCENE_PARAM_CALIBRATION`
+(17), a global scene-write parameter. Its value packs the measured
+Paula clean ceiling in bits 15..0 and AX clean ceiling in bits 31..16;
+both are 1..4095. Firmware derives Paula weight as AX/Paula and the
+AX-equivalent enforced boundary as 3/4 of AX. State get returns both
+ceilings in the former reserved words at offsets 24 and 28; save status
+remains the append-only tail word at offset 44. The pair applies live
+through the ordinary staged commit and persists as
+`audio_ceiling_paula` / `audio_ceiling_ax` on scene Save.
 
 Scene **names** are user labels carried beside the master-chain
 parameters. They flow through two paths and no opcode of their own:

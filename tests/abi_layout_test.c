@@ -144,6 +144,12 @@ typedef char audio_control_state_result_is_48_bytes[
 typedef char audio_control_save_status_is_tail_word[
   (offsetof(ZZ9KAudioControlStateResultPayload, save_status) == 44U) ? 1 : -1
 ];
+typedef char audio_control_paula_ceiling_is_append_only[
+  (offsetof(ZZ9KAudioControlStateResultPayload, ceiling_paula) == 24U) ? 1 : -1
+];
+typedef char audio_control_ax_ceiling_is_append_only[
+  (offsetof(ZZ9KAudioControlStateResultPayload, ceiling_ax) == 28U) ? 1 : -1
+];
 typedef char crypto_hash_payload_is_48_bytes[
   (sizeof(ZZ9KCryptoHashPayload) == 48U) ? 1 : -1
 ];
@@ -311,6 +317,12 @@ int main(void)
   if (ZZ9K_AUDIO_SCENE_SAVE_BUSY != 4U) return 115;
   if (ZZ9K_OP_AUDIO_SCENE_SAVE != 0x050dU) return 116;
   if (ZZ9K_OP_AUDIO_CONTROL_STATE_GET != 0x050eU) return 117;
+  if (ZZ9K_AUDIO_SCENE_PARAM_CALIBRATION != 17U) return 118;
+  if (ZZ9K_AUDIO_CEILING_MIN != 1U ||
+      ZZ9K_AUDIO_CEILING_MAX != 4095U) return 119;
+  if (ZZ9K_AUDIO_CALIBRATION_PACK(48U, 80U) != 0x00500030U) return 120;
+  if (ZZ9K_AUDIO_CALIBRATION_PAULA(0x00500030U) != 48U) return 121;
+  if (ZZ9K_AUDIO_CALIBRATION_AX(0x00500030U) != 80U) return 122;
   if (ZZ9K_AUDIO_STREAM_STATE_STREAMING == ZZ9K_AUDIO_STREAM_STATE_DONE) {
     return 46;
   }
