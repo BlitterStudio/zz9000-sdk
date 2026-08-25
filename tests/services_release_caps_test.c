@@ -92,6 +92,11 @@ static int test_audio_service_requires_calibrated_surface(void)
       printf("audio service omits calibrated control surface\n");
       return 1;
     }
+    if (!zz9k_service_flag_name(ZZ9K_SERVICE_AUDIO,
+                                ZZ9K_SERVICE_FLAG_AUDIO_CONTROL)) {
+      printf("AUDIO_CONTROL service flag has no printable name\n");
+      return 3;
+    }
     return 0;
   }
   return 2;
@@ -103,6 +108,7 @@ static int test_missing_capabilities_report_by_name(void)
 {
   uint32_t required;
   uint32_t pre_drain_firmware;
+  uint32_t uncalibrated_firmware;
   uint32_t missing;
 
   required = release_required_capabilities(2U);
@@ -129,6 +135,23 @@ static int test_missing_capabilities_report_by_name(void)
   if (!zz9k_capability_name(ZZ9K_CAP_APERTURE_LAYOUT)) {
     printf("APERTURE_LAYOUT has no printable name\n");
     return 4;
+  }
+
+  /* Uncalibrated firmware omits only the calibrated audio control bits;
+   * that diagnostic must also report them by name, not raw hex. */
+  uncalibrated_firmware = required & ~(ZZ9K_CAP_AUDIO_CONTROL |
+                                       ZZ9K_CAP_AUDIO_METERING);
+  missing = zz9k_missing_capabilities(uncalibrated_firmware, required);
+  if (missing !=
+      (ZZ9K_CAP_AUDIO_CONTROL | ZZ9K_CAP_AUDIO_METERING)) {
+    printf("unexpected uncalibrated missing set 0x%08lx\n",
+           (unsigned long)missing);
+    return 5;
+  }
+  if (!zz9k_capability_name(ZZ9K_CAP_AUDIO_CONTROL) ||
+      !zz9k_capability_name(ZZ9K_CAP_AUDIO_METERING)) {
+    printf("calibrated audio capabilities have no printable name\n");
+    return 6;
   }
 
   return 0;
