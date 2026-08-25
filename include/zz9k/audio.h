@@ -126,6 +126,71 @@ static inline int zz9k_audio_build_stream_feed_desc(
   return 1;
 }
 
+/* Fabric lease plane (ZZ9K_OP_AUDIO_LEASE_*): 48 kHz stereo S16LE
+ * only (the bypass geometry; a nonzero flags word is rejected by
+ * firmware). gain is the requested 0..255 producer scale (128 =
+ * unity); firmware composes it against the enforced audio ceiling
+ * and reports the applied value in the begin result. */
+static inline int zz9k_audio_build_lease_begin_desc(
+    ZZ9KAudioLeaseBeginDesc *desc,
+    uint32_t slot,
+    uint32_t identity,
+    uint32_t gain,
+    uint32_t flags)
+{
+  if (!desc || slot == 0U || slot > 2U ||
+      identity > ZZ9K_AUDIO_METER_IDENTITY_SDK_STREAM ||
+      gain > 255U || flags != 0U) {
+    return 0;
+  }
+
+  memset(desc, 0, sizeof(*desc));
+  desc->slot = slot;
+  desc->identity = identity;
+  desc->gain = gain;
+  desc->flags = flags;
+  return 1;
+}
+
+static inline int zz9k_audio_build_lease_submit_desc(
+    ZZ9KAudioLeaseSubmitDesc *desc,
+    uint32_t lease,
+    uint32_t src_handle,
+    uint32_t src_offset,
+    uint32_t src_length,
+    uint32_t flags)
+{
+  if (!desc || lease == 0U || lease == ZZ9K_INVALID_HANDLE ||
+      src_handle == ZZ9K_INVALID_HANDLE || src_length == 0U ||
+      (src_length & 3U) != 0U || flags != 0U) {
+    return 0;
+  }
+
+  memset(desc, 0, sizeof(*desc));
+  desc->lease = lease;
+  desc->src_handle = src_handle;
+  desc->src_offset = src_offset;
+  desc->src_length = src_length;
+  desc->flags = flags;
+  return 1;
+}
+
+static inline int zz9k_audio_build_fabric_state_desc(
+    ZZ9KAudioFabricStateDesc *desc,
+    uint32_t slot,
+    uint32_t flags)
+{
+  if (!desc || slot > 2U ||
+      (flags & ~ZZ9K_AUDIO_FABRIC_STATE_HOLD_RESET) != 0U) {
+    return 0;
+  }
+
+  memset(desc, 0, sizeof(*desc));
+  desc->slot = slot;
+  desc->flags = flags;
+  return 1;
+}
+
 #ifdef __cplusplus
 }
 #endif

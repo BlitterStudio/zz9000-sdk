@@ -878,6 +878,58 @@ against, its bench-measured value, method, and the flip-after-pass runbook
 are documented in the firmware repo's
 `docs/audio-saturation-ceiling.md`.
 
+## Audio Fabric Lease Plane
+
+The audio fabric compositor lease plane lets a second producer mix
+into the AX output alongside the SDK pump: firmware reserves slot 0
+for the playback pump, exposes slot 1 through the lease opcodes, and
+keeps slot 2 firmware-reserved for a later AHI/synthesis producer.
+Dispatch is live but deliberately unadvertised: nothing sets
+`ZZ9K_CAP_AUDIO_FABRIC` (bit 27) or
+`ZZ9K_SERVICE_FLAG_AUDIO_FABRIC` until the on-hardware verification
+session passes, so mixed-version clients must treat a missing
+capability as a clean decline, not an error.
+
+| Opcode | Value | Purpose |
+| --- | --- | --- |
+| `ZZ9K_OP_AUDIO_LEASE_BEGIN` | `0x050f` | Grant a producer lease on a slot; result carries the handle and the applied gain |
+| `ZZ9K_OP_AUDIO_LEASE_SUBMIT` | `0x0510` | Copy whole S16LE stereo frames from a shared buffer into the slot's card-side ring; partial-accept backpressure |
+| `ZZ9K_OP_AUDIO_LEASE_RELEASE` | `0x0511` | Surrender the lease (idempotent for the immediately-previous handle) |
+| `ZZ9K_OP_AUDIO_FABRIC_STATE_GET` | `0x0512` | One framed per-slot snapshot: state, cursors, underruns, 16.16 peak hold, clip count |
+
+All payloads follow the 48-byte big-endian inline convention, mirrored
+as `ZZ9KAudioLease*Payload` in `include/zz9k/abi.h`. The bypass
+geometry is fixed: 48 kHz stereo S16LE only (`flags` required zero).
+`ZZ9KAudioLeaseBeginResultPayload.gain_applied` (append-only word at
+offset 16) reports the producer scale the lease actually runs at: the
+requested 0..255 `gain` (128 = unity) is composed against the enforced
+audio ceiling under the active scene, and a reduced request is flagged
+`ZZ9K_AUDIO_LEASE_RESULT_GAIN_BOUNDED` instead of silently clamped --
+the same reported-bound contract as the trim path. Submit takes a
+shared-buffer reference (`src_handle` + offset + length, whole frames)
+and reports `bytes_consumed`; a nonzero request accepted into zero
+space completes `ZZ9K_STATUS_BUSY` and the producer resubmits. State
+reads are non-tearing within a generation;
+`ZZ9K_AUDIO_FABRIC_STATE_HOLD_RESET` consumes the peak window like
+the scene meter.
+
+The typed client surface is `zz9k_audio_build_lease_begin_desc` /
+`zz9k_audio_build_lease_submit_desc` /
+`zz9k_audio_build_fabric_state_desc` (`include/zz9k/audio.h`) with
+`zz9k_audio_lease_begin` / `zz9k_audio_lease_submit` /
+`zz9k_audio_lease_release` / `zz9k_audio_fabric_state_get`
+dispatchers. The proof client `C/zz9k-fabriclease` (source
+`tools/zz9k-fabriclease.c`) exercises the whole cycle: capability
+gate, ~4 KiB HOST_WINDOW staging, a generated 48 kHz tone fed in
+submit-sized chunks with partial-accept retry, periodic state polls,
+and a bounded drain before release.
+
+The lease plane is Zorro 3 first: the card-side lease rings live in
+the Z3-mapped DDR window, and the client declines on a Zorro 2 board
+(`ZZ9KBoard.zorro_version == 2`) with a documented message before
+opening the library. A firmware that predates the plane is declined
+the same clean way.
+
 ## Decompression Jobs
 
 SDK v2 reserves a buffer-to-buffer decompression job shape for archive tools:

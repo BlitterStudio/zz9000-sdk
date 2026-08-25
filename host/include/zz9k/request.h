@@ -696,6 +696,102 @@ static inline int zz9k_request_audio_stream_stop(ZZ9KRequest *request,
   return ZZ9K_STATUS_OK;
 }
 
+static inline int zz9k_request_audio_lease_begin(
+    ZZ9KRequest *request,
+    const ZZ9KAudioLeaseBeginDesc *desc)
+{
+  ZZ9KAudioLeaseBeginPayload *payload;
+  ZZ9KAudioLeaseBeginDesc validated;
+
+  if (!request ||
+      !zz9k_audio_build_lease_begin_desc(&validated, desc ? desc->slot : 0U,
+                                         desc ? desc->identity : 0U,
+                                         desc ? desc->gain : 0U,
+                                         desc ? desc->flags : 0U)) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  zz9k_request_init(request, ZZ9K_OP_AUDIO_LEASE_BEGIN);
+  request->entry.payload_len = sizeof(ZZ9KAudioLeaseBeginPayload);
+  payload =
+      (ZZ9KAudioLeaseBeginPayload *)request->entry.payload.inline_data;
+  zz9k_put_be32(payload->slot, validated.slot);
+  zz9k_put_be32(payload->identity, validated.identity);
+  zz9k_put_be32(payload->gain, validated.gain);
+  zz9k_put_be32(payload->flags, validated.flags);
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_request_audio_lease_submit(
+    ZZ9KRequest *request,
+    const ZZ9KAudioLeaseSubmitDesc *desc)
+{
+  ZZ9KAudioLeaseSubmitPayload *payload;
+  ZZ9KAudioLeaseSubmitDesc validated;
+
+  if (!request ||
+      !zz9k_audio_build_lease_submit_desc(
+          &validated, desc ? desc->lease : 0U,
+          desc ? desc->src_handle : ZZ9K_INVALID_HANDLE,
+          desc ? desc->src_offset : 0U, desc ? desc->src_length : 0U,
+          desc ? desc->flags : 0U)) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  zz9k_request_init(request, ZZ9K_OP_AUDIO_LEASE_SUBMIT);
+  request->entry.payload_len = sizeof(ZZ9KAudioLeaseSubmitPayload);
+  payload =
+      (ZZ9KAudioLeaseSubmitPayload *)request->entry.payload.inline_data;
+  zz9k_put_be32(payload->lease, validated.lease);
+  zz9k_put_be32(payload->src_handle, validated.src_handle);
+  zz9k_put_be32(payload->src_offset, validated.src_offset);
+  zz9k_put_be32(payload->src_length, validated.src_length);
+  zz9k_put_be32(payload->flags, validated.flags);
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_request_audio_lease_release(ZZ9KRequest *request,
+                                                   uint32_t lease,
+                                                   uint32_t flags)
+{
+  ZZ9KAudioLeaseReleasePayload *payload;
+
+  if (!request || lease == 0U || lease == ZZ9K_INVALID_HANDLE ||
+      flags != 0U) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  zz9k_request_init(request, ZZ9K_OP_AUDIO_LEASE_RELEASE);
+  request->entry.payload_len = sizeof(ZZ9KAudioLeaseReleasePayload);
+  payload =
+      (ZZ9KAudioLeaseReleasePayload *)request->entry.payload.inline_data;
+  zz9k_put_be32(payload->lease, lease);
+  zz9k_put_be32(payload->flags, flags);
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_request_audio_fabric_state_get(
+    ZZ9KRequest *request,
+    const ZZ9KAudioFabricStateDesc *desc)
+{
+  ZZ9KAudioFabricStateGetPayload *payload;
+  ZZ9KAudioFabricStateDesc validated;
+
+  if (!request ||
+      !zz9k_audio_build_fabric_state_desc(
+          &validated, desc ? desc->slot : 0U, desc ? desc->flags : 0U)) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  zz9k_request_init(request, ZZ9K_OP_AUDIO_FABRIC_STATE_GET);
+  request->entry.payload_len = sizeof(ZZ9KAudioFabricStateGetPayload);
+  payload =
+      (ZZ9KAudioFabricStateGetPayload *)request->entry.payload.inline_data;
+  zz9k_put_be32(payload->slot, validated.slot);
+  zz9k_put_be32(payload->flags, validated.flags);
+  return ZZ9K_STATUS_OK;
+}
+
 static inline int zz9k_request_video_session_begin(
     ZZ9KRequest *request,
     const ZZ9KVideoSessionBeginDesc *desc)

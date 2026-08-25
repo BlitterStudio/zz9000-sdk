@@ -2042,6 +2042,102 @@ int zz9k_audio_stream_stop(ZZ9KContext *ctx, uint32_t session,
                                         result);
 }
 
+int zz9k_audio_lease_begin(ZZ9KContext *ctx,
+                           const ZZ9KAudioLeaseBeginDesc *desc,
+                           ZZ9KAudioLeaseBeginResult *result)
+{
+  ZZ9KRequest request;
+  ZZ9KMailboxEntry reply;
+  int status;
+
+  if (!ctx || !desc || !result) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  memset(result, 0, sizeof(*result));
+  memset(&reply, 0, sizeof(reply));
+  status = zz9k_request_audio_lease_begin(&request, desc);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  status = zz9k_call(ctx, &request, &reply, ZZ9K_DEFAULT_TIMEOUT_TICKS);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  return zz9k_reply_audio_lease_begin_result(&reply, result);
+}
+
+int zz9k_audio_lease_submit(ZZ9KContext *ctx,
+                            const ZZ9KAudioLeaseSubmitDesc *desc,
+                            ZZ9KAudioLeaseSubmitResult *result)
+{
+  ZZ9KRequest request;
+  ZZ9KMailboxEntry reply;
+  int status;
+
+  if (!ctx || !desc || !result) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  memset(result, 0, sizeof(*result));
+  memset(&reply, 0, sizeof(reply));
+  status = zz9k_request_audio_lease_submit(&request, desc);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  status = zz9k_call(ctx, &request, &reply, ZZ9K_DEFAULT_TIMEOUT_TICKS);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  return zz9k_reply_audio_lease_submit_result(&reply, result);
+}
+
+int zz9k_audio_lease_release(ZZ9KContext *ctx, uint32_t lease,
+                             uint32_t flags)
+{
+  ZZ9KRequest request;
+  ZZ9KMailboxEntry reply;
+  int status;
+
+  if (!ctx) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  memset(&reply, 0, sizeof(reply));
+  status = zz9k_request_audio_lease_release(&request, lease, flags);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  /* RELEASE reserves no result payload; the status word is the
+   * whole contract (OK, or BAD_HANDLE for a stale handle). */
+  return zz9k_call(ctx, &request, &reply, ZZ9K_DEFAULT_TIMEOUT_TICKS);
+}
+
+int zz9k_audio_fabric_state_get(
+    ZZ9KContext *ctx, const ZZ9KAudioFabricStateDesc *desc,
+    ZZ9KAudioFabricStateResult *result)
+{
+  ZZ9KRequest request;
+  ZZ9KMailboxEntry reply;
+  int status;
+
+  if (!ctx || !desc || !result) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  memset(result, 0, sizeof(*result));
+  memset(&reply, 0, sizeof(reply));
+  status = zz9k_request_audio_fabric_state_get(&request, desc);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  status = zz9k_call(ctx, &request, &reply, ZZ9K_DEFAULT_TIMEOUT_TICKS);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  return zz9k_reply_audio_fabric_state_result(&reply, result);
+}
+
 static int zz9k_video_session_call(ZZ9KContext *ctx,
                                    ZZ9KRequest *request,
                                    uint16_t opcode,

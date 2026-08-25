@@ -100,6 +100,7 @@ copy_one "build/mpega.library" "Libs/mpega.library"
 
 copy_one "build/zz9k-info" "C/zz9k-info"
 copy_one "build/zz9k-services" "C/zz9k-services"
+copy_one "build/zz9k-fabriclease" "C/zz9k-fabriclease"
 copy_one "build/zz9k-bench" "C/zz9k-bench"
 copy_one "build/zz9k-hash" "C/zz9k-hash"
 copy_one "build/zz9k-inflate" "C/zz9k-inflate"

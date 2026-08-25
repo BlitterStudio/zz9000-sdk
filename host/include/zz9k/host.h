@@ -214,6 +214,21 @@ int zz9k_audio_stream_play(ZZ9KContext *ctx, uint32_t session,
 int zz9k_audio_stream_stop(ZZ9KContext *ctx, uint32_t session,
                            uint32_t flags,
                            ZZ9KAudioStreamResult *result);
+
+/* Audio fabric lease plane (ZZ9K_OP_AUDIO_LEASE_*,
+ * ZZ9K_OP_AUDIO_FABRIC_STATE_GET): Zorro 3 first -- see the fabric
+ * lease section of docs/zz9k-library.md. */
+int zz9k_audio_lease_begin(ZZ9KContext *ctx,
+                           const ZZ9KAudioLeaseBeginDesc *desc,
+                           ZZ9KAudioLeaseBeginResult *result);
+int zz9k_audio_lease_submit(ZZ9KContext *ctx,
+                            const ZZ9KAudioLeaseSubmitDesc *desc,
+                            ZZ9KAudioLeaseSubmitResult *result);
+int zz9k_audio_lease_release(ZZ9KContext *ctx, uint32_t lease,
+                             uint32_t flags);
+int zz9k_audio_fabric_state_get(
+    ZZ9KContext *ctx, const ZZ9KAudioFabricStateDesc *desc,
+    ZZ9KAudioFabricStateResult *result);
 int zz9k_video_session_begin(ZZ9KContext *ctx,
                              const ZZ9KVideoSessionBeginDesc *desc,
                              ZZ9KVideoSessionResult *result);

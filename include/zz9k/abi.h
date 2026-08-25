@@ -1064,13 +1064,20 @@ typedef struct ZZ9KAudioLeaseBeginPayload {
 
 /* lease is the opaque generation-tagged lease handle; generation
  * echoes the tag embedded in it. Later LEASE_SUBMIT / LEASE_RELEASE
- * calls present the handle exactly as granted. */
+ * calls present the handle exactly as granted. gain_applied is the
+ * scene-composed producer gain the lease actually runs at (R11): the
+ * requested 0..255 gain is composed against the enforced ceiling
+ * under the active scene, and a reduced request is REPORTED here --
+ * with ZZ9K_AUDIO_LEASE_RESULT_GAIN_BOUNDED in flags -- never
+ * silently clamped (the trim-bound pattern). Append-only word
+ * consuming the former reserved tail; earlier fields never move. */
 typedef struct ZZ9KAudioLeaseBeginResultPayload {
   uint8_t lease[4];
   uint8_t slot[4];
   uint8_t generation[4];
   uint8_t flags[4];
-  uint8_t reserved[32];
+  uint8_t gain_applied[4];
+  uint8_t reserved[28];
 } ZZ9KAudioLeaseBeginResultPayload;
 
 /* Producer PCM delivery: one shared-buffer reference into the
@@ -1152,6 +1159,10 @@ typedef struct ZZ9KAudioFabricStateResultPayload {
 /* Lease flags: the rate intent is reserved for future
  * conversion-bearing leases and currently required zero. */
 #define ZZ9K_AUDIO_LEASE_FLAG_RATE_INTENT (1U << 0)
+
+/* LEASE_BEGIN result flags: the scene composition reduced the
+ * requested gain (see gain_applied). */
+#define ZZ9K_AUDIO_LEASE_RESULT_GAIN_BOUNDED (1U << 0)
 
 /* FABRIC_STATE_GET request flag: consume the slot's peak-hold
  * window on this read (mirrors ZZ9K_AUDIO_METER_RESULT_HOLD_RESET);
@@ -2026,6 +2037,60 @@ typedef struct ZZ9KAudioStreamResult {
   uint32_t bytes_produced;
   uint32_t flags;
 } ZZ9KAudioStreamResult;
+
+/* Fabric lease plane: typed client descriptors and results for
+ * ZZ9K_OP_AUDIO_LEASE_BEGIN / SUBMIT / RELEASE and
+ * ZZ9K_OP_AUDIO_FABRIC_STATE_GET. gain is the requested 0..255
+ * producer scale (128 = unity); firmware composes it against the
+ * enforced ceiling and reports the applied value back. */
+typedef struct ZZ9KAudioLeaseBeginDesc {
+  uint32_t slot;
+  uint32_t identity;
+  uint32_t gain;
+  uint32_t flags;
+} ZZ9KAudioLeaseBeginDesc;
+
+typedef struct ZZ9KAudioLeaseBeginResult {
+  uint32_t lease;
+  uint32_t slot;
+  uint32_t generation;
+  uint32_t gain_applied;
+  uint32_t flags;
+} ZZ9KAudioLeaseBeginResult;
+
+typedef struct ZZ9KAudioLeaseSubmitDesc {
+  uint32_t lease;
+  uint32_t src_handle;
+  uint32_t src_offset;
+  uint32_t src_length;
+  uint32_t flags;
+} ZZ9KAudioLeaseSubmitDesc;
+
+typedef struct ZZ9KAudioLeaseSubmitResult {
+  uint32_t lease;
+  uint32_t bytes_consumed;
+  uint32_t flags;
+} ZZ9KAudioLeaseSubmitResult;
+
+typedef struct ZZ9KAudioFabricStateDesc {
+  uint32_t slot;
+  uint32_t flags;
+} ZZ9KAudioFabricStateDesc;
+
+typedef struct ZZ9KAudioFabricStateResult {
+  uint32_t slot;
+  uint32_t generation;
+  uint32_t slot_count;
+  uint32_t state;
+  uint32_t identity;
+  uint32_t lease;
+  uint32_t cursor_write;
+  uint32_t cursor_read;
+  uint32_t underrun_count;
+  uint32_t flags;
+  uint32_t peak;
+  uint32_t clip;
+} ZZ9KAudioFabricStateResult;
 
 typedef struct ZZ9KVideoSessionBeginDesc {
   uint32_t codec;

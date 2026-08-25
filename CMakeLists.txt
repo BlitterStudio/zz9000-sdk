@@ -1435,6 +1435,25 @@ add_executable(zz9k_services
 
 target_link_libraries(zz9k_services PRIVATE zz9k_host)
 
+add_executable(zz9k_fabriclease
+  tools/zz9k-fabriclease.c
+)
+
+target_link_libraries(zz9k_fabriclease PRIVATE zz9k_host)
+
+add_executable(fabriclease_contract_test
+  tests/fabriclease_contract_test.c
+)
+
+target_include_directories(fabriclease_contract_test
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/host/include
+)
+
+target_link_libraries(fabriclease_contract_test PRIVATE zz9k_host)
+add_test(NAME fabriclease_contract_test COMMAND fabriclease_contract_test)
+
 add_executable(zz9k_bench
   tools/zz9k-bench.c
 )
