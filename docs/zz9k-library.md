@@ -779,6 +779,105 @@ if (ZZ9KDecodeMp3(&desc, &result) == ZZ9K_STATUS_OK) {
 rate and channel count. Callers that need this resident LVO should check
 `ZZ9K_LIBRARY_MIN_REVISION_AUDIO_DECODE`.
 
+## Audio Control Plane and Metering
+
+Firmware can expose a firmware-authoritative control plane over the audio
+service: named scenes own the master DSP chain (LPF, 10-band EQ, prefactor,
+output volume/pan), stream owners submit policy-bounded source trims on top
+of an operator baseline, per-direction metering is readable as non-tearing
+snapshots, and scene state persists in `ZZ9000.CFG` from firmware. The
+opcodes live at the top of the audio range:
+
+| Opcode | Value | Purpose |
+| --- | --- | --- |
+| `ZZ9K_OP_AUDIO_SCENE_SELECT` | `0x0509` | Make a scene active (glitch-free commit) |
+| `ZZ9K_OP_AUDIO_SCENE_WRITE` | `0x050a` | Stage one scene parameter; `ZZ9K_AUDIO_SCENE_WRITE_FLAG_COMMIT` commits the staged group atomically |
+| `ZZ9K_OP_AUDIO_TRIM_SUBMIT` | `0x050b` | Submit this owner's source-trim balance; the reserved `ZZ9K_AUDIO_BALANCE_NEUTRAL` word is the keep-baseline release; result reports the applied pair, the bound, and `ZZ9K_AUDIO_TRIM_RESULT_BOUNDED` |
+| `ZZ9K_OP_AUDIO_METER_READ` | `0x050c` | Read one direction's framed snapshot (generation-checked, read-and-clear peak hold) |
+| `ZZ9K_OP_AUDIO_SCENE_SAVE` | `0x050d` | Start the non-blocking persist to `ZZ9000.CFG` (temp-then-replace); result status `ZZ9K_AUDIO_SCENE_SAVE_QUEUED` (watch the state get's `save_status`) / `ZZ9K_AUDIO_SCENE_SAVE_BUSY` / `REJECTED`; the machine never blocks the mailbox dispatch |
+| `ZZ9K_OP_AUDIO_CONTROL_STATE_GET` | `0x050e` | Active scene, baseline/applied pairs, derived AX-equivalent boundary, per-card Paula/AX clean ceilings, flags, and append-only save status |
+
+All payloads are the shared 48-byte inline convention, big-endian, mirrored
+as `ZZ9KAudio*Payload` structs in `include/zz9k/abi.h`. Staged scene
+parameters use the `ZZ9K_AUDIO_SCENE_PARAM_*` ids; note the value-word
+ranges deliberately differ per parameter: EQ/prefactor are 0..100 with 50 as
+0 dB, scene volume is 0..100 with 100 as 0 dB (the `audio_adau_set_vol_pan`
+range), while the pair parameters — baseline and trim balances — pack two
+0..255 mixer legs (127 = 0 dB each) like the historical
+`AP_DSP_SET_VOLUMES` register convention.
+
+Per-card gain calibration uses `ZZ9K_AUDIO_SCENE_PARAM_CALIBRATION`
+(17), a global scene-write parameter. Its value packs the measured
+Paula clean ceiling in bits 15..0 and AX clean ceiling in bits 31..16;
+both are 1..4095. Firmware derives Paula weight as AX/Paula and the
+AX-equivalent enforced boundary as 3/4 of AX. State get returns both
+ceilings in the former reserved words at offsets 24 and 28; save status
+remains the append-only tail word at offset 44. The pair applies live
+through the ordinary staged commit and persists as
+`audio_ceiling_paula` / `audio_ceiling_ax` on scene Save.
+
+Scene **names** are user labels carried beside the master-chain
+parameters. They flow through two paths and no opcode of their own:
+`ZZ9K_AUDIO_SCENE_PARAM_NAME` (16) stages a name chunk through
+`ZZ9K_OP_AUDIO_SCENE_WRITE` (bits 15..8 = first char, 7..0 = second
+char, printable ASCII or the `0x0000` terminator; a rename stages the
+complete name — up to 8 chunks, 16 characters — then commits once,
+and the commit issues no DSP writes), and the `audio_scene<N>_nm1..8`
+keys persist names in `ZZ9000.CFG` with the same packing.
+`ZZ9K_OP_AUDIO_CONTROL_STATE_GET` deliberately does not report names:
+editors read them from the CFG file (or their own staged edits). An
+absent or empty name keeps the firmware's built-in `Scene N` label.
+
+For `ZZ9K_OP_AUDIO_TRIM_SUBMIT`, the balance word is the requested
+absolute composed pair (baseline-relative deltas are computed by the
+firmware). `ZZ9K_AUDIO_BALANCE_NEUTRAL` (`0x7f7f`) is reserved as
+keep-baseline: submitting it means "no trim from this owner" -- the
+firmware replies with the operator baseline pair as applied,
+unbounded, and does not restage the mixer. An absolute 127/127 trim
+request is therefore not expressible; owners that want the baseline
+submit the reserved word.
+
+`ZZ9K_OP_AUDIO_SCENE_SAVE` runs the temp-then-replace SD sequence as a
+firmware state machine stepped by the service loop — at most one FatFs
+call per loop pass — so normal SD traffic interleaves with Zorro service
+instead of holding the mailbox dispatch across the whole save. The
+firmware's SDPS command/read/write polls also carry a two-second
+deadline; a controller that never signals completion returns an I/O
+error instead of spinning core 0 forever (the historical freeze locked
+up the whole Amiga). The reply is therefore immediate:
+`ZZ9K_AUDIO_SCENE_SAVE_QUEUED` (3) when the machine started or queued
+behind an active DSP commit, `ZZ9K_AUDIO_SCENE_SAVE_BUSY` (4) when a
+previous save is still running (the new request is refused — retry
+after the current save settles), or an immediate
+`ZZ9K_AUDIO_SCENE_SAVE_REJECTED` when boundary validation runs before
+the reply. A save queued behind a DSP commit validates only after that
+commit settles, so its rejection is reported asynchronously. Clients
+observe every queued outcome by polling
+`ZZ9K_OP_AUDIO_CONTROL_STATE_GET`: its append-only `save_status` word
+reports `ZZ9K_AUDIO_SCENE_SAVE_QUEUED` while the machine runs and the
+most recent settled status afterwards.
+
+Calibrated matched firmware advertises `ZZ9K_CAP_AUDIO_CONTROL` (bit
+25), `ZZ9K_CAP_AUDIO_METERING` (bit 26), and
+`ZZ9K_SERVICE_FLAG_AUDIO_CONTROL` (bit 21). Its audio service reports
+15 opcodes through `0x050e`. Older or uncalibrated firmware omits the
+bits, so clients must still gate exactly like every other surface:
+
+```c
+if (!zz9k_has_capabilities(caps.capability_bits, ZZ9K_CAP_AUDIO_CONTROL)) {
+  /* normal old-firmware result: fall back, never corrupt playback */
+}
+```
+
+Metering snapshots (`ZZ9KAudioMeterResultPayload`) frame one direction per
+reply: peaks are unsigned 16.16 (0x00010000 = digital full scale), counters
+saturate rather than wrap, `generation` must agree across frames of one
+read, and `ZZ9K_AUDIO_METER_RESULT_HOLD_RESET` marks the read-and-clear
+peak hold. The enforced combined-level ceiling the trim/scene paths clamp
+against, its bench-measured value, method, and the flip-after-pass runbook
+are documented in the firmware repo's
+`docs/audio-saturation-ceiling.md`.
+
 ## Decompression Jobs
 
 SDK v2 reserves a buffer-to-buffer decompression job shape for archive tools:
