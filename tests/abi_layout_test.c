@@ -181,8 +181,9 @@ typedef char audio_fabric_state_result_payload_is_48_bytes[
 typedef char audio_fabric_state_underrun_is_append_only[
   (offsetof(ZZ9KAudioFabricStateResultPayload, underrun_count) == 32U) ? 1 : -1
 ];
-typedef char audio_fabric_state_tail_is_reserved[
-  (offsetof(ZZ9KAudioFabricStateResultPayload, reserved) == 40U) ? 1 : -1
+typedef char audio_fabric_state_tail_is_peak_clip[
+  (offsetof(ZZ9KAudioFabricStateResultPayload, peak) == 40U &&
+   offsetof(ZZ9KAudioFabricStateResultPayload, clip) == 44U) ? 1 : -1
 ];
 typedef char crypto_hash_payload_is_48_bytes[
   (sizeof(ZZ9KCryptoHashPayload) == 48U) ? 1 : -1
