@@ -703,11 +703,10 @@ static inline int zz9k_request_audio_lease_begin(
   ZZ9KAudioLeaseBeginPayload *payload;
   ZZ9KAudioLeaseBeginDesc validated;
 
-  if (!request ||
-      !zz9k_audio_build_lease_begin_desc(&validated, desc ? desc->slot : 0U,
-                                         desc ? desc->identity : 0U,
-                                         desc ? desc->gain : 0U,
-                                         desc ? desc->flags : 0U)) {
+  if (!request || !desc ||
+      !zz9k_audio_build_lease_begin_desc(&validated, desc->slot,
+                                         desc->identity, desc->gain,
+                                         desc->flags)) {
     return ZZ9K_STATUS_BAD_REQUEST;
   }
 
@@ -729,12 +728,10 @@ static inline int zz9k_request_audio_lease_submit(
   ZZ9KAudioLeaseSubmitPayload *payload;
   ZZ9KAudioLeaseSubmitDesc validated;
 
-  if (!request ||
+  if (!request || !desc ||
       !zz9k_audio_build_lease_submit_desc(
-          &validated, desc ? desc->lease : 0U,
-          desc ? desc->src_handle : ZZ9K_INVALID_HANDLE,
-          desc ? desc->src_offset : 0U, desc ? desc->src_length : 0U,
-          desc ? desc->flags : 0U)) {
+          &validated, desc->lease, desc->src_handle,
+          desc->src_offset, desc->src_length, desc->flags)) {
     return ZZ9K_STATUS_BAD_REQUEST;
   }
 
@@ -777,12 +774,11 @@ static inline int zz9k_request_audio_fabric_state_get(
   ZZ9KAudioFabricStateGetPayload *payload;
   ZZ9KAudioFabricStateDesc validated;
 
-  if (!request ||
+  if (!request || !desc ||
       !zz9k_audio_build_fabric_state_desc(
-          &validated, desc ? desc->slot : 0U, desc ? desc->flags : 0U)) {
+          &validated, desc->slot, desc->flags)) {
     return ZZ9K_STATUS_BAD_REQUEST;
   }
-
   zz9k_request_init(request, ZZ9K_OP_AUDIO_FABRIC_STATE_GET);
   request->entry.payload_len = sizeof(ZZ9KAudioFabricStateGetPayload);
   payload =
