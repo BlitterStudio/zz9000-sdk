@@ -197,6 +197,17 @@ enum ZZ9KOpcode {
   ZZ9K_OP_AUDIO_METER_READ = ZZ9K_SERVICE_AUDIO + 0x0c,
   ZZ9K_OP_AUDIO_SCENE_SAVE = ZZ9K_SERVICE_AUDIO + 0x0d,
   ZZ9K_OP_AUDIO_CONTROL_STATE_GET = ZZ9K_SERVICE_AUDIO + 0x0e,
+  /* Audio fabric compositor lease plane (ABI reservation only): the
+   * firmware compositor becomes the sole TX-ring writer and grants
+   * bounded generation-tagged producer leases. The opcodes and
+   * payloads are frozen so host tooling can compile against them, but
+   * dispatch completes ZZ9K_STATUS_UNSUPPORTED and nothing is
+   * advertised until the compositor lands and its on-hardware
+   * verification session passes (see ZZ9K_CAP_AUDIO_FABRIC). */
+  ZZ9K_OP_AUDIO_LEASE_BEGIN = ZZ9K_SERVICE_AUDIO + 0x0f,
+  ZZ9K_OP_AUDIO_LEASE_SUBMIT = ZZ9K_SERVICE_AUDIO + 0x10,
+  ZZ9K_OP_AUDIO_LEASE_RELEASE = ZZ9K_SERVICE_AUDIO + 0x11,
+  ZZ9K_OP_AUDIO_FABRIC_STATE_GET = ZZ9K_SERVICE_AUDIO + 0x12,
 
   ZZ9K_OP_DECOMPRESS = ZZ9K_SERVICE_CODEC + 0x00,
   ZZ9K_OP_DECOMPRESS_TEST = ZZ9K_SERVICE_CODEC + 0x01,
@@ -269,7 +280,12 @@ enum ZZ9KCapability {
    * advertised by any capability word until the on-hardware verification
    * session qualifies them (R12). */
   ZZ9K_CAP_AUDIO_CONTROL = 1U << 25,
-  ZZ9K_CAP_AUDIO_METERING = 1U << 26
+  ZZ9K_CAP_AUDIO_METERING = 1U << 26,
+  /* Audio fabric compositor (concurrent producer leases, opcodes
+   * 0x050f+). Append-only but deliberately NOT advertised by any
+   * capability word until the on-hardware verification session
+   * qualifies them, per the ZZ9K_CAP_AUDIO_CONTROL (R12) discipline. */
+  ZZ9K_CAP_AUDIO_FABRIC = 1U << 27
 };
 
 #define ZZ9K_APERTURE_LAYOUT_GENERATION_SHIFT 16U
@@ -342,6 +358,11 @@ enum ZZ9KServiceFlags {
   /* Control-plane audio opcodes (0x0509+) are dispatchable. Follows the
    * ZZ9K_CAP_AUDIO_CONTROL gated-advertising discipline. */
   ZZ9K_SERVICE_FLAG_AUDIO_CONTROL = 1U << 21,
+  /* Fabric lease opcodes (0x050f+) are reserved; dispatch completes
+   * UNSUPPORTED. Follows the ZZ9K_CAP_AUDIO_FABRIC gated-advertising
+   * discipline: not reported in the audio service flags until
+   * qualified. */
+  ZZ9K_SERVICE_FLAG_AUDIO_FABRIC = 1U << 22,
 
   ZZ9K_SERVICE_FLAG_VIDEO_MPEG1 = 1U << 16,
   ZZ9K_SERVICE_FLAG_VIDEO_MPEG_PS = 1U << 17,
@@ -1015,6 +1036,110 @@ typedef struct ZZ9KAudioControlStateResultPayload {
   uint8_t save_status[4];
 } ZZ9KAudioControlStateResultPayload;
 
+/* --------------------------------------------------------------------
+ * Audio fabric compositor lease plane (opcodes 0x050f+). ABI
+ * RESERVATION ONLY: the compositor (firmware as sole TX-ring writer,
+ * granting bounded generation-tagged producer leases) is not
+ * implemented; dispatch completes ZZ9K_STATUS_UNSUPPORTED and no
+ * capability word or service flag reports this surface until it lands
+ * and passes the on-hardware verification session (see
+ * ZZ9K_CAP_AUDIO_FABRIC). All payload fields are big-endian, 48 bytes
+ * per the inline-payload convention.
+ * ------------------------------------------------------------------ */
+
+/* Per-slot status reported by ZZ9K_OP_AUDIO_FABRIC_STATE_GET. */
+#define ZZ9K_AUDIO_FABRIC_SLOT_FREE    0U
+#define ZZ9K_AUDIO_FABRIC_SLOT_LEASED  1U
+#define ZZ9K_AUDIO_FABRIC_SLOT_ACTIVE  2U
+
+/* Producer intent for one compositor slot. identity reuses the meter
+ * vocabulary (ZZ9K_AUDIO_METER_IDENTITY_*); gain is a packed balance
+ * word in the 0..255 mixer scale (ZZ9K_AUDIO_BALANCE_*). */
+typedef struct ZZ9KAudioLeaseBeginPayload {
+  uint8_t slot[4];
+  uint8_t identity[4];
+  uint8_t gain[4];
+  uint8_t flags[4];
+  uint8_t reserved[32];
+} ZZ9KAudioLeaseBeginPayload;
+
+/* lease is the opaque generation-tagged lease handle; generation
+ * echoes the tag embedded in it. Later LEASE_SUBMIT / LEASE_RELEASE
+ * calls present the handle exactly as granted. */
+typedef struct ZZ9KAudioLeaseBeginResultPayload {
+  uint8_t lease[4];
+  uint8_t slot[4];
+  uint8_t generation[4];
+  uint8_t flags[4];
+  uint8_t reserved[32];
+} ZZ9KAudioLeaseBeginResultPayload;
+
+/* Producer PCM delivery: one shared-buffer reference into the
+ * producer's staging buffer, mirroring how ZZ9K_OP_AUDIO_STREAM_FEED
+ * references its compressed input. The compositor is the only writer
+ * to the TX ring; submitted bytes are mixed into the slot at the
+ * lease's gain. */
+typedef struct ZZ9KAudioLeaseSubmitPayload {
+  uint8_t lease[4];
+  uint8_t src_handle[4];
+  uint8_t src_offset[4];
+  uint8_t src_length[4];
+  uint8_t flags[4];
+  uint8_t reserved[28];
+} ZZ9KAudioLeaseSubmitPayload;
+
+/* bytes_consumed is the staging length the compositor accepted; a
+ * bounded lease may accept less than requested and the producer
+ * resubmits the remainder. */
+typedef struct ZZ9KAudioLeaseSubmitResultPayload {
+  uint8_t lease[4];
+  uint8_t bytes_consumed[4];
+  uint8_t flags[4];
+  uint8_t reserved[36];
+} ZZ9KAudioLeaseSubmitResultPayload;
+
+/* Surrender a lease; the compositor fades the slot out and returns it
+ * to ZZ9K_AUDIO_FABRIC_SLOT_FREE. Idempotent for an already-released
+ * lease handle. */
+typedef struct ZZ9KAudioLeaseReleasePayload {
+  uint8_t lease[4];
+  uint8_t flags[4];
+  uint8_t reserved[40];
+} ZZ9KAudioLeaseReleasePayload;
+
+/* Request one slot's fabric state; slot selects the compositor slot
+ * to report. */
+typedef struct ZZ9KAudioFabricStateGetPayload {
+  uint8_t slot[4];
+  uint8_t flags[4];
+  uint8_t reserved[40];
+} ZZ9KAudioFabricStateGetPayload;
+
+/* One framed, non-tearing snapshot of one slot: all words of a read
+ * carry the same generation; a differing generation across reads
+ * means the snapshot tore and must be retried. state is a
+ * ZZ9K_AUDIO_FABRIC_SLOT_* value; identity is the current producer
+ * (ZZ9K_AUDIO_METER_IDENTITY_UNKNOWN while free); lease is the active
+ * handle or ZZ9K_INVALID_HANDLE. cursor_write is the producer staging
+ * fill cursor and cursor_read the compositor consume cursor, both in
+ * staging bytes; underrun_count saturates, never wraps. Peak/clip
+ * telemetry is deliberately not reserved here; it joins as
+ * append-only words consuming the tail when the metering integration
+ * lands. */
+typedef struct ZZ9KAudioFabricStateResultPayload {
+  uint8_t slot[4];
+  uint8_t generation[4];
+  uint8_t slot_count[4];
+  uint8_t state[4];
+  uint8_t identity[4];
+  uint8_t lease[4];
+  uint8_t cursor_write[4];
+  uint8_t cursor_read[4];
+  uint8_t underrun_count[4];
+  uint8_t flags[4];
+  uint8_t reserved[8];
+} ZZ9KAudioFabricStateResultPayload;
+
 /* Decoder identity and immutable geometry are fixed at BEGIN. DECODE publishes
  * a decoder-owned frame to the active P96 overlay; client-visible bitmap
  * addresses and pitches are deliberately not part of this contract. */
@@ -1509,6 +1634,20 @@ typedef char ZZ9KAudioControlStateGetPayload_must_be_48_bytes[
     (sizeof(ZZ9KAudioControlStateGetPayload) == 48U) ? 1 : -1];
 typedef char ZZ9KAudioControlStateResultPayload_must_be_48_bytes[
     (sizeof(ZZ9KAudioControlStateResultPayload) == 48U) ? 1 : -1];
+typedef char ZZ9KAudioLeaseBeginPayload_must_be_48_bytes[
+    (sizeof(ZZ9KAudioLeaseBeginPayload) == 48U) ? 1 : -1];
+typedef char ZZ9KAudioLeaseBeginResultPayload_must_be_48_bytes[
+    (sizeof(ZZ9KAudioLeaseBeginResultPayload) == 48U) ? 1 : -1];
+typedef char ZZ9KAudioLeaseSubmitPayload_must_be_48_bytes[
+    (sizeof(ZZ9KAudioLeaseSubmitPayload) == 48U) ? 1 : -1];
+typedef char ZZ9KAudioLeaseSubmitResultPayload_must_be_48_bytes[
+    (sizeof(ZZ9KAudioLeaseSubmitResultPayload) == 48U) ? 1 : -1];
+typedef char ZZ9KAudioLeaseReleasePayload_must_be_48_bytes[
+    (sizeof(ZZ9KAudioLeaseReleasePayload) == 48U) ? 1 : -1];
+typedef char ZZ9KAudioFabricStateGetPayload_must_be_48_bytes[
+    (sizeof(ZZ9KAudioFabricStateGetPayload) == 48U) ? 1 : -1];
+typedef char ZZ9KAudioFabricStateResultPayload_must_be_48_bytes[
+    (sizeof(ZZ9KAudioFabricStateResultPayload) == 48U) ? 1 : -1];
 
 typedef union ZZ9KEntryPayload {
   uint8_t inline_data[48];

@@ -171,6 +171,10 @@ static int test_capability_names(void)
                    "audio-metering")) {
     return 13;
   }
+  if (!expect_name(zz9k_capability_name(ZZ9K_CAP_AUDIO_FABRIC),
+                   "audio-fabric")) {
+    return 47;
+  }
   if (zz9k_capability_name(0x80000000UL) != 0) {
     return 7;
   }
@@ -180,7 +184,7 @@ static int test_capability_names(void)
 
 static int test_capability_iteration(void)
 {
-  if (zz9k_known_capability_count() != 27U) {
+  if (zz9k_known_capability_count() != 28U) {
     return 1;
   }
   if (zz9k_known_capability_bit(0) != ZZ9K_CAP_MAILBOX) {
@@ -212,7 +216,8 @@ static int test_capability_iteration(void)
   if (zz9k_known_capability_bit(24) != ZZ9K_CAP_APERTURE_LAYOUT) return 12;
   if (zz9k_known_capability_bit(25) != ZZ9K_CAP_AUDIO_CONTROL) return 13;
   if (zz9k_known_capability_bit(26) != ZZ9K_CAP_AUDIO_METERING) return 14;
-  if (zz9k_known_capability_bit(27) != 0U) return 15;
+  if (zz9k_known_capability_bit(27) != ZZ9K_CAP_AUDIO_FABRIC) return 15;
+  if (zz9k_known_capability_bit(28) != 0U) return 16;
 
   return 0;
 }
@@ -354,6 +359,12 @@ static int test_service_flag_names(void)
                        ZZ9K_SERVICE_FLAG_AUDIO_CONTROL),
                    "audio-control")) {
     return 29;
+  }
+  if (!expect_name(zz9k_service_flag_name(
+                       ZZ9K_SERVICE_AUDIO,
+                       ZZ9K_SERVICE_FLAG_AUDIO_FABRIC),
+                   "audio-fabric")) {
+    return 47;
   }
   if (zz9k_service_flag_name(ZZ9K_SERVICE_AUDIO, 0x80000000UL) != 0) {
     return 19;
@@ -523,7 +534,7 @@ static int test_service_flag_iteration(void)
   if (zz9k_known_service_flag(ZZ9K_SERVICE_CODEC, 19) != 0U) {
     return 28;
   }
-  if (zz9k_known_service_flag_count(ZZ9K_SERVICE_AUDIO) != 10U) {
+  if (zz9k_known_service_flag_count(ZZ9K_SERVICE_AUDIO) != 11U) {
     return 20;
   }
   if (zz9k_known_service_flag(ZZ9K_SERVICE_AUDIO, 4) !=
@@ -550,8 +561,12 @@ static int test_service_flag_iteration(void)
       ZZ9K_SERVICE_FLAG_AUDIO_CONTROL) {
     return 26;
   }
-  if (zz9k_known_service_flag(ZZ9K_SERVICE_AUDIO, 10) != 0U) {
+  if (zz9k_known_service_flag(ZZ9K_SERVICE_AUDIO, 10) !=
+      ZZ9K_SERVICE_FLAG_AUDIO_FABRIC) {
     return 30;
+  }
+  if (zz9k_known_service_flag(ZZ9K_SERVICE_AUDIO, 11) != 0U) {
+    return 48;
   }
   if (zz9k_known_service_flag_count(ZZ9K_SERVICE_VIDEO) != 15U ||
       zz9k_known_service_flag(ZZ9K_SERVICE_VIDEO, 4) !=

@@ -94,7 +94,7 @@ static inline uint32_t zz9k_missing_service_flags(uint32_t available_flags,
 
 static inline uint32_t zz9k_known_capability_count(void)
 {
-  return 27U;
+  return 28U;
 }
 
 static inline uint32_t zz9k_known_capability_bit(uint32_t index)
@@ -154,6 +154,8 @@ static inline uint32_t zz9k_known_capability_bit(uint32_t index)
     return ZZ9K_CAP_AUDIO_CONTROL;
   case 26:
     return ZZ9K_CAP_AUDIO_METERING;
+  case 27:
+    return ZZ9K_CAP_AUDIO_FABRIC;
   default:
     return 0U;
   }
@@ -165,7 +167,7 @@ static inline uint32_t zz9k_known_service_flag_count(uint32_t service_id)
     return 16U;
   }
   if (service_id == ZZ9K_SERVICE_AUDIO) {
-    return 10U;
+    return 11U;
   }
   if (service_id == ZZ9K_SERVICE_CODEC) {
     return 19U;
@@ -280,6 +282,8 @@ static inline uint32_t zz9k_known_service_flag(uint32_t service_id,
       return ZZ9K_SERVICE_FLAG_AUDIO_MP3_STREAM;
     case 9:
       return ZZ9K_SERVICE_FLAG_AUDIO_CONTROL;
+    case 10:
+      return ZZ9K_SERVICE_FLAG_AUDIO_FABRIC;
     default:
       return 0U;
     }
@@ -393,6 +397,8 @@ static inline const char *zz9k_capability_name(uint32_t capability_bit)
     return "audio-control";
   case ZZ9K_CAP_AUDIO_METERING:
     return "audio-metering";
+  case ZZ9K_CAP_AUDIO_FABRIC:
+    return "audio-fabric";
   default:
     return 0;
   }
@@ -496,6 +502,8 @@ static inline const char *zz9k_service_flag_name(uint32_t service_id,
       return "mp3-stream";
     case ZZ9K_SERVICE_FLAG_AUDIO_CONTROL:
       return "audio-control";
+    case ZZ9K_SERVICE_FLAG_AUDIO_FABRIC:
+      return "audio-fabric";
     default:
       return 0;
     }

@@ -150,6 +150,40 @@ typedef char audio_control_paula_ceiling_is_append_only[
 typedef char audio_control_ax_ceiling_is_append_only[
   (offsetof(ZZ9KAudioControlStateResultPayload, ceiling_ax) == 28U) ? 1 : -1
 ];
+
+typedef char audio_lease_begin_payload_is_48_bytes[
+  (sizeof(ZZ9KAudioLeaseBeginPayload) == 48U) ? 1 : -1
+];
+
+typedef char audio_lease_begin_result_payload_is_48_bytes[
+  (sizeof(ZZ9KAudioLeaseBeginResultPayload) == 48U) ? 1 : -1
+];
+
+typedef char audio_lease_submit_payload_is_48_bytes[
+  (sizeof(ZZ9KAudioLeaseSubmitPayload) == 48U) ? 1 : -1
+];
+
+typedef char audio_lease_submit_result_payload_is_48_bytes[
+  (sizeof(ZZ9KAudioLeaseSubmitResultPayload) == 48U) ? 1 : -1
+];
+
+typedef char audio_lease_release_payload_is_48_bytes[
+  (sizeof(ZZ9KAudioLeaseReleasePayload) == 48U) ? 1 : -1
+];
+
+typedef char audio_fabric_state_get_payload_is_48_bytes[
+  (sizeof(ZZ9KAudioFabricStateGetPayload) == 48U) ? 1 : -1
+];
+
+typedef char audio_fabric_state_result_payload_is_48_bytes[
+  (sizeof(ZZ9KAudioFabricStateResultPayload) == 48U) ? 1 : -1
+];
+typedef char audio_fabric_state_underrun_is_append_only[
+  (offsetof(ZZ9KAudioFabricStateResultPayload, underrun_count) == 32U) ? 1 : -1
+];
+typedef char audio_fabric_state_tail_is_reserved[
+  (offsetof(ZZ9KAudioFabricStateResultPayload, reserved) == 40U) ? 1 : -1
+];
 typedef char crypto_hash_payload_is_48_bytes[
   (sizeof(ZZ9KCryptoHashPayload) == 48U) ? 1 : -1
 ];
@@ -317,6 +351,19 @@ int main(void)
   if (ZZ9K_AUDIO_SCENE_SAVE_BUSY != 4U) return 115;
   if (ZZ9K_OP_AUDIO_SCENE_SAVE != 0x050dU) return 116;
   if (ZZ9K_OP_AUDIO_CONTROL_STATE_GET != 0x050eU) return 117;
+  if (ZZ9K_OP_AUDIO_LEASE_BEGIN != 0x050fU) return 123;
+  if (ZZ9K_OP_AUDIO_LEASE_SUBMIT != 0x0510U) return 124;
+  if (ZZ9K_OP_AUDIO_LEASE_RELEASE != 0x0511U) return 125;
+  if (ZZ9K_OP_AUDIO_FABRIC_STATE_GET != 0x0512U) return 126;
+  if (ZZ9K_OP_AUDIO_LEASE_BEGIN != ZZ9K_SERVICE_AUDIO + 0x0fU) return 127;
+  if (ZZ9K_OP_AUDIO_FABRIC_STATE_GET != ZZ9K_SERVICE_AUDIO + 0x12U) {
+    return 128;
+  }
+  if (ZZ9K_CAP_AUDIO_FABRIC != (1U << 27)) return 129;
+  if (ZZ9K_SERVICE_FLAG_AUDIO_FABRIC != (1U << 22)) return 130;
+  if (ZZ9K_AUDIO_FABRIC_SLOT_FREE != 0U ||
+      ZZ9K_AUDIO_FABRIC_SLOT_LEASED != 1U ||
+      ZZ9K_AUDIO_FABRIC_SLOT_ACTIVE != 2U) return 131;
   if (ZZ9K_AUDIO_SCENE_PARAM_CALIBRATION != 17U) return 118;
   if (ZZ9K_AUDIO_CEILING_MIN != 1U ||
       ZZ9K_AUDIO_CEILING_MAX != 4095U) return 119;
