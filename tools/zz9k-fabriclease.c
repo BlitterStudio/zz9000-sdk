@@ -83,9 +83,9 @@ static int fabriclease_cancel_requested(void)
 #define ZZ9K_FABRICLEASE_BYTES_PER_SECOND \
   (ZZ9K_FABRICLEASE_RATE_HZ * ZZ9K_FABRICLEASE_FRAME_BYTES)
 #define ZZ9K_FABRICLEASE_DEFAULT_SECONDS 5U
-/* Keep-ahead stays below the 61,440-byte card-side lease ring. */
+/* Maintain up to 512 ms of reserve below the 640-ms card-side ring. */
 #define ZZ9K_FABRICLEASE_HIGH_WATER_BYTES \
-  (3U * ZZ9K_FABRICLEASE_STAGING_BYTES)
+  (6U * ZZ9K_FABRICLEASE_STAGING_BYTES)
 /* 48-sample sign blocks at 48 kHz ~= 500 Hz square bursts; integer
  * only (no libm on every toolchain) and phase-continuous across
  * chunks. */

@@ -49,7 +49,7 @@ static int g_failures;
 #define MOCK_BOARD_SIZE 0x01000000UL
 #define MOCK_RING_ENTRIES 8U
 #define MOCK_LEASE_HANDLE 0x21U /* generation 2, slot 1 */
-#define MOCK_LEASE_RING_CAPACITY 61440U
+#define MOCK_LEASE_RING_CAPACITY 122880U
 
 static void *mock_board_window(void)
 {
@@ -523,6 +523,15 @@ static int test_staging_horizon(void)
   return ZZ9K_FABRICLEASE_STAGING_BYTES >= (4U * 3840U) ? 0 : 1;
 }
 
+static int test_stress_reserve(void)
+{
+  return MOCK_LEASE_RING_CAPACITY == 122880U &&
+         ZZ9K_FABRICLEASE_HIGH_WATER_BYTES == 98304U &&
+         ZZ9K_FABRICLEASE_HIGH_WATER_BYTES < MOCK_LEASE_RING_CAPACITY
+             ? 0
+             : 1;
+}
+
 /* ---- the full begin/submit/poll/release cycle against the mock ---- */
 
 static int run_session(uint32_t caps, uint16_t zorro, uint32_t seconds,
@@ -712,6 +721,8 @@ int main(void)
   printf("fabriclease_contract_test: builder/dispatcher/decline checks\n");
   r = test_staging_horizon();
   CHECK(r == 0, "staging covers at least four TX periods");
+  r = test_stress_reserve();
+  CHECK(r == 0, "client keeps 512-ms reserve below 640-ms ring");
 
   r = test_builders();
   CHECK(r == 0, "builders");
