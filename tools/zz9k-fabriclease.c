@@ -16,6 +16,7 @@
 #include "zz9k/audio.h"
 #include "zz9k/caps.h"
 #include "zz9k/host.h"
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,6 +26,7 @@
 #define ZZ9K_FABRICLEASE_AMIGA 1
 #include <exec/types.h>
 #include <proto/dos.h>
+#include <proto/exec.h>
 #endif
 
 /* Set by the contract test, which compiles this file directly and
@@ -32,6 +34,43 @@
 #ifndef ZZ9K_FABRICLEASE_NO_MAIN
 #define ZZ9K_FABRICLEASE_NO_MAIN 0
 #endif
+
+typedef int (*ZZ9KFabricLeaseCancelHook)(void *user);
+
+static ZZ9KFabricLeaseCancelHook g_cancel_hook;
+static void *g_cancel_user;
+
+#if ZZ9K_FABRICLEASE_AMIGA
+static volatile sig_atomic_t g_ctrl_c_requested;
+
+static void fabriclease_sigint(int sig)
+{
+  (void)sig;
+  g_ctrl_c_requested = 1;
+}
+#endif
+
+void zz9k_fabriclease_set_cancel_hook_for_test(
+    ZZ9KFabricLeaseCancelHook hook, void *user)
+{
+  g_cancel_hook = hook;
+  g_cancel_user = user;
+}
+
+static int fabriclease_cancel_requested(void)
+{
+  if (g_cancel_hook && g_cancel_hook(g_cancel_user)) {
+    return 1;
+  }
+#if ZZ9K_FABRICLEASE_AMIGA
+  if (g_ctrl_c_requested ||
+      (SetSignal(0L, SIGBREAKF_CTRL_C) & SIGBREAKF_CTRL_C) != 0U) {
+    g_ctrl_c_requested = 1;
+    return 1;
+  }
+#endif
+  return 0;
+}
 
 /* HOST_WINDOW staging: four complete 20-ms periods plus margin. A
  * 4096-byte (21.3-ms) chunk left only 1.3 ms for tone generation and
@@ -180,6 +219,9 @@ int zz9k_fabriclease_session(ZZ9KContext *ctx,
       options->slot < 1U || options->slot > 2U) {
     return ZZ9K_STATUS_BAD_REQUEST;
   }
+  if (fabriclease_cancel_requested()) {
+    return ZZ9K_STATUS_CANCELLED;
+  }
   target_bytes = options->seconds == 0U
                      ? (uint64_t)ZZ9K_FABRICLEASE_STAGING_BYTES
                      : (uint64_t)options->seconds *
@@ -227,6 +269,10 @@ int zz9k_fabriclease_session(ZZ9KContext *ctx,
     uint32_t length = chunk_bytes;
     uint32_t wait_polls = 0U;
 
+    if (fabriclease_cancel_requested()) {
+      status = ZZ9K_STATUS_CANCELLED;
+      goto out;
+    }
     if (length > (uint32_t)(target_bytes - submitted)) {
       length = (uint32_t)(target_bytes - submitted);
       length &= ~(uint32_t)(ZZ9K_FABRICLEASE_FRAME_BYTES - 1U);
@@ -235,13 +281,15 @@ int zz9k_fabriclease_session(ZZ9KContext *ctx,
       }
     }
 
-    /* Keep-ahead (the three-buffer discipline): while the compositor
-     * owes more than the high water, let playback drain before the
-     * next chunk is staged. Every 16th poll prints the per-slot
-     * telemetry the run is meant to demonstrate. */
+    /* Keep-ahead: let playback drain while the card owes more than
+     * the high-water limit. */
     for (;;) {
       uint32_t owed;
 
+      if (fabriclease_cancel_requested()) {
+        status = ZZ9K_STATUS_CANCELLED;
+        goto out;
+      }
       if (!zz9k_audio_build_fabric_state_desc(
               &state_desc, options->slot, 0U)) {
         status = ZZ9K_STATUS_BAD_REQUEST;
@@ -272,10 +320,18 @@ int zz9k_fabriclease_session(ZZ9KContext *ctx,
         goto out;
       }
       fabriclease_wait();
+      if (fabriclease_cancel_requested()) {
+        status = ZZ9K_STATUS_CANCELLED;
+        goto out;
+      }
     }
 
     fabriclease_fill_chunk(staging.data, submitted / 4U, length);
     while (offset < length) {
+      if (fabriclease_cancel_requested()) {
+        status = ZZ9K_STATUS_CANCELLED;
+        goto out;
+      }
       if (!zz9k_audio_build_lease_submit_desc(&submit, granted.lease,
                                               staging.handle, offset,
                                               length - offset, 0U)) {
@@ -287,6 +343,10 @@ int zz9k_fabriclease_session(ZZ9KContext *ctx,
         /* Ring full: the staged chunk stays valid, retry after a
          * period of playback (one mailbox op per retry). */
         fabriclease_wait();
+        if (fabriclease_cancel_requested()) {
+          status = ZZ9K_STATUS_CANCELLED;
+          goto out;
+        }
         continue;
       }
       if (status != ZZ9K_STATUS_OK) {
@@ -303,6 +363,10 @@ int zz9k_fabriclease_session(ZZ9KContext *ctx,
     uint32_t drain_polls = 0U;
 
     for (;;) {
+      if (fabriclease_cancel_requested()) {
+        status = ZZ9K_STATUS_CANCELLED;
+        goto out;
+      }
       if (!zz9k_audio_build_fabric_state_desc(
               &state_desc, options->slot, 0U)) {
         status = ZZ9K_STATUS_BAD_REQUEST;
@@ -321,6 +385,10 @@ int zz9k_fabriclease_session(ZZ9KContext *ctx,
         goto out;
       }
       fabriclease_wait();
+      if (fabriclease_cancel_requested()) {
+        status = ZZ9K_STATUS_CANCELLED;
+        goto out;
+      }
     }
   }
   status = fabriclease_print_state(ctx, options->slot);
@@ -329,7 +397,7 @@ out:
   if (zz9k_audio_lease_release(ctx, granted.lease, 0U) !=
       ZZ9K_STATUS_OK) {
     printf("fabriclease: lease release failed\n");
-    if (status == ZZ9K_STATUS_OK) {
+    if (status == ZZ9K_STATUS_OK || status == ZZ9K_STATUS_CANCELLED) {
       status = ZZ9K_STATUS_INTERNAL_ERROR;
     }
   }
@@ -358,6 +426,9 @@ int main(int argc, char **argv)
   int status;
   int i;
   int force = 0;
+#if ZZ9K_FABRICLEASE_AMIGA
+  (void)signal(SIGINT, fabriclease_sigint);
+#endif
 
   memset(&options, 0, sizeof(options));
   options.seconds = ZZ9K_FABRICLEASE_DEFAULT_SECONDS;
@@ -428,6 +499,10 @@ int main(int argc, char **argv)
 
   status = zz9k_fabriclease_session(ctx, &options);
   zz9k_close(ctx);
+  if (status == ZZ9K_STATUS_CANCELLED) {
+    printf("zz9k-fabriclease: cancelled; lease and staging released\n");
+    return 0;
+  }
   if (status != ZZ9K_STATUS_OK) {
     printf("zz9k-fabriclease: session failed: %s (%d)\n",
            zz9k_status_name(status), status);

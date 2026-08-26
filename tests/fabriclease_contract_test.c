@@ -509,6 +509,12 @@ static int test_gate(void)
   return 0;
 }
 
+static int cancel_after_lease_begin(void *user)
+{
+  (void)user;
+  return g_mock.begin_calls != 0;
+}
+
 static int test_staging_horizon(void)
 {
   /* The real Amiga must perform tone generation plus two mailbox calls
@@ -675,6 +681,30 @@ static int test_session_multichunk_keepahead(void)
   return 0;
 }
 
+static int test_ctrl_c_releases_lease(void)
+{
+  void *mapping = mock_board_window();
+  int status = 0;
+  int rc;
+
+  if (!mapping)
+    return 1;
+  zz9k_fabriclease_set_cancel_hook_for_test(cancel_after_lease_begin, 0);
+  rc = run_session(ZZ9K_CAP_AUDIO_FABRIC, 3U, 60U, 128U, 1U, 0,
+                   &status);
+  zz9k_fabriclease_set_cancel_hook_for_test(0, 0);
+  if (rc != 0 || status != ZZ9K_STATUS_CANCELLED) {
+    mock_board_window_free(mapping);
+    return 2;
+  }
+  if (g_mock.release_calls != 1 || g_mock.free_calls != 1) {
+    mock_board_window_free(mapping);
+    return 3;
+  }
+  mock_board_window_free(mapping);
+  return 0;
+}
+
 int main(void)
 {
   int r;
@@ -700,6 +730,8 @@ int main(void)
   r = test_session_multichunk_keepahead();
   CHECK(r == 0, "one-second multi-chunk keep-ahead and drain");
 
+  r = test_ctrl_c_releases_lease();
+  CHECK(r == 0, "Ctrl-C cancellation releases lease and staging");
   if (g_failures != 0) {
     printf("fabriclease_contract_test: %d failure(s)\n", g_failures);
     return 1;
