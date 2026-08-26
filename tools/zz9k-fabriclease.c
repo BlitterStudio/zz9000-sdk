@@ -33,18 +33,20 @@
 #define ZZ9K_FABRICLEASE_NO_MAIN 0
 #endif
 
-/* HOST_WINDOW staging: one submit chunk (MHI's feeder discipline --
- * small on purpose so one mailbox op moves one bounded chunk). */
-#define ZZ9K_FABRICLEASE_STAGING_BYTES 4096U
+/* HOST_WINDOW staging: four complete 20-ms periods plus margin. A
+ * 4096-byte (21.3-ms) chunk left only 1.3 ms for tone generation and
+ * two mailbox round trips on the real Amiga, causing repeated lease
+ * underruns. 16 KiB preloads 85.3 ms before first activation and cuts
+ * the sustained submit cadence to about 11.7 calls/s. */
+#define ZZ9K_FABRICLEASE_STAGING_BYTES 16384U
 #define ZZ9K_FABRICLEASE_RATE_HZ 48000U
 #define ZZ9K_FABRICLEASE_FRAME_BYTES 4U
 #define ZZ9K_FABRICLEASE_BYTES_PER_SECOND \
   (ZZ9K_FABRICLEASE_RATE_HZ * ZZ9K_FABRICLEASE_FRAME_BYTES)
 #define ZZ9K_FABRICLEASE_DEFAULT_SECONDS 5U
-/* Keep-ahead: stop feeding while the compositor owes us more than
- * this many staged bytes (the card-side ring is small), polling
- * state until playback drains some. */
-#define ZZ9K_FABRICLEASE_HIGH_WATER_BYTES (3U * ZZ9K_FABRICLEASE_STAGING_BYTES)
+/* Keep-ahead stays below the 61,440-byte card-side lease ring. */
+#define ZZ9K_FABRICLEASE_HIGH_WATER_BYTES \
+  (3U * ZZ9K_FABRICLEASE_STAGING_BYTES)
 /* 48-sample sign blocks at 48 kHz ~= 500 Hz square bursts; integer
  * only (no libm on every toolchain) and phase-continuous across
  * chunks. */

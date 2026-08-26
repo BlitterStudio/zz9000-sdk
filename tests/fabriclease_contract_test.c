@@ -235,6 +235,16 @@ static void mock_respond(void)
       (void)mock_complete(req, ZZ9K_STATUS_BUSY, 0U);
       break;
     }
+    if (space == 0U) {
+      /* Real playback advances while the Amiga waits one DOS tick
+       * after BUSY. Model one 20-ms period for the next retry. */
+      uint32_t owed = g_mock.written - g_mock.read;
+      uint32_t drained = owed < 3072U ? owed : 3072U;
+
+      g_mock.read += drained;
+      (void)mock_complete(req, ZZ9K_STATUS_BUSY, 0U);
+      break;
+    }
     consumed = length < space ? length : space;
     g_mock.written += consumed;
     reply = mock_complete(req, ZZ9K_STATUS_OK,
@@ -499,6 +509,14 @@ static int test_gate(void)
   return 0;
 }
 
+static int test_staging_horizon(void)
+{
+  /* The real Amiga must perform tone generation plus two mailbox calls
+   * before the next submit. One 20-ms period leaves no practical margin;
+   * require at least four complete periods before a lease goes live. */
+  return ZZ9K_FABRICLEASE_STAGING_BYTES >= (4U * 3840U) ? 0 : 1;
+}
+
 /* ---- the full begin/submit/poll/release cycle against the mock ---- */
 
 static int run_session(uint32_t caps, uint16_t zorro, uint32_t seconds,
@@ -566,7 +584,7 @@ static int test_session_walkthrough(void)
    * only, bounded by the staging chunk. */
   if (g_mock.submit_handle != 9U || g_mock.submit_lease != MOCK_LEASE_HANDLE ||
       g_mock.submit_length_bad || g_mock.submit_length_max == 0U ||
-      g_mock.submit_length_max > 4096U ||
+      g_mock.submit_length_max > ZZ9K_FABRICLEASE_STAGING_BYTES ||
       (g_mock.submit_length_max & 3U) != 0U) {
     return 6;
   }
@@ -633,11 +651,37 @@ static int test_session_slot2(void)
   return 0;
 }
 
+static int test_session_multichunk_keepahead(void)
+{
+  void *mapping = mock_board_window();
+  int status = 0;
+  int rc;
+
+  if (!mapping)
+    return 1;
+  rc = run_session(ZZ9K_CAP_AUDIO_FABRIC, 3U, 1U, 128U, 1U, 0,
+                   &status);
+  if (rc != 0 || status != ZZ9K_STATUS_OK) {
+    mock_board_window_free(mapping);
+    return 2;
+  }
+  if (g_mock.submit_calls < 12 || g_mock.busy_submits != 1 ||
+      g_mock.written != ZZ9K_FABRICLEASE_BYTES_PER_SECOND ||
+      g_mock.read != g_mock.written || g_mock.release_calls != 1) {
+    mock_board_window_free(mapping);
+    return 3;
+  }
+  mock_board_window_free(mapping);
+  return 0;
+}
+
 int main(void)
 {
   int r;
 
   printf("fabriclease_contract_test: builder/dispatcher/decline checks\n");
+  r = test_staging_horizon();
+  CHECK(r == 0, "staging covers at least four TX periods");
 
   r = test_builders();
   CHECK(r == 0, "builders");
@@ -653,6 +697,8 @@ int main(void)
   CHECK(r == 0, "session fails closed on malformed begin");
   r = test_session_slot2();
   CHECK(r == 0, "slot 2 session for B4");
+  r = test_session_multichunk_keepahead();
+  CHECK(r == 0, "one-second multi-chunk keep-ahead and drain");
 
   if (g_failures != 0) {
     printf("fabriclease_contract_test: %d failure(s)\n", g_failures);
