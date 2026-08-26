@@ -4,9 +4,10 @@
  * Exercises the fabric lease plane end to end: the capability gate
  * (mixed-version fallback -- old firmware declines cleanly), the
  * Zorro 3 first gating, HOST_WINDOW staging allocation, LEASE_BEGIN
- * on slot 1, a generated 48 kHz stereo S16 tone fed in submit-sized
- * chunks with partial-accept retry, FABRIC_STATE_GET polling,
- * LEASE_RELEASE and a clean exit. A proof client, not a player.
+ * on a caller-selected slot (1 by default; slot 2 for the B4
+ * instrument build), a generated 48 kHz stereo S16 tone fed in
+ * submit-sized chunks with partial-accept retry, FABRIC_STATE_GET
+ * polling, LEASE_RELEASE and a clean exit. A proof client, not a player.
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -59,8 +60,8 @@ typedef enum ZZ9KFabricLeaseStatus {
 typedef struct ZZ9KFabricLeaseOptions {
   uint32_t seconds; /* bounded run length; 0 runs one chunk */
   uint32_t gain;    /* requested 0..255 producer scale */
+  uint32_t slot;    /* fabric lease slot 1 or 2 */
 } ZZ9KFabricLeaseOptions;
-
 const char *zz9k_fabriclease_status_name(int status)
 {
   switch (status) {
@@ -173,7 +174,8 @@ int zz9k_fabriclease_session(ZZ9KContext *ctx,
   uint32_t state_polls = 0U;
   int status;
 
-  if (ctx == 0 || options == 0 || options->gain > 255U) {
+  if (ctx == 0 || options == 0 || options->gain > 255U ||
+      options->slot < 1U || options->slot > 2U) {
     return ZZ9K_STATUS_BAD_REQUEST;
   }
   target_bytes = options->seconds == 0U
@@ -196,9 +198,9 @@ int zz9k_fabriclease_session(ZZ9KContext *ctx,
                     : ZZ9K_FABRICLEASE_STAGING_BYTES;
   chunk_bytes &= ~(uint32_t)(ZZ9K_FABRICLEASE_FRAME_BYTES - 1U);
 
-  if (!zz9k_audio_build_lease_begin_desc(&begin, 1U,
-                                         ZZ9K_AUDIO_METER_IDENTITY_SDK_STREAM,
-                                         options->gain, 0U)) {
+  if (!zz9k_audio_build_lease_begin_desc(
+          &begin, options->slot, ZZ9K_AUDIO_METER_IDENTITY_SDK_STREAM,
+          options->gain, 0U)) {
     zz9k_free_shared(ctx, staging.handle);
     return ZZ9K_STATUS_BAD_REQUEST;
   }
@@ -238,7 +240,8 @@ int zz9k_fabriclease_session(ZZ9KContext *ctx,
     for (;;) {
       uint32_t owed;
 
-      if (!zz9k_audio_build_fabric_state_desc(&state_desc, 1U, 0U)) {
+      if (!zz9k_audio_build_fabric_state_desc(
+              &state_desc, options->slot, 0U)) {
         status = ZZ9K_STATUS_BAD_REQUEST;
         goto out;
       }
@@ -298,7 +301,8 @@ int zz9k_fabriclease_session(ZZ9KContext *ctx,
     uint32_t drain_polls = 0U;
 
     for (;;) {
-      if (!zz9k_audio_build_fabric_state_desc(&state_desc, 1U, 0U)) {
+      if (!zz9k_audio_build_fabric_state_desc(
+              &state_desc, options->slot, 0U)) {
         status = ZZ9K_STATUS_BAD_REQUEST;
         goto out;
       }
@@ -317,7 +321,7 @@ int zz9k_fabriclease_session(ZZ9KContext *ctx,
       fabriclease_wait();
     }
   }
-  status = fabriclease_print_state(ctx, 1U);
+  status = fabriclease_print_state(ctx, options->slot);
 
 out:
   if (zz9k_audio_lease_release(ctx, granted.lease, 0U) !=
@@ -327,7 +331,7 @@ out:
       status = ZZ9K_STATUS_INTERNAL_ERROR;
     }
   }
-  if (fabriclease_print_state(ctx, 1U) == ZZ9K_STATUS_OK &&
+  if (fabriclease_print_state(ctx, options->slot) == ZZ9K_STATUS_OK &&
       status == ZZ9K_STATUS_OK) {
     printf("fabriclease: released after %lu bytes (%lu confirmed)\n",
            (unsigned long)submitted, (unsigned long)confirmed);
@@ -339,7 +343,8 @@ out:
 #if !ZZ9K_FABRICLEASE_NO_MAIN
 static void print_usage(void)
 {
-  printf("usage: zz9k-fabriclease [--seconds N] [--gain 0..255]\n");
+  printf("usage: zz9k-fabriclease [--seconds N] [--gain 0..255] "
+         "[--slot 1|2]\n");
 }
 
 int main(int argc, char **argv)
@@ -354,18 +359,21 @@ int main(int argc, char **argv)
   memset(&options, 0, sizeof(options));
   options.seconds = ZZ9K_FABRICLEASE_DEFAULT_SECONDS;
   options.gain = 128U;
+  options.slot = 1U;
 
   for (i = 1; i < argc; i++) {
     if (strcmp(argv[i], "--seconds") == 0 && i + 1 < argc) {
       options.seconds = (uint32_t)strtoul(argv[++i], 0, 10);
     } else if (strcmp(argv[i], "--gain") == 0 && i + 1 < argc) {
       options.gain = (uint32_t)strtoul(argv[++i], 0, 10);
+    } else if (strcmp(argv[i], "--slot") == 0 && i + 1 < argc) {
+      options.slot = (uint32_t)strtoul(argv[++i], 0, 10);
     } else {
       print_usage();
       return 1;
     }
   }
-  if (options.gain > 255U) {
+  if (options.gain > 255U || options.slot < 1U || options.slot > 2U) {
     print_usage();
     return 1;
   }

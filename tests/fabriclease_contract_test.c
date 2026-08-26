@@ -206,7 +206,7 @@ static void mock_respond(void)
     g_mock.begin_gain = mock_req_word(req, 2);
     reply = mock_complete(req, ZZ9K_STATUS_OK,
                           sizeof(ZZ9KAudioLeaseBeginResultPayload));
-    mock_word(reply, 0, MOCK_LEASE_HANDLE);
+    mock_word(reply, 0, (2U << 4) | g_mock.begin_slot);
     mock_word(reply, 1, g_mock.begin_slot);
     mock_word(reply, 2, 2U); /* generation: epoch of the handle */
     mock_word(reply, 3, g_mock.corrupt_begin
@@ -502,7 +502,8 @@ static int test_gate(void)
 /* ---- the full begin/submit/poll/release cycle against the mock ---- */
 
 static int run_session(uint32_t caps, uint16_t zorro, uint32_t seconds,
-                       uint32_t gain, int corrupt_begin, int *session_status)
+                       uint32_t gain, uint32_t slot, int corrupt_begin,
+                       int *session_status)
 {
   ZZ9KContext *ctx = 0;
   ZZ9KFabricLeaseOptions options;
@@ -523,6 +524,7 @@ static int run_session(uint32_t caps, uint16_t zorro, uint32_t seconds,
   memset(&options, 0, sizeof(options));
   options.seconds = seconds;
   options.gain = gain;
+  options.slot = slot;
   *session_status = zz9k_fabriclease_session(ctx, &options);
   zz9k_close(ctx);
   zz9k_set_idle_hook_for_test(0);
@@ -539,7 +541,7 @@ static int test_session_walkthrough(void)
   if (!mapping) {
     return 1;
   }
-  rc = run_session(ZZ9K_CAP_AUDIO_FABRIC, 3U, 0U, 200U, 0, &status);
+  rc = run_session(ZZ9K_CAP_AUDIO_FABRIC, 3U, 0U, 200U, 1U, 0, &status);
   if (rc != 0) {
     return 2;
   }
@@ -592,7 +594,7 @@ static int test_session_rejects_malformed_begin(void)
   int status = 0;
   int rc;
 
-  rc = run_session(ZZ9K_CAP_AUDIO_FABRIC, 3U, 0U, 200U, 1, &status);
+  rc = run_session(ZZ9K_CAP_AUDIO_FABRIC, 3U, 0U, 200U, 1U, 1, &status);
   if (rc != 0) {
     return 1;
   }
@@ -605,6 +607,29 @@ static int test_session_rejects_malformed_begin(void)
   if (g_mock.release_calls != 0 || g_mock.free_calls != 1) {
     return 3;
   }
+  return 0;
+}
+
+static int test_session_slot2(void)
+{
+  void *mapping = mock_board_window();
+  int status = 0;
+  int rc;
+
+  if (!mapping)
+    return 1;
+  rc = run_session(ZZ9K_CAP_AUDIO_FABRIC, 3U, 0U, 128U, 2U, 0,
+                   &status);
+  if (rc != 0 || status != ZZ9K_STATUS_OK) {
+    mock_board_window_free(mapping);
+    return 2;
+  }
+  if (g_mock.begin_slot != 2U || g_mock.submit_lease != 0x22U ||
+      g_mock.release_calls != 1) {
+    mock_board_window_free(mapping);
+    return 3;
+  }
+  mock_board_window_free(mapping);
   return 0;
 }
 
@@ -626,6 +651,8 @@ int main(void)
   CHECK(r == 0, "session walkthrough");
   r = test_session_rejects_malformed_begin();
   CHECK(r == 0, "session fails closed on malformed begin");
+  r = test_session_slot2();
+  CHECK(r == 0, "slot 2 session for B4");
 
   if (g_failures != 0) {
     printf("fabriclease_contract_test: %d failure(s)\n", g_failures);
