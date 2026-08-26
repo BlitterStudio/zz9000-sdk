@@ -69,6 +69,7 @@ m68k-amigaos-gcc $LIBCFLAGS examples/amiga-crypto/zz9k-crypto-demo.c \
   -o build/zz9k-crypto-demo
 m68k-amigaos-gcc $CFLAGS build/m68k/zz9k_host.o tools/zz9k-info.c -o build/zz9k-info
 m68k-amigaos-gcc $CFLAGS build/m68k/zz9k_host.o tools/zz9k-services.c -o build/zz9k-services
+m68k-amigaos-gcc $CFLAGS build/m68k/zz9k_host.o tools/zz9k-fabriclease.c -o build/zz9k-fabriclease
 m68k-amigaos-gcc $CFLAGS build/m68k/zz9k_host.o tools/zz9k-bench.c -o build/zz9k-bench
 m68k-amigaos-gcc $CFLAGS build/m68k/zz9k_host.o tools/zz9k-hash.c -o build/zz9k-hash
 m68k-amigaos-gcc $CFLAGS build/m68k/zz9k_host.o tools/zz9k-inflate.c -o build/zz9k-inflate

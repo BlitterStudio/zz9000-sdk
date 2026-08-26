@@ -170,7 +170,7 @@ int zz9k_fabriclease_session(ZZ9KContext *ctx,
   uint64_t submitted = 0U;
   uint64_t confirmed = 0U;
   uint32_t chunk_bytes;
-  uint32_t polls = 0U;
+  uint32_t state_polls = 0U;
   int status;
 
   if (ctx == 0 || options == 0 || options->gain > 255U) {
@@ -221,6 +221,7 @@ int zz9k_fabriclease_session(ZZ9KContext *ctx,
   while (submitted < target_bytes) {
     uint32_t offset = 0U;
     uint32_t length = chunk_bytes;
+    uint32_t wait_polls = 0U;
 
     if (length > (uint32_t)(target_bytes - submitted)) {
       length = (uint32_t)(target_bytes - submitted);
@@ -246,7 +247,7 @@ int zz9k_fabriclease_session(ZZ9KContext *ctx,
         goto out;
       }
       confirmed = state.cursor_read;
-      if ((polls & 15U) == 0U) {
+      if ((state_polls & 15U) == 0U) {
         printf("fabric: slot %lu state=%lu gen=%lu w=%lu r=%lu "
                "underruns=%lu peak=0x%06lx clip=%lu\n",
                (unsigned long)state.slot, (unsigned long)state.state,
@@ -256,12 +257,12 @@ int zz9k_fabriclease_session(ZZ9KContext *ctx,
                (unsigned long)state.underrun_count,
                (unsigned long)state.peak, (unsigned long)state.clip);
       }
-      polls++;
+      state_polls++;
       owed = (uint32_t)(state.cursor_write - state.cursor_read);
       if (owed < ZZ9K_FABRICLEASE_HIGH_WATER_BYTES) {
         break;
       }
-      if (polls > 10000U) {
+      if (++wait_polls > 10000U) {
         status = ZZ9K_STATUS_TIMEOUT;
         goto out;
       }
@@ -293,20 +294,28 @@ int zz9k_fabriclease_session(ZZ9KContext *ctx,
 
   /* Bounded drain: wait for the compositor to consume what it owes
    * (a proof client leaves no staged bytes behind). */
-  for (;;) {
-    if (!zz9k_audio_build_fabric_state_desc(&state_desc, 1U, 0U)) {
-      status = ZZ9K_STATUS_BAD_REQUEST;
-      goto out;
+  {
+    uint32_t drain_polls = 0U;
+
+    for (;;) {
+      if (!zz9k_audio_build_fabric_state_desc(&state_desc, 1U, 0U)) {
+        status = ZZ9K_STATUS_BAD_REQUEST;
+        goto out;
+      }
+      status = zz9k_audio_fabric_state_get(ctx, &state_desc, &state);
+      if (status != ZZ9K_STATUS_OK) {
+        goto out;
+      }
+      confirmed = state.cursor_read;
+      if (confirmed >= submitted) {
+        break;
+      }
+      if (++drain_polls > 10000U) {
+        status = ZZ9K_STATUS_TIMEOUT;
+        goto out;
+      }
+      fabriclease_wait();
     }
-    status = zz9k_audio_fabric_state_get(ctx, &state_desc, &state);
-    if (status != ZZ9K_STATUS_OK) {
-      goto out;
-    }
-    confirmed = state.cursor_read;
-    if (confirmed >= submitted || ++polls > 10000U) {
-      break;
-    }
-    fabriclease_wait();
   }
   status = fabriclease_print_state(ctx, 1U);
 

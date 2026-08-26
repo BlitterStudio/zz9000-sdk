@@ -583,8 +583,9 @@ static inline int zz9k_reply_audio_lease_begin_result(
    * carries its slot in the low nibble; the applied gain is the
    * composed 0..255 scale. */
   if (result->lease == 0U || result->lease == ZZ9K_INVALID_HANDLE ||
-      (result->lease & 0x0FU) != result->slot || result->slot > 2U ||
-      result->gain_applied > 255U ||
+      (result->lease & 0x0FU) != result->slot ||
+      (result->lease >> 4) != result->generation ||
+      result->slot > 2U || result->gain_applied > 255U ||
       (result->flags & ~ZZ9K_AUDIO_LEASE_RESULT_GAIN_BOUNDED) != 0U) {
     memset(result, 0, sizeof(*result));
     return ZZ9K_STATUS_INTERNAL_ERROR;
@@ -617,6 +618,7 @@ static inline int zz9k_reply_audio_lease_submit_result(
   result->flags = zz9k_get_be32(&payload[8]);
 
   if (result->lease == 0U || result->lease == ZZ9K_INVALID_HANDLE ||
+      result->bytes_consumed == 0U ||
       (result->bytes_consumed & 3U) != 0U || result->flags != 0U) {
     memset(result, 0, sizeof(*result));
     return ZZ9K_STATUS_INTERNAL_ERROR;
