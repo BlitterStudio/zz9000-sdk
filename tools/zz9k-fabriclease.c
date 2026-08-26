@@ -344,7 +344,7 @@ out:
 static void print_usage(void)
 {
   printf("usage: zz9k-fabriclease [--seconds N] [--gain 0..255] "
-         "[--slot 1|2]\n");
+         "[--slot 1|2] [--force]\n");
 }
 
 int main(int argc, char **argv)
@@ -355,6 +355,7 @@ int main(int argc, char **argv)
   ZZ9KCaps caps;
   int status;
   int i;
+  int force = 0;
 
   memset(&options, 0, sizeof(options));
   options.seconds = ZZ9K_FABRICLEASE_DEFAULT_SECONDS;
@@ -368,6 +369,8 @@ int main(int argc, char **argv)
       options.gain = (uint32_t)strtoul(argv[++i], 0, 10);
     } else if (strcmp(argv[i], "--slot") == 0 && i + 1 < argc) {
       options.slot = (uint32_t)strtoul(argv[++i], 0, 10);
+    } else if (strcmp(argv[i], "--force") == 0) {
+      force = 1;
     } else {
       print_usage();
       return 1;
@@ -399,11 +402,21 @@ int main(int argc, char **argv)
     status = zz9k_fabriclease_gate(&board, caps.capability_bits);
   }
   if (status == ZZ9K_FABRICLEASE_DECLINE_NO_FABRIC) {
-    /* Mixed-version fallback (R13/AE5): a clean, documented decline,
-     * not an error. */
-    printf("zz9k-fabriclease: %s\n", zz9k_fabriclease_status_name(status));
-    zz9k_close(ctx);
-    return 0;
+    if (!force) {
+      /* Mixed-version fallback (R13/AE5): a clean, documented decline,
+       * not an error. */
+      printf("zz9k-fabriclease: %s\n",
+             zz9k_fabriclease_status_name(status));
+      zz9k_close(ctx);
+      return 0;
+    }
+    /* Qualification-only path: instrument firmware implements the
+     * opcodes but deliberately withholds the capability until this
+     * hardware session passes. Unsupported firmware still fails the
+     * first lease opcode cleanly. */
+    printf("zz9k-fabriclease: forcing unadvertised fabric opcodes "
+           "(hardware qualification only)\n");
+    status = ZZ9K_FABRICLEASE_OK;
   }
   if (status != ZZ9K_FABRICLEASE_OK) {
     printf("zz9k-fabriclease: %s (%d)\n", zz9k_status_name(status), status);
