@@ -72,21 +72,19 @@ static int fabriclease_cancel_requested(void)
   return 0;
 }
 
-/* Zorro III HOST_WINDOW staging: sixteen complete 20-ms periods plus
- * margin. Two proof clients serialize state/submit calls through the
- * mailbox; the old 16-KiB chunk left each at only about 90 ms of measured
- * reserve and both streams audibly starved. A 64-KiB first submit covers
- * 341 ms before activation and cuts each sustained data-submit cadence to
- * about 2.9 calls/s. */
+/* Zorro III HOST_WINDOW staging: the first 64-KiB submit covers 341 ms before
+ * activation. Two proof clients serialize state/submit calls through the
+ * mailbox, so sustained refills use 32-KiB chunks and start below 80 KiB:
+ * 427 ms remain at the boundary, and the complete refill still fits in the
+ * 122,880-byte card-side ring. */
 #define ZZ9K_FABRICLEASE_STAGING_BYTES 65536U
+#define ZZ9K_FABRICLEASE_REFILL_BYTES 32768U
 #define ZZ9K_FABRICLEASE_RATE_HZ 48000U
 #define ZZ9K_FABRICLEASE_FRAME_BYTES 4U
 #define ZZ9K_FABRICLEASE_BYTES_PER_SECOND \
   (ZZ9K_FABRICLEASE_RATE_HZ * ZZ9K_FABRICLEASE_FRAME_BYTES)
 #define ZZ9K_FABRICLEASE_DEFAULT_SECONDS 5U
-/* Refill below 256 ms. At this boundary a complete 64-KiB chunk still fits
- * in the 122,880-byte card-side ring without a partial submit. */
-#define ZZ9K_FABRICLEASE_HIGH_WATER_BYTES 49152U
+#define ZZ9K_FABRICLEASE_HIGH_WATER_BYTES 81920U
 /* 48-sample sign blocks at 48 kHz ~= 500 Hz square bursts; integer
  * only (no libm on every toolchain) and phase-continuous across
  * chunks. */
@@ -264,10 +262,13 @@ int zz9k_fabriclease_session(ZZ9KContext *ctx,
            (unsigned long)options->gain);
   }
   printf("\n");
-
   while (submitted < target_bytes) {
     uint32_t offset = 0U;
-    uint32_t length = chunk_bytes;
+    uint32_t length = submitted == 0U
+                          ? chunk_bytes
+                          : (chunk_bytes < ZZ9K_FABRICLEASE_REFILL_BYTES
+                                 ? chunk_bytes
+                                 : ZZ9K_FABRICLEASE_REFILL_BYTES);
     uint32_t wait_polls = 0U;
 
     if (fabriclease_cancel_requested()) {

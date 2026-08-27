@@ -90,6 +90,7 @@ static struct {
   int state_calls, busy_submits, partial_submits;
   uint32_t begin_slot, begin_identity, begin_gain;
   uint32_t submit_lease, submit_handle, submit_length_max;
+  uint32_t first_submit_length, refill_length_max;
   int submit_length_bad;
   uint32_t written, read;
   int released;
@@ -249,6 +250,10 @@ static void mock_respond(void)
     consumed = length < space ? length : space;
     if (consumed != length)
       g_mock.partial_submits++;
+    if (g_mock.written == 0U)
+      g_mock.first_submit_length = length;
+    else if (length > g_mock.refill_length_max)
+      g_mock.refill_length_max = length;
     g_mock.written += consumed;
     reply = mock_complete(req, ZZ9K_STATUS_OK,
                           sizeof(ZZ9KAudioLeaseSubmitResultPayload));
@@ -528,13 +533,14 @@ static int test_dual_client_feed_horizon(void)
 
 static int test_stress_reserve(void)
 {
-  /* At the refill boundary, one complete staging chunk must fit without a
-   * partial submit or BUSY retry. */
+  /* The first submit owns activation horizon; sustained refills start early
+   * and remain small enough to fit atomically at the refill boundary. */
   return MOCK_LEASE_RING_CAPACITY == 122880U &&
-         ZZ9K_FABRICLEASE_HIGH_WATER_BYTES == 49152U &&
+         ZZ9K_FABRICLEASE_HIGH_WATER_BYTES == 81920U &&
          ZZ9K_FABRICLEASE_STAGING_BYTES == 65536U &&
+         ZZ9K_FABRICLEASE_REFILL_BYTES == 32768U &&
          ZZ9K_FABRICLEASE_HIGH_WATER_BYTES +
-                 ZZ9K_FABRICLEASE_STAGING_BYTES <
+                 ZZ9K_FABRICLEASE_REFILL_BYTES <
              MOCK_LEASE_RING_CAPACITY
              ? 0
              : 1;
@@ -688,8 +694,10 @@ static int test_session_multichunk_keepahead(void)
     mock_board_window_free(mapping);
     return 2;
   }
-  if (g_mock.submit_calls != 4 || g_mock.busy_submits != 1 ||
+  if (g_mock.submit_calls != 6 || g_mock.busy_submits != 1 ||
       g_mock.partial_submits != 0 ||
+      g_mock.first_submit_length != ZZ9K_FABRICLEASE_STAGING_BYTES ||
+      g_mock.refill_length_max > ZZ9K_FABRICLEASE_REFILL_BYTES ||
       g_mock.written != ZZ9K_FABRICLEASE_BYTES_PER_SECOND ||
       g_mock.read != g_mock.written || g_mock.release_calls != 1) {
     mock_board_window_free(mapping);
