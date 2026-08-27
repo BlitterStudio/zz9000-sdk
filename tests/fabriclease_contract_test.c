@@ -87,7 +87,7 @@ static struct {
   ZZ9KBoard board;
   uint32_t served_tail;
   int alloc_calls, free_calls, begin_calls, submit_calls, release_calls;
-  int state_calls, busy_submits;
+  int state_calls, busy_submits, partial_submits;
   uint32_t begin_slot, begin_identity, begin_gain;
   uint32_t submit_lease, submit_handle, submit_length_max;
   int submit_length_bad;
@@ -237,15 +237,18 @@ static void mock_respond(void)
     }
     if (space == 0U) {
       /* Real playback advances while the Amiga waits one DOS tick
-       * after BUSY. Model one 20-ms period for the next retry. */
+       * after BUSY. Model one 20-ms 48-kHz stereo period. */
       uint32_t owed = g_mock.written - g_mock.read;
-      uint32_t drained = owed < 3072U ? owed : 3072U;
+      uint32_t drained = owed < 3840U ? owed : 3840U;
 
+      g_mock.busy_submits++;
       g_mock.read += drained;
       (void)mock_complete(req, ZZ9K_STATUS_BUSY, 0U);
       break;
     }
     consumed = length < space ? length : space;
+    if (consumed != length)
+      g_mock.partial_submits++;
     g_mock.written += consumed;
     reply = mock_complete(req, ZZ9K_STATUS_OK,
                           sizeof(ZZ9KAudioLeaseSubmitResultPayload));
@@ -263,8 +266,8 @@ static void mock_respond(void)
     uint32_t state;
 
     g_mock.state_calls++;
-    /* Playback drains 3072 bytes per state poll. */
-    g_mock.read += 3072U;
+    /* Playback drains one 20-ms 48-kHz stereo period per state poll. */
+    g_mock.read += 3840U;
     if (g_mock.read > g_mock.written) {
       g_mock.read = g_mock.written;
     }
@@ -515,19 +518,24 @@ static int cancel_after_lease_begin(void *user)
   return g_mock.begin_calls != 0;
 }
 
-static int test_staging_horizon(void)
+static int test_dual_client_feed_horizon(void)
 {
-  /* The real Amiga must perform tone generation plus two mailbox calls
-   * before the next submit. One 20-ms period leaves no practical margin;
-   * require at least four complete periods before a lease goes live. */
-  return ZZ9K_FABRICLEASE_STAGING_BYTES >= (4U * 3840U) ? 0 : 1;
+  /* Two clients serialize state/submit pairs through the mailbox. The first
+   * accepted chunk must cover at least 16 complete 20-ms periods so activation
+   * cannot drain before both clients build their card-side reserves. */
+  return ZZ9K_FABRICLEASE_STAGING_BYTES >= (16U * 3840U) ? 0 : 1;
 }
 
 static int test_stress_reserve(void)
 {
+  /* At the refill boundary, one complete staging chunk must fit without a
+   * partial submit or BUSY retry. */
   return MOCK_LEASE_RING_CAPACITY == 122880U &&
-         ZZ9K_FABRICLEASE_HIGH_WATER_BYTES == 98304U &&
-         ZZ9K_FABRICLEASE_HIGH_WATER_BYTES < MOCK_LEASE_RING_CAPACITY
+         ZZ9K_FABRICLEASE_HIGH_WATER_BYTES == 49152U &&
+         ZZ9K_FABRICLEASE_STAGING_BYTES == 65536U &&
+         ZZ9K_FABRICLEASE_HIGH_WATER_BYTES +
+                 ZZ9K_FABRICLEASE_STAGING_BYTES <
+             MOCK_LEASE_RING_CAPACITY
              ? 0
              : 1;
 }
@@ -680,7 +688,8 @@ static int test_session_multichunk_keepahead(void)
     mock_board_window_free(mapping);
     return 2;
   }
-  if (g_mock.submit_calls < 12 || g_mock.busy_submits != 1 ||
+  if (g_mock.submit_calls != 4 || g_mock.busy_submits != 1 ||
+      g_mock.partial_submits != 0 ||
       g_mock.written != ZZ9K_FABRICLEASE_BYTES_PER_SECOND ||
       g_mock.read != g_mock.written || g_mock.release_calls != 1) {
     mock_board_window_free(mapping);
@@ -719,10 +728,10 @@ int main(void)
   int r;
 
   printf("fabriclease_contract_test: builder/dispatcher/decline checks\n");
-  r = test_staging_horizon();
-  CHECK(r == 0, "staging covers at least four TX periods");
+  r = test_dual_client_feed_horizon();
+  CHECK(r == 0, "dual-client activation stages at least 16 TX periods");
   r = test_stress_reserve();
-  CHECK(r == 0, "client keeps 512-ms reserve below 640-ms ring");
+  CHECK(r == 0, "one full refill chunk fits above the reserve threshold");
 
   r = test_builders();
   CHECK(r == 0, "builders");

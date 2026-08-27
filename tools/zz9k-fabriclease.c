@@ -72,20 +72,21 @@ static int fabriclease_cancel_requested(void)
   return 0;
 }
 
-/* HOST_WINDOW staging: four complete 20-ms periods plus margin. A
- * 4096-byte (21.3-ms) chunk left only 1.3 ms for tone generation and
- * two mailbox round trips on the real Amiga, causing repeated lease
- * underruns. 16 KiB preloads 85.3 ms before first activation and cuts
- * the sustained submit cadence to about 11.7 calls/s. */
-#define ZZ9K_FABRICLEASE_STAGING_BYTES 16384U
+/* Zorro III HOST_WINDOW staging: sixteen complete 20-ms periods plus
+ * margin. Two proof clients serialize state/submit calls through the
+ * mailbox; the old 16-KiB chunk left each at only about 90 ms of measured
+ * reserve and both streams audibly starved. A 64-KiB first submit covers
+ * 341 ms before activation and cuts each sustained data-submit cadence to
+ * about 2.9 calls/s. */
+#define ZZ9K_FABRICLEASE_STAGING_BYTES 65536U
 #define ZZ9K_FABRICLEASE_RATE_HZ 48000U
 #define ZZ9K_FABRICLEASE_FRAME_BYTES 4U
 #define ZZ9K_FABRICLEASE_BYTES_PER_SECOND \
   (ZZ9K_FABRICLEASE_RATE_HZ * ZZ9K_FABRICLEASE_FRAME_BYTES)
 #define ZZ9K_FABRICLEASE_DEFAULT_SECONDS 5U
-/* Maintain up to 512 ms of reserve below the 640-ms card-side ring. */
-#define ZZ9K_FABRICLEASE_HIGH_WATER_BYTES \
-  (6U * ZZ9K_FABRICLEASE_STAGING_BYTES)
+/* Refill below 256 ms. At this boundary a complete 64-KiB chunk still fits
+ * in the 122,880-byte card-side ring without a partial submit. */
+#define ZZ9K_FABRICLEASE_HIGH_WATER_BYTES 49152U
 /* 48-sample sign blocks at 48 kHz ~= 500 Hz square bursts; integer
  * only (no libm on every toolchain) and phase-continuous across
  * chunks. */
