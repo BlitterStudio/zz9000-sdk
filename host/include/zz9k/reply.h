@@ -554,9 +554,9 @@ static inline int zz9k_reply_audio_stream_result(
   return ZZ9K_STATUS_OK;
 }
 
-static inline int zz9k_reply_audio_lease_begin_result(
+static inline int zz9k_reply_audio_ring_acquire_result(
     const ZZ9KMailboxEntry *reply,
-    ZZ9KAudioLeaseBeginResult *result)
+    ZZ9KAudioRingAcquireResult *result)
 {
   const uint8_t *payload;
   int status;
@@ -566,60 +566,28 @@ static inline int zz9k_reply_audio_lease_begin_result(
   }
 
   memset(result, 0, sizeof(*result));
-  status = zz9k_reply_require(reply, ZZ9K_OP_AUDIO_LEASE_BEGIN,
-                              sizeof(ZZ9KAudioLeaseBeginResultPayload));
+  status = zz9k_reply_require(reply, ZZ9K_OP_AUDIO_RING_ACQUIRE,
+                              sizeof(ZZ9KAudioRingAcquireResultPayload));
   if (status != ZZ9K_STATUS_OK) {
     return status;
   }
 
   payload = reply->payload.inline_data;
-  result->lease = zz9k_get_be32(&payload[0]);
-  result->slot = zz9k_get_be32(&payload[4]);
-  result->generation = zz9k_get_be32(&payload[8]);
-  result->gain_applied = zz9k_get_be32(&payload[16]);
-  result->flags = zz9k_get_be32(&payload[12]);
+  result->slot = zz9k_get_be32(&payload[0]);
+  result->generation = zz9k_get_be32(&payload[4]);
+  result->ring_offset = zz9k_get_be32(&payload[8]);
+  result->ring_capacity = zz9k_get_be32(&payload[12]);
+  result->control_offset = zz9k_get_be32(&payload[16]);
+  result->period_bytes = zz9k_get_be32(&payload[20]);
+  result->period_us = zz9k_get_be32(&payload[24]);
+  result->sample_contract = zz9k_get_be32(&payload[28]);
+  result->gain_applied = zz9k_get_be32(&payload[32]);
+  result->slot_count = zz9k_get_be32(&payload[36]);
+  result->flags = zz9k_get_be32(&payload[40]);
 
-  /* A granted handle is never zero, never the invalid handle, and
-   * carries its slot in the low nibble; the applied gain is the
-   * composed 0..255 scale. */
-  if (result->lease == 0U || result->lease == ZZ9K_INVALID_HANDLE ||
-      (result->lease & 0x0FU) != result->slot ||
-      (result->lease >> 4) != result->generation ||
-      result->slot > 2U || result->gain_applied > 255U ||
-      (result->flags & ~ZZ9K_AUDIO_LEASE_RESULT_GAIN_BOUNDED) != 0U) {
-    memset(result, 0, sizeof(*result));
-    return ZZ9K_STATUS_INTERNAL_ERROR;
-  }
-
-  return ZZ9K_STATUS_OK;
-}
-
-static inline int zz9k_reply_audio_lease_submit_result(
-    const ZZ9KMailboxEntry *reply,
-    ZZ9KAudioLeaseSubmitResult *result)
-{
-  const uint8_t *payload;
-  int status;
-
-  if (!result) {
-    return ZZ9K_STATUS_BAD_REQUEST;
-  }
-
-  memset(result, 0, sizeof(*result));
-  status = zz9k_reply_require(reply, ZZ9K_OP_AUDIO_LEASE_SUBMIT,
-                              sizeof(ZZ9KAudioLeaseSubmitResultPayload));
-  if (status != ZZ9K_STATUS_OK) {
-    return status;
-  }
-
-  payload = reply->payload.inline_data;
-  result->lease = zz9k_get_be32(&payload[0]);
-  result->bytes_consumed = zz9k_get_be32(&payload[4]);
-  result->flags = zz9k_get_be32(&payload[8]);
-
-  if (result->lease == 0U || result->lease == ZZ9K_INVALID_HANDLE ||
-      result->bytes_consumed == 0U ||
-      (result->bytes_consumed & 3U) != 0U || result->flags != 0U) {
+  /* The decoded grant must be usable as-is (R3): clients dereference
+   * ring/control pointers straight out of it after this check. */
+  if (!zz9k_audio_ring_grant_valid(result)) {
     memset(result, 0, sizeof(*result));
     return ZZ9K_STATUS_INTERNAL_ERROR;
   }
@@ -648,24 +616,18 @@ static inline int zz9k_reply_audio_fabric_state_result(
   payload = reply->payload.inline_data;
   result->slot = zz9k_get_be32(&payload[0]);
   result->generation = zz9k_get_be32(&payload[4]);
-  result->slot_count = zz9k_get_be32(&payload[8]);
-  result->state = zz9k_get_be32(&payload[12]);
-  result->identity = zz9k_get_be32(&payload[16]);
-  result->lease = zz9k_get_be32(&payload[20]);
-  result->cursor_write = zz9k_get_be32(&payload[24]);
-  result->cursor_read = zz9k_get_be32(&payload[28]);
-  result->underrun_count = zz9k_get_be32(&payload[32]);
+  result->state = zz9k_get_be32(&payload[8]);
+  result->heartbeat_ms = zz9k_get_be32(&payload[12]);
+  result->cursor_write = zz9k_media_u64_from_be(&payload[16], &payload[20]);
+  result->cursor_read = zz9k_media_u64_from_be(&payload[24], &payload[28]);
+  result->starvation_count = zz9k_get_be32(&payload[32]);
   result->flags = zz9k_get_be32(&payload[36]);
   result->peak = zz9k_get_be32(&payload[40]);
   result->clip = zz9k_get_be32(&payload[44]);
 
-  if (result->slot > 2U || result->slot_count < 3U ||
-      result->state > ZZ9K_AUDIO_FABRIC_SLOT_ACTIVE ||
-      /* A live lease handle on a FREE slot is impossible; the pump
-       * slot (0) is never leased and keeps the invalid handle even
-       * while LEASED/ACTIVE (bind states). */
-      (result->lease != ZZ9K_INVALID_HANDLE &&
-       result->state == ZZ9K_AUDIO_FABRIC_SLOT_FREE)) {
+  if (result->slot > ZZ9K_AUDIO_RING_SLOT_MAX ||
+      result->state > ZZ9K_AUDIO_FABRIC_SLOT_REVOKED ||
+      (result->flags & ~ZZ9K_AUDIO_FABRIC_STATE_HOLD_RESET) != 0U) {
     memset(result, 0, sizeof(*result));
     return ZZ9K_STATUS_INTERNAL_ERROR;
   }

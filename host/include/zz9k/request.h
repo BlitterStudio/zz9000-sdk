@@ -696,24 +696,24 @@ static inline int zz9k_request_audio_stream_stop(ZZ9KRequest *request,
   return ZZ9K_STATUS_OK;
 }
 
-static inline int zz9k_request_audio_lease_begin(
+static inline int zz9k_request_audio_ring_acquire(
     ZZ9KRequest *request,
-    const ZZ9KAudioLeaseBeginDesc *desc)
+    const ZZ9KAudioRingAcquireDesc *desc)
 {
-  ZZ9KAudioLeaseBeginPayload *payload;
-  ZZ9KAudioLeaseBeginDesc validated;
+  ZZ9KAudioRingAcquirePayload *payload;
+  ZZ9KAudioRingAcquireDesc validated;
 
   if (!request || !desc ||
-      !zz9k_audio_build_lease_begin_desc(&validated, desc->slot,
-                                         desc->identity, desc->gain,
-                                         desc->flags)) {
+      !zz9k_audio_build_ring_acquire_desc(&validated, desc->slot,
+                                          desc->identity, desc->gain,
+                                          desc->flags)) {
     return ZZ9K_STATUS_BAD_REQUEST;
   }
 
-  zz9k_request_init(request, ZZ9K_OP_AUDIO_LEASE_BEGIN);
-  request->entry.payload_len = sizeof(ZZ9KAudioLeaseBeginPayload);
+  zz9k_request_init(request, ZZ9K_OP_AUDIO_RING_ACQUIRE);
+  request->entry.payload_len = sizeof(ZZ9KAudioRingAcquirePayload);
   payload =
-      (ZZ9KAudioLeaseBeginPayload *)request->entry.payload.inline_data;
+      (ZZ9KAudioRingAcquirePayload *)request->entry.payload.inline_data;
   zz9k_put_be32(payload->slot, validated.slot);
   zz9k_put_be32(payload->identity, validated.identity);
   zz9k_put_be32(payload->gain, validated.gain);
@@ -721,49 +721,27 @@ static inline int zz9k_request_audio_lease_begin(
   return ZZ9K_STATUS_OK;
 }
 
-static inline int zz9k_request_audio_lease_submit(
-    ZZ9KRequest *request,
-    const ZZ9KAudioLeaseSubmitDesc *desc)
+static inline int zz9k_request_audio_ring_release(ZZ9KRequest *request,
+                                                  uint32_t slot,
+                                                  uint32_t generation,
+                                                  uint32_t flags)
 {
-  ZZ9KAudioLeaseSubmitPayload *payload;
-  ZZ9KAudioLeaseSubmitDesc validated;
+  ZZ9KAudioRingReleasePayload *payload;
+  ZZ9KAudioRingReleaseDesc validated;
 
-  if (!request || !desc ||
-      !zz9k_audio_build_lease_submit_desc(
-          &validated, desc->lease, desc->src_handle,
-          desc->src_offset, desc->src_length, desc->flags)) {
+  if (!request ||
+      !zz9k_audio_build_ring_release_desc(&validated, slot, generation,
+                                          flags)) {
     return ZZ9K_STATUS_BAD_REQUEST;
   }
 
-  zz9k_request_init(request, ZZ9K_OP_AUDIO_LEASE_SUBMIT);
-  request->entry.payload_len = sizeof(ZZ9KAudioLeaseSubmitPayload);
+  zz9k_request_init(request, ZZ9K_OP_AUDIO_RING_RELEASE);
+  request->entry.payload_len = sizeof(ZZ9KAudioRingReleasePayload);
   payload =
-      (ZZ9KAudioLeaseSubmitPayload *)request->entry.payload.inline_data;
-  zz9k_put_be32(payload->lease, validated.lease);
-  zz9k_put_be32(payload->src_handle, validated.src_handle);
-  zz9k_put_be32(payload->src_offset, validated.src_offset);
-  zz9k_put_be32(payload->src_length, validated.src_length);
+      (ZZ9KAudioRingReleasePayload *)request->entry.payload.inline_data;
+  zz9k_put_be32(payload->slot, validated.slot);
+  zz9k_put_be32(payload->generation, validated.generation);
   zz9k_put_be32(payload->flags, validated.flags);
-  return ZZ9K_STATUS_OK;
-}
-
-static inline int zz9k_request_audio_lease_release(ZZ9KRequest *request,
-                                                   uint32_t lease,
-                                                   uint32_t flags)
-{
-  ZZ9KAudioLeaseReleasePayload *payload;
-
-  if (!request || lease == 0U || lease == ZZ9K_INVALID_HANDLE ||
-      flags != 0U) {
-    return ZZ9K_STATUS_BAD_REQUEST;
-  }
-
-  zz9k_request_init(request, ZZ9K_OP_AUDIO_LEASE_RELEASE);
-  request->entry.payload_len = sizeof(ZZ9KAudioLeaseReleasePayload);
-  payload =
-      (ZZ9KAudioLeaseReleasePayload *)request->entry.payload.inline_data;
-  zz9k_put_be32(payload->lease, lease);
-  zz9k_put_be32(payload->flags, flags);
   return ZZ9K_STATUS_OK;
 }
 

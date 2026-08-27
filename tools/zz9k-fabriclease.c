@@ -1,13 +1,17 @@
 /*
- * ZZ9000AX audio fabric lease proof client (plan U4, R13/AE5).
+ * ZZ9000AX audio fabric direct-ring proof client (plan U4).
  *
- * Exercises the fabric lease plane end to end: the capability gate
- * (mixed-version fallback -- old firmware declines cleanly), the
- * Zorro 3 first gating, HOST_WINDOW staging allocation, LEASE_BEGIN
- * on a caller-selected slot (1 by default; slot 2 for the B4
- * instrument build), a generated 48 kHz stereo S16 tone fed in
- * submit-sized chunks with partial-accept retry, FABRIC_STATE_GET
- * polling, LEASE_RELEASE and a clean exit. A proof client, not a player.
+ * Exercises the direct-ring producer plane end to end: the capability
+ * gate (mixed-version fallback -- old firmware declines cleanly),
+ * RING_ACQUIRE on a caller-selected slot (1 by default; slot 2 for
+ * the Zorro III second producer), grant validation and mapping, a
+ * generated 48 kHz stereo S16 tone written straight into the granted
+ * ring with wrapped writes, producer-cursor publication through the
+ * control-block seqlock after every write, backpressure taken only
+ * from firmware's consumed-credit line (never from STATE_GET and
+ * never from a mailbox submit), low-rate state telemetry, Ctrl-C
+ * release through RING_RELEASE, and a clean exit. A proof client,
+ * not a player.
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -29,16 +33,19 @@
 #include <proto/exec.h>
 #endif
 
-/* Set by the contract test, which compiles this file directly and
- * drives the session against a mock mailbox. */
+/* Set by the client test, which compiles this file directly and
+ * drives the session against a mock mailbox and mock ring memory. */
 #ifndef ZZ9K_FABRICLEASE_NO_MAIN
 #define ZZ9K_FABRICLEASE_NO_MAIN 0
 #endif
 
 typedef int (*ZZ9KFabricLeaseCancelHook)(void *user);
+typedef void (*ZZ9KFabricLeaseTickHook)(void *user);
 
 static ZZ9KFabricLeaseCancelHook g_cancel_hook;
 static void *g_cancel_user;
+static ZZ9KFabricLeaseTickHook g_tick_hook;
+static void *g_tick_user;
 
 #if ZZ9K_FABRICLEASE_AMIGA
 static volatile sig_atomic_t g_ctrl_c_requested;
@@ -57,6 +64,13 @@ void zz9k_fabriclease_set_cancel_hook_for_test(
   g_cancel_user = user;
 }
 
+void zz9k_fabriclease_set_tick_hook_for_test(
+    ZZ9KFabricLeaseTickHook hook, void *user)
+{
+  g_tick_hook = hook;
+  g_tick_user = user;
+}
+
 static int fabriclease_cancel_requested(void)
 {
   if (g_cancel_hook && g_cancel_hook(g_cancel_user)) {
@@ -72,72 +86,17 @@ static int fabriclease_cancel_requested(void)
   return 0;
 }
 
-/* Zorro III HOST_WINDOW staging: the first 64-KiB submit covers 341 ms before
- * activation. Two proof clients serialize state/submit calls through the
- * mailbox, so sustained refills use 32-KiB chunks and start below 80 KiB:
- * 427 ms remain at the boundary, and the complete refill still fits in the
- * 122,880-byte card-side ring. */
-#define ZZ9K_FABRICLEASE_STAGING_BYTES 65536U
-#define ZZ9K_FABRICLEASE_REFILL_BYTES 32768U
-#define ZZ9K_FABRICLEASE_RATE_HZ 48000U
-#define ZZ9K_FABRICLEASE_FRAME_BYTES 4U
-#define ZZ9K_FABRICLEASE_BYTES_PER_SECOND \
-  (ZZ9K_FABRICLEASE_RATE_HZ * ZZ9K_FABRICLEASE_FRAME_BYTES)
-#define ZZ9K_FABRICLEASE_DEFAULT_SECONDS 5U
-#define ZZ9K_FABRICLEASE_HIGH_WATER_BYTES 81920U
-/* 48-sample sign blocks at 48 kHz ~= 500 Hz square bursts; integer
- * only (no libm on every toolchain) and phase-continuous across
- * chunks. */
-#define ZZ9K_FABRICLEASE_BURST_SAMPLES 48U
-#define ZZ9K_FABRICLEASE_AMPLITUDE 12000
-
-typedef enum ZZ9KFabricLeaseStatus {
-  ZZ9K_FABRICLEASE_OK = 0,
-  ZZ9K_FABRICLEASE_DECLINE_NO_FABRIC, /* firmware predates the plane */
-  ZZ9K_FABRICLEASE_DECLINE_ZORRO2     /* Zorro 3 first gating */
-} ZZ9KFabricLeaseStatus;
-
-typedef struct ZZ9KFabricLeaseOptions {
-  uint32_t seconds; /* bounded run length; 0 runs one chunk */
-  uint32_t gain;    /* requested 0..255 producer scale */
-  uint32_t slot;    /* fabric lease slot 1 or 2 */
-} ZZ9KFabricLeaseOptions;
-const char *zz9k_fabriclease_status_name(int status)
-{
-  switch (status) {
-  case ZZ9K_FABRICLEASE_OK:
-    return "ok";
-  case ZZ9K_FABRICLEASE_DECLINE_NO_FABRIC:
-    return "firmware lacks the audio fabric (capability not advertised)";
-  case ZZ9K_FABRICLEASE_DECLINE_ZORRO2:
-    return "audio fabric leases are Zorro 3 first (this board is Zorro 2)";
-  default:
-    return "error";
-  }
-}
-
-/*
- * The mixed-version and bus-shape gate, pure so the contract test can
- * drive every path: Zorro 2 declines before anything is opened (the
- * fabric lease rings live in the Z3-mapped DDR window), a firmware
- * without ZZ9K_CAP_AUDIO_FABRIC declines cleanly -- the R13/AE5
- * fallback proof, not an error.
- */
-int zz9k_fabriclease_gate(const ZZ9KBoard *board, uint32_t capability_bits)
-{
-  if (board != 0 && board->zorro_version == 2U) {
-    return ZZ9K_FABRICLEASE_DECLINE_ZORRO2;
-  }
-  if ((capability_bits & ZZ9K_CAP_AUDIO_FABRIC) == 0U) {
-    return ZZ9K_FABRICLEASE_DECLINE_NO_FABRIC;
-  }
-  return ZZ9K_FABRICLEASE_OK;
-}
-
+/* One wait quantum: a DOS tick on AmigaOS, a bounded host spin
+ * otherwise. In tests the tick hook stands in for the passage of
+ * time -- the mock firmware advances playback one period per tick. */
 static void fabriclease_wait(void)
 {
+  if (g_tick_hook) {
+    g_tick_hook(g_tick_user);
+    return;
+  }
 #if ZZ9K_FABRICLEASE_AMIGA
-  Delay(1L); /* one 20 ms DOS tick: enough for a period of playback */
+  Delay(1L); /* one 20 ms DOS tick: one period of playback */
 #else
   volatile uint32_t spin;
 
@@ -146,29 +105,94 @@ static void fabriclease_wait(void)
 #endif
 }
 
-/* One chunk of the burst tone, continuing the absolute sample index
- * so the stream is phase-continuous across submits. */
-static void fabriclease_fill_chunk(volatile void *staging, uint64_t first,
-                                   uint32_t bytes)
+/* Feed geometry: 4-period chunks keep every write one quick
+ * shared-memory pass; the ring's credited free space bounds every
+ * write, so nothing here sizes against the mailbox. */
+#define ZZ9K_FABRICLEASE_RATE_HZ 48000U
+#define ZZ9K_FABRICLEASE_FRAME_BYTES 4U
+#define ZZ9K_FABRICLEASE_BYTES_PER_SECOND \
+  (ZZ9K_FABRICLEASE_RATE_HZ * ZZ9K_FABRICLEASE_FRAME_BYTES)
+#define ZZ9K_FABRICLEASE_CHUNK_PERIODS 4U
+#define ZZ9K_FABRICLEASE_CHUNK_BYTES \
+  (ZZ9K_FABRICLEASE_CHUNK_PERIODS * ZZ9K_AUDIO_RING_PERIOD_BYTES)
+#define ZZ9K_FABRICLEASE_DEFAULT_SECONDS 5U
+/* Telemetry is observability only (R16): one STATE_GET per ~1.2 s of
+ * audio, never in the pacing path. */
+#define ZZ9K_FABRICLEASE_TELEMETRY_CHUNKS 15U
+/* Heartbeat refresh cadence inside pure wait stretches: well under
+ * the two-second revocation bound (R11-R12). */
+#define ZZ9K_FABRICLEASE_HEARTBEAT_WAITS 8U
+#define ZZ9K_FABRICLEASE_WAIT_LIMIT 10000U
+/* 48-sample sign blocks at 48 kHz ~= 500 Hz square bursts; integer
+ * only (no libm on every toolchain) and phase-continuous across
+ * chunks. */
+#define ZZ9K_FABRICLEASE_BURST_SAMPLES 48U
+#define ZZ9K_FABRICLEASE_AMPLITUDE 12000
+
+typedef enum ZZ9KFabricLeaseStatus {
+  ZZ9K_FABRICLEASE_OK = 0,
+  ZZ9K_FABRICLEASE_DECLINE_NO_FABRIC /* firmware predates the plane */
+} ZZ9KFabricLeaseStatus;
+
+typedef struct ZZ9KFabricLeaseOptions {
+  uint32_t seconds; /* bounded run length; 0 runs one chunk */
+  uint32_t gain;    /* requested 0..255 producer scale */
+  uint32_t slot;    /* direct-ring slot 1 or 2 */
+} ZZ9KFabricLeaseOptions;
+
+static uint8_t g_chunk[ZZ9K_FABRICLEASE_CHUNK_BYTES];
+
+const char *zz9k_fabriclease_status_name(int status)
 {
-  volatile uint8_t *dst = (volatile uint8_t *)staging;
+  switch (status) {
+  case ZZ9K_FABRICLEASE_OK:
+    return "ok";
+  case ZZ9K_FABRICLEASE_DECLINE_NO_FABRIC:
+    return "firmware lacks the audio fabric (capability not advertised)";
+  default:
+    return "error";
+  }
+}
+
+/*
+ * The mixed-version gate, pure so the client test can drive every
+ * path: a firmware without ZZ9K_CAP_AUDIO_FABRIC declines cleanly --
+ * the fallback proof, not an error. Zorro II is a supported
+ * single-slot bus (R9): admission is firmware's decision at acquire
+ * time, not a client-side board-shape refusal.
+ */
+int zz9k_fabriclease_gate(uint32_t capability_bits)
+{
+  if ((capability_bits & ZZ9K_CAP_AUDIO_FABRIC) == 0U) {
+    return ZZ9K_FABRICLEASE_DECLINE_NO_FABRIC;
+  }
+  return ZZ9K_FABRICLEASE_OK;
+}
+
+/* One chunk of the burst tone, continuing the absolute sample index
+ * so the stream is phase-continuous across writes. */
+static void fabriclease_fill_chunk(uint64_t first_frame, uint32_t bytes)
+{
   uint32_t frames = bytes / ZZ9K_FABRICLEASE_FRAME_BYTES;
   uint32_t f;
 
   for (f = 0; f < frames; f++) {
-    uint64_t left = first + (uint64_t)f;
+    uint64_t left = first_frame + (uint64_t)f;
     int16_t v = ((left / ZZ9K_FABRICLEASE_BURST_SAMPLES) & 1U)
                     ? (int16_t)ZZ9K_FABRICLEASE_AMPLITUDE
                     : (int16_t)-ZZ9K_FABRICLEASE_AMPLITUDE;
     uint16_t u = (uint16_t)v;
+    uint32_t o = f * ZZ9K_FABRICLEASE_FRAME_BYTES;
 
-    dst[f * 4U + 0U] = (uint8_t)(u & 0xffU);
-    dst[f * 4U + 1U] = (uint8_t)(u >> 8);
-    dst[f * 4U + 2U] = (uint8_t)(u & 0xffU);
-    dst[f * 4U + 3U] = (uint8_t)(u >> 8);
+    g_chunk[o + 0U] = (uint8_t)(u & 0xffU);
+    g_chunk[o + 1U] = (uint8_t)(u >> 8);
+    g_chunk[o + 2U] = (uint8_t)(u & 0xffU);
+    g_chunk[o + 3U] = (uint8_t)(u >> 8);
   }
 }
 
+/* Low-rate observability: one framed slot snapshot (R16). Pacing
+ * never depends on this call. */
 static int fabriclease_print_state(ZZ9KContext *ctx, uint32_t slot)
 {
   ZZ9KAudioFabricStateDesc desc;
@@ -181,234 +205,205 @@ static int fabriclease_print_state(ZZ9KContext *ctx, uint32_t slot)
     return ZZ9K_STATUS_INTERNAL_ERROR;
   }
   printf("fabric: slot %lu state=%lu gen=%lu w=%lu r=%lu "
-         "underruns=%lu peak=0x%06lx clip=%lu\n",
+         "starved=%lu peak=0x%06lx clip=%lu\n",
          (unsigned long)state.slot, (unsigned long)state.state,
          (unsigned long)state.generation,
          (unsigned long)state.cursor_write,
          (unsigned long)state.cursor_read,
-         (unsigned long)state.underrun_count,
+         (unsigned long)state.starvation_count,
          (unsigned long)state.peak, (unsigned long)state.clip);
   return ZZ9K_STATUS_OK;
 }
 
 /*
- * The lease lifecycle against one open context: staging allocation,
- * BEGIN, the feed loop (chunked submits, partial-accept retry, BUSY
- * backpressure, state polling under the keep-ahead water mark),
- * bounded drain, RELEASE, cleanup. Returns a ZZ9K_STATUS_* word.
+ * The direct-ring lifecycle against one open context: acquire,
+ * validated mapping, the credit-paced feed loop (wrapped ring writes,
+ * seqlock publication after every write, consumed-cursor
+ * backpressure), bounded drain, release, cleanup. Returns a
+ * ZZ9K_STATUS_* word; BAD_REQUEST/BUSY mean the acquire itself was
+ * refused (bus admission or occupied slot) and the caller reports a
+ * clean decline.
  */
 int zz9k_fabriclease_session(ZZ9KContext *ctx,
                              const ZZ9KFabricLeaseOptions *options)
 {
-  ZZ9KAudioLeaseBeginDesc begin;
-  ZZ9KAudioLeaseBeginResult granted;
-  ZZ9KAudioLeaseSubmitDesc submit;
-  ZZ9KAudioLeaseSubmitResult accepted;
-  ZZ9KAudioFabricStateDesc state_desc;
-  ZZ9KAudioFabricStateResult state;
-  ZZ9KSharedBuffer staging;
+  ZZ9KAudioRingAcquireDesc acquire;
+  ZZ9KAudioRingSession session;
   uint64_t target_bytes;
-  uint64_t submitted = 0U;
-  uint64_t confirmed = 0U;
-  uint32_t chunk_bytes;
-  uint32_t state_polls = 0U;
+  uint64_t fed = 0U;
+  uint32_t chunks = 0U;
+  uint32_t wait_stretch = 0U;
+  uint32_t credit_retries = 0U;
   int status;
 
   if (ctx == 0 || options == 0 || options->gain > 255U ||
-      options->slot < 1U || options->slot > 2U) {
+      options->slot == 0U || options->slot > ZZ9K_AUDIO_RING_SLOT_MAX) {
     return ZZ9K_STATUS_BAD_REQUEST;
   }
   if (fabriclease_cancel_requested()) {
     return ZZ9K_STATUS_CANCELLED;
   }
   target_bytes = options->seconds == 0U
-                     ? (uint64_t)ZZ9K_FABRICLEASE_STAGING_BYTES
+                     ? (uint64_t)ZZ9K_FABRICLEASE_CHUNK_BYTES
                      : (uint64_t)options->seconds *
                            (uint64_t)ZZ9K_FABRICLEASE_BYTES_PER_SECOND;
 
-  /* HOST_WINDOW staging: the Z3 shared heap (the host-window flag is
-   * a Z2 mapping concern the library itself drops on Z3). */
-  memset(&staging, 0, sizeof(staging));
-  status = zz9k_alloc_shared(ctx, ZZ9K_FABRICLEASE_STAGING_BYTES, 4U,
-                             ZZ9K_ALLOC_HOST_WINDOW, &staging);
-  if (status != ZZ9K_STATUS_OK) {
-    printf("fabriclease: staging allocation failed: %s (%d)\n",
-           zz9k_status_name(status), status);
-    return status;
-  }
-  chunk_bytes = staging.length < ZZ9K_FABRICLEASE_STAGING_BYTES
-                    ? staging.length
-                    : ZZ9K_FABRICLEASE_STAGING_BYTES;
-  chunk_bytes &= ~(uint32_t)(ZZ9K_FABRICLEASE_FRAME_BYTES - 1U);
-
-  if (!zz9k_audio_build_lease_begin_desc(
-          &begin, options->slot, ZZ9K_AUDIO_METER_IDENTITY_SDK_STREAM,
+  if (!zz9k_audio_build_ring_acquire_desc(
+          &acquire, options->slot, ZZ9K_AUDIO_METER_IDENTITY_SDK_STREAM,
           options->gain, 0U)) {
-    zz9k_free_shared(ctx, staging.handle);
     return ZZ9K_STATUS_BAD_REQUEST;
   }
-  status = zz9k_audio_lease_begin(ctx, &begin, &granted);
+  status = zz9k_audio_ring_session_begin(ctx, &acquire, &session);
   if (status != ZZ9K_STATUS_OK) {
-    printf("fabriclease: lease begin failed: %s (%d)\n",
-           zz9k_status_name(status), status);
-    zz9k_free_shared(ctx, staging.handle);
+    /* Firmware refused the slot (Zorro II second acquisition, bus
+     * admission, occupied slot): a clean decline, and nothing was
+     * disturbed on any active producer. */
     return status;
   }
-  printf("fabriclease: slot %lu leased, handle 0x%08lx, gain %lu/255",
-         (unsigned long)granted.slot, (unsigned long)granted.lease,
-         (unsigned long)granted.gain_applied);
-  if ((granted.flags & ZZ9K_AUDIO_LEASE_RESULT_GAIN_BOUNDED) != 0U) {
+
+  printf("fabriclease: slot %lu generation %lu, ring %lu bytes at "
+         "0x%06lx (%lu period(s)), control 0x%06lx",
+         (unsigned long)session.grant.slot,
+         (unsigned long)session.grant.generation,
+         (unsigned long)session.grant.ring_capacity,
+         (unsigned long)session.grant.ring_offset,
+         (unsigned long)(session.grant.ring_capacity /
+                         ZZ9K_AUDIO_RING_PERIOD_BYTES),
+         (unsigned long)session.grant.control_offset);
+  if ((session.grant.flags & ZZ9K_AUDIO_RING_RESULT_BUS_ZORRO2) != 0U) {
+    printf(", Zorro II compact bus (%lu slot)",
+           (unsigned long)session.grant.slot_count);
+  } else {
+    printf(", %lu slots", (unsigned long)session.grant.slot_count);
+  }
+  printf(", gain %lu/255", (unsigned long)session.grant.gain_applied);
+  if ((session.grant.flags & ZZ9K_AUDIO_RING_RESULT_GAIN_BOUNDED) != 0U) {
     printf(" (bounded from %lu by the ceiling composition)",
            (unsigned long)options->gain);
   }
   printf("\n");
-  while (submitted < target_bytes) {
-    uint32_t offset = 0U;
-    uint32_t length = submitted == 0U
-                          ? chunk_bytes
-                          : (chunk_bytes < ZZ9K_FABRICLEASE_REFILL_BYTES
-                                 ? chunk_bytes
-                                 : ZZ9K_FABRICLEASE_REFILL_BYTES);
-    uint32_t wait_polls = 0U;
+
+  while (fed < target_bytes) {
+    uint32_t free_bytes;
+    uint32_t length;
+    uint32_t staged;
 
     if (fabriclease_cancel_requested()) {
       status = ZZ9K_STATUS_CANCELLED;
       goto out;
     }
-    if (length > (uint32_t)(target_bytes - submitted)) {
-      length = (uint32_t)(target_bytes - submitted);
-      length &= ~(uint32_t)(ZZ9K_FABRICLEASE_FRAME_BYTES - 1U);
-      if (length == 0U) {
-        break;
-      }
+
+    /* Backpressure comes only from the consumed-credit line (R7):
+     * one tearing-safe shared-memory read, zero mailbox traffic. */
+    status = zz9k_audio_ring_take_credits(&session, 2U);
+    if (status == ZZ9K_AUDIO_RING_CREDIT_REVOKED) {
+      printf("fabriclease: generation revoked (heartbeat expiry or "
+             "cursor fault); stopping\n");
+      status = ZZ9K_STATUS_BAD_HANDLE;
+      goto out;
     }
-
-    /* Keep-ahead: let playback drain while the card owes more than
-     * the high-water limit. */
-    for (;;) {
-      uint32_t owed;
-
-      if (fabriclease_cancel_requested()) {
-        status = ZZ9K_STATUS_CANCELLED;
-        goto out;
-      }
-      if (!zz9k_audio_build_fabric_state_desc(
-              &state_desc, options->slot, 0U)) {
-        status = ZZ9K_STATUS_BAD_REQUEST;
-        goto out;
-      }
-      status = zz9k_audio_fabric_state_get(ctx, &state_desc, &state);
-      if (status != ZZ9K_STATUS_OK) {
-        goto out;
-      }
-      confirmed = state.cursor_read;
-      if ((state_polls & 15U) == 0U) {
-        printf("fabric: slot %lu state=%lu gen=%lu w=%lu r=%lu "
-               "underruns=%lu peak=0x%06lx clip=%lu\n",
-               (unsigned long)state.slot, (unsigned long)state.state,
-               (unsigned long)state.generation,
-               (unsigned long)state.cursor_write,
-               (unsigned long)state.cursor_read,
-               (unsigned long)state.underrun_count,
-               (unsigned long)state.peak, (unsigned long)state.clip);
-      }
-      state_polls++;
-      owed = (uint32_t)(state.cursor_write - state.cursor_read);
-      if (owed < ZZ9K_FABRICLEASE_HIGH_WATER_BYTES) {
-        break;
-      }
-      if (++wait_polls > 10000U) {
+    if (status == ZZ9K_AUDIO_RING_CREDIT_RETRY) {
+      if (++credit_retries > 64U) {
         status = ZZ9K_STATUS_TIMEOUT;
         goto out;
       }
       fabriclease_wait();
-      if (fabriclease_cancel_requested()) {
-        status = ZZ9K_STATUS_CANCELLED;
+      continue;
+    }
+    credit_retries = 0U;
+
+    free_bytes = zz9k_audio_ring_free_bytes(&session);
+    if (free_bytes < ZZ9K_AUDIO_RING_PERIOD_BYTES) {
+      if (++wait_stretch > ZZ9K_FABRICLEASE_WAIT_LIMIT) {
+        status = ZZ9K_STATUS_TIMEOUT;
         goto out;
       }
+      fabriclease_wait();
+      if ((wait_stretch % ZZ9K_FABRICLEASE_HEARTBEAT_WAITS) == 0U) {
+        /* Still live while playback drains our reserve (R11). */
+        zz9k_audio_ring_publish(&session);
+      }
+      continue;
+    }
+    wait_stretch = 0U;
+
+    length = ZZ9K_FABRICLEASE_CHUNK_BYTES;
+    if (length > free_bytes) {
+      length = free_bytes & ~(uint32_t)(ZZ9K_FABRICLEASE_FRAME_BYTES - 1U);
+    }
+    if ((uint64_t)length > target_bytes - fed) {
+      length = (uint32_t)(target_bytes - fed);
+      length &= ~(uint32_t)(ZZ9K_FABRICLEASE_FRAME_BYTES - 1U);
+    }
+    if (length == 0U) {
+      break;
     }
 
-    fabriclease_fill_chunk(staging.data, submitted / 4U, length);
-    while (offset < length) {
-      if (fabriclease_cancel_requested()) {
-        status = ZZ9K_STATUS_CANCELLED;
-        goto out;
-      }
-      if (!zz9k_audio_build_lease_submit_desc(&submit, granted.lease,
-                                              staging.handle, offset,
-                                              length - offset, 0U)) {
-        status = ZZ9K_STATUS_BAD_REQUEST;
-        goto out;
-      }
-      status = zz9k_audio_lease_submit(ctx, &submit, &accepted);
-      if (status == ZZ9K_STATUS_BUSY) {
-        /* Ring full: the staged chunk stays valid, retry after a
-         * period of playback (one mailbox op per retry). */
-        fabriclease_wait();
-        if (fabriclease_cancel_requested()) {
-          status = ZZ9K_STATUS_CANCELLED;
-          goto out;
-        }
-        continue;
-      }
-      if (status != ZZ9K_STATUS_OK) {
-        goto out;
-      }
-      offset += accepted.bytes_consumed;
-      submitted += accepted.bytes_consumed;
+    fabriclease_fill_chunk(fed / ZZ9K_FABRICLEASE_FRAME_BYTES, length);
+    staged = zz9k_audio_ring_write(&session, g_chunk, length);
+    if (staged == 0U) {
+      status = ZZ9K_STATUS_IO_ERROR;
+      goto out;
+    }
+    /* PCM landed first; the cursor becomes visible only now (R6),
+     * and the same commit refreshes the heartbeat (R11). */
+    zz9k_audio_ring_publish(&session);
+    fed += staged;
+    chunks++;
+
+    if ((chunks % ZZ9K_FABRICLEASE_TELEMETRY_CHUNKS) == 0U &&
+        fabriclease_print_state(ctx, options->slot) != ZZ9K_STATUS_OK) {
+      status = ZZ9K_STATUS_INTERNAL_ERROR;
+      goto out;
     }
   }
 
-  /* Bounded drain: wait for the compositor to consume what it owes
-   * (a proof client leaves no staged bytes behind). */
-  {
-    uint32_t drain_polls = 0U;
-
-    for (;;) {
-      if (fabriclease_cancel_requested()) {
-        status = ZZ9K_STATUS_CANCELLED;
-        goto out;
-      }
-      if (!zz9k_audio_build_fabric_state_desc(
-              &state_desc, options->slot, 0U)) {
-        status = ZZ9K_STATUS_BAD_REQUEST;
-        goto out;
-      }
-      status = zz9k_audio_fabric_state_get(ctx, &state_desc, &state);
-      if (status != ZZ9K_STATUS_OK) {
-        goto out;
-      }
-      confirmed = state.cursor_read;
-      if (confirmed >= submitted) {
-        break;
-      }
-      if (++drain_polls > 10000U) {
+  /* Bounded drain: wait for firmware to take credit for everything
+   * staged (a proof client leaves no uncredited bytes), heartbeating
+   * throughout. */
+  for (;;) {
+    if (fabriclease_cancel_requested()) {
+      status = ZZ9K_STATUS_CANCELLED;
+      goto out;
+    }
+    status = zz9k_audio_ring_take_credits(&session, 2U);
+    if (status == ZZ9K_AUDIO_RING_CREDIT_REVOKED) {
+      printf("fabriclease: generation revoked during drain; stopping\n");
+      status = ZZ9K_STATUS_BAD_HANDLE;
+      goto out;
+    }
+    if (status == ZZ9K_AUDIO_RING_CREDIT_RETRY) {
+      if (++credit_retries > 64U) {
         status = ZZ9K_STATUS_TIMEOUT;
         goto out;
       }
       fabriclease_wait();
-      if (fabriclease_cancel_requested()) {
-        status = ZZ9K_STATUS_CANCELLED;
-        goto out;
-      }
+      continue;
+    }
+    credit_retries = 0U;
+    if (zz9k_audio_ring_outstanding(&session) == 0U) {
+      break;
+    }
+    if (++wait_stretch > ZZ9K_FABRICLEASE_WAIT_LIMIT) {
+      status = ZZ9K_STATUS_TIMEOUT;
+      goto out;
+    }
+    fabriclease_wait();
+    if ((wait_stretch % ZZ9K_FABRICLEASE_HEARTBEAT_WAITS) == 0U) {
+      zz9k_audio_ring_publish(&session);
     }
   }
   status = fabriclease_print_state(ctx, options->slot);
 
 out:
-  if (zz9k_audio_lease_release(ctx, granted.lease, 0U) !=
-      ZZ9K_STATUS_OK) {
-    printf("fabriclease: lease release failed\n");
+  if (zz9k_audio_ring_session_end(ctx, &session) != ZZ9K_STATUS_OK) {
+    printf("fabriclease: ring release failed\n");
     if (status == ZZ9K_STATUS_OK || status == ZZ9K_STATUS_CANCELLED) {
       status = ZZ9K_STATUS_INTERNAL_ERROR;
     }
+  } else if (status == ZZ9K_STATUS_OK) {
+    printf("fabriclease: released after %lu bytes\n", (unsigned long)fed);
   }
-  if (fabriclease_print_state(ctx, options->slot) == ZZ9K_STATUS_OK &&
-      status == ZZ9K_STATUS_OK) {
-    printf("fabriclease: released after %lu bytes (%lu confirmed)\n",
-           (unsigned long)submitted, (unsigned long)confirmed);
-  }
-  zz9k_free_shared(ctx, staging.handle);
   return status;
 }
 
@@ -423,7 +418,6 @@ int main(int argc, char **argv)
 {
   ZZ9KFabricLeaseOptions options;
   ZZ9KContext *ctx = 0;
-  ZZ9KBoard board;
   ZZ9KCaps caps;
   int status;
   int i;
@@ -451,18 +445,10 @@ int main(int argc, char **argv)
       return 1;
     }
   }
-  if (options.gain > 255U || options.slot < 1U || options.slot > 2U) {
+  if (options.gain > 255U || options.slot == 0U ||
+      options.slot > ZZ9K_AUDIO_RING_SLOT_MAX) {
     print_usage();
     return 1;
-  }
-
-  if (zz9k_find_board(&board) != ZZ9K_STATUS_OK) {
-    memset(&board, 0, sizeof(board));
-  }
-  status = zz9k_fabriclease_gate(&board, 0U);
-  if (status == ZZ9K_FABRICLEASE_DECLINE_ZORRO2) {
-    printf("zz9k-fabriclease: %s\n", zz9k_fabriclease_status_name(status));
-    return 0;
   }
 
   status = zz9k_open(&ctx);
@@ -474,21 +460,21 @@ int main(int argc, char **argv)
   memset(&caps, 0, sizeof(caps));
   status = zz9k_query_caps(ctx, &caps);
   if (status == ZZ9K_STATUS_OK) {
-    status = zz9k_fabriclease_gate(&board, caps.capability_bits);
+    status = zz9k_fabriclease_gate(caps.capability_bits);
   }
   if (status == ZZ9K_FABRICLEASE_DECLINE_NO_FABRIC) {
     if (!force) {
-      /* Mixed-version fallback (R13/AE5): a clean, documented decline,
-       * not an error. */
+      /* Mixed-version fallback: a clean, documented decline, not an
+       * error. */
       printf("zz9k-fabriclease: %s\n",
              zz9k_fabriclease_status_name(status));
       zz9k_close(ctx);
       return 0;
     }
     /* Qualification-only path: instrument firmware implements the
-     * opcodes but deliberately withholds the capability until this
+     * opcodes but deliberately withholds the capability until the
      * hardware session passes. Unsupported firmware still fails the
-     * first lease opcode cleanly. */
+     * first ring opcode cleanly. */
     printf("zz9k-fabriclease: forcing unadvertised fabric opcodes "
            "(hardware qualification only)\n");
     status = ZZ9K_FABRICLEASE_OK;
@@ -502,7 +488,14 @@ int main(int argc, char **argv)
   status = zz9k_fabriclease_session(ctx, &options);
   zz9k_close(ctx);
   if (status == ZZ9K_STATUS_CANCELLED) {
-    printf("zz9k-fabriclease: cancelled; lease and staging released\n");
+    printf("zz9k-fabriclease: cancelled; slot released\n");
+    return 0;
+  }
+  if (status == ZZ9K_STATUS_BAD_REQUEST || status == ZZ9K_STATUS_BUSY) {
+    /* The acquire was refused (Zorro II second acquisition, bus
+     * admission, occupied slot): nothing was disturbed. */
+    printf("zz9k-fabriclease: slot %lu refused: %s (%d)\n",
+           (unsigned long)options.slot, zz9k_status_name(status), status);
     return 0;
   }
   if (status != ZZ9K_STATUS_OK) {

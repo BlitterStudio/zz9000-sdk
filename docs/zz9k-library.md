@@ -878,57 +878,27 @@ against, its bench-measured value, method, and the flip-after-pass runbook
 are documented in the firmware repo's
 `docs/audio-saturation-ceiling.md`.
 
-## Audio Fabric Lease Plane
+## Audio Fabric Direct-Ring Plane
 
-The audio fabric compositor lease plane lets a second producer mix
-into the AX output alongside the SDK pump: firmware reserves slot 0
-for the playback pump, exposes slot 1 through the lease opcodes, and
-keeps slot 2 firmware-reserved for a later AHI/synthesis producer.
-Dispatch is live but deliberately unadvertised: nothing sets
-`ZZ9K_CAP_AUDIO_FABRIC` (bit 27) or
-`ZZ9K_SERVICE_FLAG_AUDIO_FABRIC` until the on-hardware verification
-session passes, so mixed-version clients must treat a missing
-capability as a clean decline, not an error.
+The audio fabric grants generation-bound host-visible PCM rings to independent producers. Firmware reserves slot 0 for the playback pump. Zorro III exposes two direct-ring slots; Zorro II exposes one compact slot and refuses a second acquisition.
+
+Dispatch remains deliberately unadvertised: nothing sets `ZZ9K_CAP_AUDIO_FABRIC` or `ZZ9K_SERVICE_FLAG_AUDIO_FABRIC` until the hardware qualification session passes. Mixed-version clients treat a missing capability as a clean decline.
 
 | Opcode | Value | Purpose |
 | --- | --- | --- |
-| `ZZ9K_OP_AUDIO_LEASE_BEGIN` | `0x050f` | Grant a producer lease on a slot; result carries the handle and the applied gain |
-| `ZZ9K_OP_AUDIO_LEASE_SUBMIT` | `0x0510` | Copy whole S16LE stereo frames from a shared buffer into the slot's card-side ring; partial-accept backpressure |
-| `ZZ9K_OP_AUDIO_LEASE_RELEASE` | `0x0511` | Surrender the lease (idempotent for the immediately-previous handle) |
-| `ZZ9K_OP_AUDIO_FABRIC_STATE_GET` | `0x0512` | One framed per-slot snapshot: state, cursors, underruns, 16.16 peak hold, clip count |
+| `ZZ9K_OP_AUDIO_FABRIC_STATE_GET` | `0x0512` | Read a framed per-slot snapshot with generation, 64-bit cursors, heartbeat age, starvation, peak, and clip state |
+| `ZZ9K_OP_AUDIO_RING_ACQUIRE` | `0x0513` | Acquire a generation-bound ring and negotiated control-block grant |
+| `ZZ9K_OP_AUDIO_RING_RELEASE` | `0x0514` | Release the slot under its active generation |
 
-All payloads follow the 48-byte big-endian inline convention, mirrored
-as `ZZ9KAudioLease*Payload` in `include/zz9k/abi.h`. The bypass
-geometry is fixed: 48 kHz stereo S16LE only (`flags` required zero).
-`ZZ9KAudioLeaseBeginResultPayload.gain_applied` (append-only word at
-offset 16) reports the producer scale the lease actually runs at: the
-requested 0..255 `gain` (128 = unity) is composed against the enforced
-audio ceiling under the active scene, and a reduced request is flagged
-`ZZ9K_AUDIO_LEASE_RESULT_GAIN_BOUNDED` instead of silently clamped --
-the same reported-bound contract as the trim path. Submit takes a
-shared-buffer reference (`src_handle` + offset + length, whole frames)
-and reports `bytes_consumed`; a nonzero request accepted into zero
-space completes `ZZ9K_STATUS_BUSY` and the producer resubmits. State
-reads are non-tearing within a generation;
-`ZZ9K_AUDIO_FABRIC_STATE_HOLD_RESET` consumes the peak window like
-the scene meter.
+Values `0x050f` through `0x0511` belonged to the withdrawn copy-submit experiment and are never reused.
 
-The typed client surface is `zz9k_audio_build_lease_begin_desc` /
-`zz9k_audio_build_lease_submit_desc` /
-`zz9k_audio_build_fabric_state_desc` (`include/zz9k/audio.h`) with
-`zz9k_audio_lease_begin` / `zz9k_audio_lease_submit` /
-`zz9k_audio_lease_release` / `zz9k_audio_fabric_state_get`
-dispatchers. The proof client `C/zz9k-fabriclease` (source
-`tools/zz9k-fabriclease.c`) exercises the whole cycle: capability
-gate, ~4 KiB HOST_WINDOW staging, a generated 48 kHz tone fed in
-submit-sized chunks with partial-accept retry, periodic state polls,
-and a bounded drain before release.
+Each grant reports board-visible ring and control offsets, capacity, 3,840-byte/20-ms period geometry, sample contract, applied gain, and bus slot count. The control block has two ownership-separated 64-byte lines. The producer line publishes generation, write cursor, heartbeat, and flags. The firmware line publishes generation, consumed cursor, and status. Both lines use big-endian 32-bit fields and even/odd seqlocks.
 
-The lease plane is Zorro 3 first: the card-side lease rings live in
-the Z3-mapped DDR window, and the client declines on a Zorro 2 board
-(`ZZ9KBoard.zorro_version == 2`) with a documented message before
-opening the library. A firmware that predates the plane is declined
-the same clean way.
+The steady data path performs no mailbox copy. A producer writes PCM, makes the range visible, and commits its write cursor. Firmware validates the producer line, consumes complete periods, and returns ring credits through the consumed cursor. Producers use those credits for backpressure; `FABRIC_STATE_GET` is telemetry, not pacing.
+
+The typed client surface in `include/zz9k/audio.h` validates grants, wraps ring writes, publishes producer state, reads firmware credits, refreshes heartbeats, and performs generation-bound release. `tools/zz9k-fabriclease.c` exercises acquire, direct writes, credit pacing, heartbeat recovery, low-rate telemetry, drain, Ctrl-C cleanup, and Zorro II single-slot refusal.
+
+Zorro II aperture-layout generation 2 reserves one 48-KiB direct region and leaves 16 KiB in the general host-window heap. Zorro III grants two 16-period rings. A firmware or bitstream that predates the matched layout is declined cleanly.
 
 ## Decompression Jobs
 
