@@ -85,9 +85,6 @@ static int fabriclease_cancel_requested(void)
   (ZZ9K_FABRICLEASE_RATE_HZ * ZZ9K_FABRICLEASE_FRAME_BYTES)
 #define ZZ9K_FABRICLEASE_DEFAULT_SECONDS 5U
 #define ZZ9K_FABRICLEASE_HIGH_WATER_BYTES 81920U
-#define ZZ9K_FABRICLEASE_PACE_TICKS 8U
-#define ZZ9K_FABRICLEASE_BUSY_TICKS 4U
-#define ZZ9K_FABRICLEASE_TELEMETRY_CHUNKS 16U
 /* 48-sample sign blocks at 48 kHz ~= 500 Hz square bursts; integer
  * only (no libm on every toolchain) and phase-continuous across
  * chunks. */
@@ -137,22 +134,14 @@ int zz9k_fabriclease_gate(const ZZ9KBoard *board, uint32_t capability_bits)
   return ZZ9K_FABRICLEASE_OK;
 }
 
-#if !ZZ9K_FABRICLEASE_AMIGA
-static void (*g_fabriclease_wait_hook)(uint32_t ticks);
-#endif
-
-static void fabriclease_wait(uint32_t ticks)
+static void fabriclease_wait(void)
 {
 #if ZZ9K_FABRICLEASE_AMIGA
-  Delay((LONG)ticks);
+  Delay(1L); /* one 20 ms DOS tick: enough for a period of playback */
 #else
   volatile uint32_t spin;
 
-  if (g_fabriclease_wait_hook) {
-    g_fabriclease_wait_hook(ticks);
-    return;
-  }
-  for (spin = 0; spin < ticks * 1000000UL; spin++) {
+  for (spin = 0; spin < 1000000UL; spin++) {
   }
 #endif
 }
@@ -204,7 +193,8 @@ static int fabriclease_print_state(ZZ9KContext *ctx, uint32_t slot)
 
 /*
  * The lease lifecycle against one open context: staging allocation,
- * BEGIN, paced submit-only steady feeding, low-rate state telemetry,
+ * BEGIN, the feed loop (chunked submits, partial-accept retry, BUSY
+ * backpressure, state polling under the keep-ahead water mark),
  * bounded drain, RELEASE, cleanup. Returns a ZZ9K_STATUS_* word.
  */
 int zz9k_fabriclease_session(ZZ9KContext *ctx,
@@ -221,7 +211,7 @@ int zz9k_fabriclease_session(ZZ9KContext *ctx,
   uint64_t submitted = 0U;
   uint64_t confirmed = 0U;
   uint32_t chunk_bytes;
-  uint32_t feed_chunks = 0U;
+  uint32_t state_polls = 0U;
   int status;
 
   if (ctx == 0 || options == 0 || options->gain > 255U ||
@@ -279,26 +269,62 @@ int zz9k_fabriclease_session(ZZ9KContext *ctx,
                           : (chunk_bytes < ZZ9K_FABRICLEASE_REFILL_BYTES
                                  ? chunk_bytes
                                  : ZZ9K_FABRICLEASE_REFILL_BYTES);
+    uint32_t wait_polls = 0U;
 
     if (fabriclease_cancel_requested()) {
       status = ZZ9K_STATUS_CANCELLED;
       goto out;
-    }
-    if (submitted != 0U) {
-      /* Pace without a synchronous STATE_GET in the hot path. Eight DOS
-       * ticks feed a 32-KiB chunk slightly ahead of its 170.7-ms play time;
-       * card-ring BUSY remains the authoritative backpressure. */
-      fabriclease_wait(ZZ9K_FABRICLEASE_PACE_TICKS);
-      if (fabriclease_cancel_requested()) {
-        status = ZZ9K_STATUS_CANCELLED;
-        goto out;
-      }
     }
     if (length > (uint32_t)(target_bytes - submitted)) {
       length = (uint32_t)(target_bytes - submitted);
       length &= ~(uint32_t)(ZZ9K_FABRICLEASE_FRAME_BYTES - 1U);
       if (length == 0U) {
         break;
+      }
+    }
+
+    /* Keep-ahead: let playback drain while the card owes more than
+     * the high-water limit. */
+    for (;;) {
+      uint32_t owed;
+
+      if (fabriclease_cancel_requested()) {
+        status = ZZ9K_STATUS_CANCELLED;
+        goto out;
+      }
+      if (!zz9k_audio_build_fabric_state_desc(
+              &state_desc, options->slot, 0U)) {
+        status = ZZ9K_STATUS_BAD_REQUEST;
+        goto out;
+      }
+      status = zz9k_audio_fabric_state_get(ctx, &state_desc, &state);
+      if (status != ZZ9K_STATUS_OK) {
+        goto out;
+      }
+      confirmed = state.cursor_read;
+      if ((state_polls & 15U) == 0U) {
+        printf("fabric: slot %lu state=%lu gen=%lu w=%lu r=%lu "
+               "underruns=%lu peak=0x%06lx clip=%lu\n",
+               (unsigned long)state.slot, (unsigned long)state.state,
+               (unsigned long)state.generation,
+               (unsigned long)state.cursor_write,
+               (unsigned long)state.cursor_read,
+               (unsigned long)state.underrun_count,
+               (unsigned long)state.peak, (unsigned long)state.clip);
+      }
+      state_polls++;
+      owed = (uint32_t)(state.cursor_write - state.cursor_read);
+      if (owed < ZZ9K_FABRICLEASE_HIGH_WATER_BYTES) {
+        break;
+      }
+      if (++wait_polls > 10000U) {
+        status = ZZ9K_STATUS_TIMEOUT;
+        goto out;
+      }
+      fabriclease_wait();
+      if (fabriclease_cancel_requested()) {
+        status = ZZ9K_STATUS_CANCELLED;
+        goto out;
       }
     }
 
@@ -316,8 +342,13 @@ int zz9k_fabriclease_session(ZZ9KContext *ctx,
       }
       status = zz9k_audio_lease_submit(ctx, &submit, &accepted);
       if (status == ZZ9K_STATUS_BUSY) {
-        /* Avoid turning ring backpressure into another mailbox poll storm. */
-        fabriclease_wait(ZZ9K_FABRICLEASE_BUSY_TICKS);
+        /* Ring full: the staged chunk stays valid, retry after a
+         * period of playback (one mailbox op per retry). */
+        fabriclease_wait();
+        if (fabriclease_cancel_requested()) {
+          status = ZZ9K_STATUS_CANCELLED;
+          goto out;
+        }
         continue;
       }
       if (status != ZZ9K_STATUS_OK) {
@@ -325,12 +356,6 @@ int zz9k_fabriclease_session(ZZ9KContext *ctx,
       }
       offset += accepted.bytes_consumed;
       submitted += accepted.bytes_consumed;
-    }
-    feed_chunks++;
-    if ((feed_chunks % ZZ9K_FABRICLEASE_TELEMETRY_CHUNKS) == 0U) {
-      status = fabriclease_print_state(ctx, options->slot);
-      if (status != ZZ9K_STATUS_OK)
-        goto out;
     }
   }
 
@@ -361,7 +386,7 @@ int zz9k_fabriclease_session(ZZ9KContext *ctx,
         status = ZZ9K_STATUS_TIMEOUT;
         goto out;
       }
-      fabriclease_wait(1U);
+      fabriclease_wait();
       if (fabriclease_cancel_requested()) {
         status = ZZ9K_STATUS_CANCELLED;
         goto out;

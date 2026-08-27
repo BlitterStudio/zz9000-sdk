@@ -88,8 +88,6 @@ static struct {
   uint32_t served_tail;
   int alloc_calls, free_calls, begin_calls, submit_calls, release_calls;
   int state_calls, busy_submits, partial_submits;
-  int state_calls_at_last_submit;
-  uint32_t waited_ticks;
   uint32_t begin_slot, begin_identity, begin_gain;
   uint32_t submit_lease, submit_handle, submit_length_max;
   uint32_t first_submit_length, refill_length_max;
@@ -123,16 +121,6 @@ static void mock_reset(uint32_t caps, uint16_t zorro_version)
   g_mock.board.board_size = MOCK_BOARD_SIZE;
   g_mock.board.product =
       zorro_version == 2U ? ZZ9K_PRODUCT_Z2 : ZZ9K_PRODUCT_Z3;
-}
-static void mock_wait(uint32_t ticks)
-{
-  uint32_t owed = g_mock.written - g_mock.read;
-  uint32_t drain = ticks * 3840U;
-
-  if (drain > owed)
-    drain = owed;
-  g_mock.read += drain;
-  g_mock.waited_ticks += ticks;
 }
 
 /* Stage the completion for the request at request_ring[head]; the
@@ -266,7 +254,6 @@ static void mock_respond(void)
       g_mock.first_submit_length = length;
     else if (length > g_mock.refill_length_max)
       g_mock.refill_length_max = length;
-    g_mock.state_calls_at_last_submit = g_mock.state_calls;
     g_mock.written += consumed;
     reply = mock_complete(req, ZZ9K_STATUS_OK,
                           sizeof(ZZ9KAudioLeaseSubmitResultPayload));
@@ -570,14 +557,14 @@ static int run_session(uint32_t caps, uint16_t zorro, uint32_t seconds,
   int status;
 
   mock_reset(caps, zorro);
+  /* Scripted fabric behavior survives the reset: one BUSY retry on
+   * the first submit, and optionally a malformed begin reply. */
   g_mock.busy_once = 1;
   g_mock.corrupt_begin = corrupt_begin;
   zz9k_set_idle_hook_for_test(mock_respond);
-  g_fabriclease_wait_hook = mock_wait;
   status = zz9k_attach_mailbox(&ctx, &g_mock.board,
                                &g_mock.mailbox.descriptor, 0, 0);
   if (status != ZZ9K_STATUS_OK) {
-    g_fabriclease_wait_hook = 0;
     zz9k_set_idle_hook_for_test(0);
     return -1;
   }
@@ -587,7 +574,6 @@ static int run_session(uint32_t caps, uint16_t zorro, uint32_t seconds,
   options.slot = slot;
   *session_status = zz9k_fabriclease_session(ctx, &options);
   zz9k_close(ctx);
-  g_fabriclease_wait_hook = 0;
   zz9k_set_idle_hook_for_test(0);
   return 0;
 }
@@ -708,9 +694,8 @@ static int test_session_multichunk_keepahead(void)
     mock_board_window_free(mapping);
     return 2;
   }
-  if (g_mock.submit_calls < 5 || g_mock.busy_submits > 2 ||
-      g_mock.state_calls_at_last_submit != 0 ||
-      g_mock.waited_ticks < (4U * ZZ9K_FABRICLEASE_PACE_TICKS) ||
+  if (g_mock.submit_calls != 6 || g_mock.busy_submits != 1 ||
+      g_mock.partial_submits != 0 ||
       g_mock.first_submit_length != ZZ9K_FABRICLEASE_STAGING_BYTES ||
       g_mock.refill_length_max > ZZ9K_FABRICLEASE_REFILL_BYTES ||
       g_mock.written != ZZ9K_FABRICLEASE_BYTES_PER_SECOND ||
