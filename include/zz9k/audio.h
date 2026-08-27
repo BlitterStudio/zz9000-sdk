@@ -443,7 +443,7 @@ static inline uint32_t zz9k_audio_ring_write(ZZ9KAudioRingSession *session,
   }
   dst = session->ring;
   for (; staged < length; staged++) {
-    dst[staged] = src[staged];
+    dst[staged - first] = src[staged];
   }
 
   session->write_cursor += staged;

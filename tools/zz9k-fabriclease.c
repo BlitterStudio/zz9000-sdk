@@ -231,7 +231,6 @@ int zz9k_fabriclease_session(ZZ9KContext *ctx,
   ZZ9KAudioRingSession session;
   uint64_t target_bytes;
   uint64_t fed = 0U;
-  uint32_t chunks = 0U;
   uint32_t wait_stretch = 0U;
   uint32_t credit_retries = 0U;
   int status;
@@ -349,13 +348,7 @@ int zz9k_fabriclease_session(ZZ9KContext *ctx,
      * and the same commit refreshes the heartbeat (R11). */
     zz9k_audio_ring_publish(&session);
     fed += staged;
-    chunks++;
 
-    if ((chunks % ZZ9K_FABRICLEASE_TELEMETRY_CHUNKS) == 0U &&
-        fabriclease_print_state(ctx, options->slot) != ZZ9K_STATUS_OK) {
-      status = ZZ9K_STATUS_INTERNAL_ERROR;
-      goto out;
-    }
   }
 
   /* Bounded drain: wait for firmware to take credit for everything

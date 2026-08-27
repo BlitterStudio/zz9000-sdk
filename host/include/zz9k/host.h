@@ -175,6 +175,10 @@ static inline int zz9k_aperture_range_free(
       end > layout->aperture_size) {
     return 0;
   }
+  if (offset < layout->host_base + layout->host_size ||
+      end > layout->audio_base) {
+    return 0;
+  }
   if (layout->framebuffer_size != 0U &&
       offset < layout->framebuffer_base + layout->framebuffer_size &&
       layout->framebuffer_base < end) {

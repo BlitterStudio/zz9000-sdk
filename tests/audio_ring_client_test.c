@@ -538,6 +538,22 @@ static int test_wrapped_write_and_credits(void)
   if (ring[0] != 1U) {
     return 6; /* wrapped write overwrote from ring start */
   }
+  /* One write crossing the physical end resumes at ring[0], not at
+   * ring[first] and never beyond the grant. */
+  memset((void *)ring, 0, sizeof(ring));
+  session.write_cursor =
+      2U * ZZ9K_AUDIO_RING_PERIOD_BYTES -
+      ZZ9K_AUDIO_RING_PERIOD_BYTES / 2U;
+  session.consumed_cursor = session.write_cursor;
+  if (zz9k_audio_ring_write(&session, chunk,
+                            ZZ9K_AUDIO_RING_PERIOD_BYTES) !=
+          ZZ9K_AUDIO_RING_PERIOD_BYTES ||
+      ring[2U * ZZ9K_AUDIO_RING_PERIOD_BYTES -
+           ZZ9K_AUDIO_RING_PERIOD_BYTES / 2U] != 1U ||
+      ring[0] != chunk[ZZ9K_AUDIO_RING_PERIOD_BYTES / 2U] ||
+      ring[2U * ZZ9K_AUDIO_RING_PERIOD_BYTES] != 0U) {
+    return 7;
+  }
 
 
   /* 64-bit cursor arithmetic across the 32-bit boundary. */
