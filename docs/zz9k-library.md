@@ -882,7 +882,7 @@ are documented in the firmware repo's
 
 The audio fabric grants generation-bound host-visible PCM rings to independent producers. Firmware reserves slot 0 for the playback pump. Zorro III exposes two direct-ring slots; Zorro II exposes one compact slot and refuses a second acquisition.
 
-Dispatch remains deliberately unadvertised: nothing sets `ZZ9K_CAP_AUDIO_FABRIC` or `ZZ9K_SERVICE_FLAG_AUDIO_FABRIC` until the hardware qualification session passes. Mixed-version clients treat a missing capability as a clean decline.
+The plane is advertised: the hardware qualification session passed on 2026-08-28 (firmware `docs/audio-fabric.md`), so firmware now sets `ZZ9K_CAP_AUDIO_FABRIC` and reports `ZZ9K_SERVICE_FLAG_AUDIO_FABRIC` in the audio service. Clients must still treat a missing capability as a clean decline — firmware older than the qualified release advertises nothing here.
 
 | Opcode | Value | Purpose |
 | --- | --- | --- |
