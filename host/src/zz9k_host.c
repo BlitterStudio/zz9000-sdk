@@ -57,6 +57,33 @@ struct ExpansionBase *ExpansionBase;
  * base around the call. */
 struct DosLibrary *DOSBase;
 #endif
+void zz9k_audio_ring_cache_flush(const volatile void *address, uint32_t length)
+{
+#if ZZ9K_HOST_AMIGA
+  if (address && length != 0U) {
+    CacheClearE((APTR)(uintptr_t)address, (ULONG)length, CACRF_ClearD);
+  }
+#else
+  (void)address;
+  (void)length;
+#endif
+}
+
+void zz9k_audio_ring_cache_invalidate(const volatile void *address,
+                                      uint32_t length)
+{
+#if ZZ9K_HOST_AMIGA
+  if (address && length != 0U) {
+    /* The firmware-owned line is never written by the host, so clearing its
+     * clean CPU cache lines is an invalidate without a stale writeback. */
+    CacheClearE((APTR)(uintptr_t)address, (ULONG)length, CACRF_ClearD);
+  }
+#else
+  (void)address;
+  (void)length;
+#endif
+}
+
 
 #define ZZ9K_SYNC_COOKIE_MASK 0x5aa55aa5UL
 #define ZZ9K_MAILBOX_SEMAPHORE_NAME "zz9000.sdk.mailbox"

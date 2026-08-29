@@ -86,28 +86,31 @@ static int fabriclease_cancel_requested(void)
   return 0;
 }
 
-/* One wait quantum: a DOS tick on AmigaOS, a bounded host spin
- * otherwise. In tests the tick hook stands in for the passage of
- * time -- the mock firmware advances playback one period per tick. */
+/* One credit-poll quantum. The direct ring must be refilled as soon as
+ * firmware publishes a period of consumed credit. Delay(1) is not
+ * suitable here: its nominal 20-ms sleep plus scheduler latency can
+ * cross the next 20-ms playback deadline and permanently lose one
+ * period of producer throughput. Tests use the tick hook to advance
+ * mock playback deterministically; the proof client otherwise yields
+ * only through a short bounded spin while polling shared memory. */
 static void fabriclease_wait(void)
 {
   if (g_tick_hook) {
     g_tick_hook(g_tick_user);
     return;
   }
-#if ZZ9K_FABRICLEASE_AMIGA
-  Delay(1L); /* one 20 ms DOS tick: one period of playback */
-#else
-  volatile uint32_t spin;
+  {
+    volatile uint32_t spin;
 
-  for (spin = 0; spin < 1000000UL; spin++) {
+    for (spin = 0; spin < 1024U; spin++) {
+    }
   }
-#endif
 }
 
-/* Feed geometry: 4-period chunks keep every write one quick
- * shared-memory pass; the ring's credited free space bounds every
- * write, so nothing here sizes against the mailbox. */
+/* Four-period writes amortize Zorro cache maintenance and control-line
+ * publication. Steady-state refills wait until the whole chunk is credited:
+ * writing one newly credited period at a time would perform 50 cache flushes
+ * and seqlock publications per second per producer. */
 #define ZZ9K_FABRICLEASE_RATE_HZ 48000U
 #define ZZ9K_FABRICLEASE_FRAME_BYTES 4U
 #define ZZ9K_FABRICLEASE_BYTES_PER_SECOND \
@@ -169,8 +172,10 @@ int zz9k_fabriclease_gate(uint32_t capability_bits)
   return ZZ9K_FABRICLEASE_OK;
 }
 
-/* One chunk of the burst tone, continuing the absolute sample index
- * so the stream is phase-continuous across writes. */
+/* Precompute one four-period burst chunk. The square wave repeats every
+ * 96 frames, while every 48-kHz 20-ms period contains 960 frames, so every
+ * period and chunk begins at the same phase. Reusing this buffer avoids
+ * 48,000 software 64-bit divisions per second on each m68k producer. */
 static void fabriclease_fill_chunk(uint64_t first_frame, uint32_t bytes)
 {
   uint32_t frames = bytes / ZZ9K_FABRICLEASE_FRAME_BYTES;
@@ -281,8 +286,12 @@ int zz9k_fabriclease_session(ZZ9KContext *ctx,
            (unsigned long)options->gain);
   }
   printf("\n");
+  fabriclease_fill_chunk(0U, ZZ9K_FABRICLEASE_CHUNK_BYTES);
+
 
   while (fed < target_bytes) {
+    uint64_t remaining;
+    uint32_t required;
     uint32_t free_bytes;
     uint32_t length;
     uint32_t staged;
@@ -311,8 +320,16 @@ int zz9k_fabriclease_session(ZZ9KContext *ctx,
     }
     credit_retries = 0U;
 
+    remaining = target_bytes - fed;
+    required = ZZ9K_FABRICLEASE_CHUNK_BYTES;
+    if (required > session.grant.ring_capacity) {
+      required = session.grant.ring_capacity;
+    }
+    if (remaining < (uint64_t)required) {
+      required = (uint32_t)remaining;
+    }
     free_bytes = zz9k_audio_ring_free_bytes(&session);
-    if (free_bytes < ZZ9K_AUDIO_RING_PERIOD_BYTES) {
+    if (free_bytes < required) {
       if (++wait_stretch > ZZ9K_FABRICLEASE_WAIT_LIMIT) {
         status = ZZ9K_STATUS_TIMEOUT;
         goto out;
@@ -326,19 +343,11 @@ int zz9k_fabriclease_session(ZZ9KContext *ctx,
     }
     wait_stretch = 0U;
 
-    length = ZZ9K_FABRICLEASE_CHUNK_BYTES;
-    if (length > free_bytes) {
-      length = free_bytes & ~(uint32_t)(ZZ9K_FABRICLEASE_FRAME_BYTES - 1U);
-    }
-    if ((uint64_t)length > target_bytes - fed) {
-      length = (uint32_t)(target_bytes - fed);
-      length &= ~(uint32_t)(ZZ9K_FABRICLEASE_FRAME_BYTES - 1U);
-    }
+    length = required;
     if (length == 0U) {
       break;
     }
 
-    fabriclease_fill_chunk(fed / ZZ9K_FABRICLEASE_FRAME_BYTES, length);
     staged = zz9k_audio_ring_write(&session, g_chunk, length);
     if (staged == 0U) {
       status = ZZ9K_STATUS_IO_ERROR;

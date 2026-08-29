@@ -383,6 +383,14 @@ static inline int zz9k_audio_ring_distance_valid(
  * (R5, KTD3), so two sessions in two tasks never serialize.
  * zz9k_open'd contexts acquire and release sessions through
  * zz9k_audio_ring_session_begin/_end in the host layer. */
+/* Platform cache maintenance for host-visible board memory. AmigaOS may map
+ * the Zorro III aperture cacheable; producer PCM/control writes must reach the
+ * card before cursor publication, and firmware credits must be invalidated
+ * before polling. Non-Amiga host builds implement these as no-ops. */
+void zz9k_audio_ring_cache_flush(const volatile void *address, uint32_t length);
+void zz9k_audio_ring_cache_invalidate(const volatile void *address,
+                                      uint32_t length);
+
 
 /* PCM bytes the producer has staged but firmware has not yet taken
  * credit for: write minus consumed (R7). */
@@ -405,6 +413,35 @@ static inline uint32_t zz9k_audio_ring_free_bytes(
   }
   return session->grant.ring_capacity - zz9k_audio_ring_outstanding(session);
 }
+/* Copy into board memory with naturally aligned longword stores. Byte-at-a-
+ * time volatile stores become individual Zorro transactions on m68k and
+ * cannot sustain two 192-KiB/s producers. Loading through memcpy keeps the
+ * source alignment/aliasing contract unrestricted while each 32-bit store
+ * preserves the four source bytes on both big- and little-endian hosts. */
+static inline void zz9k_audio_ring_copy_to_board(volatile uint8_t *dst,
+                                                 const uint8_t *src,
+                                                 uint32_t length)
+{
+  uint32_t offset = 0U;
+
+  while (offset < length &&
+         (((uintptr_t)(dst + offset) & (uintptr_t)3U) != 0U)) {
+    dst[offset] = src[offset];
+    offset++;
+  }
+  while (length - offset >= 4U) {
+    uint32_t word;
+
+    memcpy(&word, src + offset, sizeof(word));
+    *(volatile uint32_t *)(void *)(dst + offset) = word;
+    offset += 4U;
+  }
+  while (offset < length) {
+    dst[offset] = src[offset];
+    offset++;
+  }
+}
+
 
 /* Stage PCM into the ring at the write cursor, wrapping at the ring
  * end, bounded by the currently credited free space. The bytes are
@@ -422,7 +459,6 @@ static inline uint32_t zz9k_audio_ring_write(ZZ9KAudioRingSession *session,
   uint32_t offset;
   uint32_t first;
   const uint8_t *src;
-  volatile uint8_t *dst;
 
   if (!session || !session->mapped || !pcm) {
     return 0U;
@@ -437,14 +473,14 @@ static inline uint32_t zz9k_audio_ring_write(ZZ9KAudioRingSession *session,
   }
 
   src = (const uint8_t *)pcm;
-  dst = session->ring + offset;
-  for (staged = 0U; staged < first; staged++) {
-    dst[staged] = src[staged];
+  zz9k_audio_ring_copy_to_board(session->ring + offset, src, first);
+  zz9k_audio_ring_copy_to_board(session->ring, src + first, length - first);
+  staged = length;
+  zz9k_audio_ring_cache_flush(session->ring + offset, first);
+  if (staged > first) {
+    zz9k_audio_ring_cache_flush(session->ring, staged - first);
   }
-  dst = session->ring;
-  for (; staged < length; staged++) {
-    dst[staged - first] = src[staged];
-  }
+
 
   session->write_cursor += staged;
   return staged;
@@ -466,6 +502,9 @@ static inline void zz9k_audio_ring_publish(ZZ9KAudioRingSession *session)
                                    session->write_cursor,
                                    session->heartbeat,
                                    session->flags);
+  zz9k_audio_ring_cache_flush(session->producer_line,
+                              ZZ9K_AUDIO_RING_CONTROL_LINE_SIZE);
+
 }
 
 /* Adopt firmware's consumed cursor as ring credit: one bounded,
@@ -485,6 +524,8 @@ static inline int zz9k_audio_ring_take_credits(
     return ZZ9K_AUDIO_RING_CREDIT_REVOKED;
   }
   for (attempt = 0U;; attempt++) {
+    zz9k_audio_ring_cache_invalidate(session->firmware_line,
+                                     ZZ9K_AUDIO_RING_CONTROL_LINE_SIZE);
     if (zz9k_audio_ring_firmware_snapshot(session->firmware_line,
                                           &snapshot)) {
       if (snapshot.generation != session->grant.generation ||
