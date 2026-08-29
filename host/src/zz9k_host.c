@@ -2205,6 +2205,10 @@ int zz9k_audio_ring_session_begin(ZZ9KContext *ctx,
       !zz9k_board_range_fits(ctx->board.board_size,
                              session->grant.control_offset,
                              ZZ9K_AUDIO_RING_CONTROL_SIZE)) {
+    /* The slot is already leased firmware-side; release it or the next
+     * acquire stays BUSY until heartbeat revocation (PR #29 review). */
+    (void)zz9k_audio_ring_release(ctx, session->grant.slot,
+                                  session->grant.generation, 0U);
     memset(session, 0, sizeof(*session));
     return ZZ9K_STATUS_INTERNAL_ERROR;
   }
@@ -2217,6 +2221,8 @@ int zz9k_audio_ring_session_begin(ZZ9KContext *ctx,
                                   session->grant.ring_capacity) ||
         !zz9k_aperture_range_free(&layout, session->grant.control_offset,
                                   ZZ9K_AUDIO_RING_CONTROL_SIZE)) {
+      (void)zz9k_audio_ring_release(ctx, session->grant.slot,
+                                    session->grant.generation, 0U);
       memset(session, 0, sizeof(*session));
       return ZZ9K_STATUS_INTERNAL_ERROR;
     }
