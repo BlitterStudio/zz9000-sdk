@@ -286,12 +286,23 @@ static int test_invalid_layouts_fail_closed(void)
 
   if (!query_rejected(&layout_4m, layout_2m.aperture_size)) return 1;
 
+  /* Generation 2 is the live direct-ring carve; the first rejected
+   * generation is now 3 (unknown future layout). */
   bad = layout_4m;
   bad.profile = ZZ9K_APERTURE_PROFILE(
-      ZZ9K_APERTURE_LAYOUT_GENERATION_1 + 1U,
+      ZZ9K_APERTURE_LAYOUT_GENERATION_2 + 1U,
       ZZ9K_APERTURE_FLAG_VALID | ZZ9K_APERTURE_FLAG_ACKED |
       ZZ9K_APERTURE_FLAG_HOST_WINDOW | ZZ9K_APERTURE_FLAG_PIP);
   if (!query_rejected(&bad, bad.aperture_size)) return 2;
+
+  /* A generation-2 profile on generation-1 heap geometry (the carve
+   * is missing) is still a mismatch. */
+  bad = layout_4m;
+  bad.profile = ZZ9K_APERTURE_PROFILE(
+      ZZ9K_APERTURE_LAYOUT_GENERATION_2,
+      ZZ9K_APERTURE_FLAG_VALID | ZZ9K_APERTURE_FLAG_ACKED |
+      ZZ9K_APERTURE_FLAG_HOST_WINDOW | ZZ9K_APERTURE_FLAG_PIP);
+  if (!query_rejected(&bad, bad.aperture_size)) return 11;
 
   bad = layout_4m;
   bad.profile |= 1U << 4;

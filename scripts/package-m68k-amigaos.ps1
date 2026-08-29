@@ -85,6 +85,7 @@ Copy-One "build/mpega.library" "Libs/mpega.library"
 
 Copy-One "build/zz9k-info" "C/zz9k-info"
 Copy-One "build/zz9k-services" "C/zz9k-services"
+Copy-One "build/zz9k-fabriclease" "C/zz9k-fabriclease"
 Copy-One "build/zz9k-bench" "C/zz9k-bench"
 Copy-One "build/zz9k-hash" "C/zz9k-hash"
 Copy-One "build/zz9k-inflate" "C/zz9k-inflate"

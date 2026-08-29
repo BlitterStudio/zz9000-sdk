@@ -84,12 +84,17 @@ static int test_audio_service_requires_calibrated_surface(void)
     if (release_services[i].service_id != ZZ9K_SERVICE_AUDIO)
       continue;
     if ((release_services[i].required_caps &
-         (ZZ9K_CAP_AUDIO_CONTROL | ZZ9K_CAP_AUDIO_METERING)) !=
-        (ZZ9K_CAP_AUDIO_CONTROL | ZZ9K_CAP_AUDIO_METERING) ||
+         (ZZ9K_CAP_AUDIO_CONTROL | ZZ9K_CAP_AUDIO_METERING |
+          ZZ9K_CAP_AUDIO_FABRIC)) !=
+        (ZZ9K_CAP_AUDIO_CONTROL | ZZ9K_CAP_AUDIO_METERING |
+         ZZ9K_CAP_AUDIO_FABRIC) ||
         (release_services[i].required_flags &
-         ZZ9K_SERVICE_FLAG_AUDIO_CONTROL) == 0U ||
-        release_services[i].min_opcode_count != 15U) {
-      printf("audio service omits calibrated control surface\n");
+         (ZZ9K_SERVICE_FLAG_AUDIO_CONTROL |
+          ZZ9K_SERVICE_FLAG_AUDIO_FABRIC)) !=
+            (ZZ9K_SERVICE_FLAG_AUDIO_CONTROL |
+             ZZ9K_SERVICE_FLAG_AUDIO_FABRIC) ||
+        release_services[i].min_opcode_count != 21U) {
+      printf("audio service omits calibrated control + fabric surface\n");
       return 1;
     }
     if (!zz9k_service_flag_name(ZZ9K_SERVICE_AUDIO,

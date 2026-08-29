@@ -150,6 +150,65 @@ typedef char audio_control_paula_ceiling_is_append_only[
 typedef char audio_control_ax_ceiling_is_append_only[
   (offsetof(ZZ9KAudioControlStateResultPayload, ceiling_ax) == 28U) ? 1 : -1
 ];
+
+typedef char audio_ring_acquire_payload_is_48_bytes[
+  (sizeof(ZZ9KAudioRingAcquirePayload) == 48U) ? 1 : -1
+];
+
+typedef char audio_ring_acquire_result_payload_is_48_bytes[
+  (sizeof(ZZ9KAudioRingAcquireResultPayload) == 48U) ? 1 : -1
+];
+
+typedef char audio_ring_release_payload_is_48_bytes[
+  (sizeof(ZZ9KAudioRingReleasePayload) == 48U) ? 1 : -1
+];
+
+typedef char audio_fabric_state_get_payload_is_48_bytes[
+  (sizeof(ZZ9KAudioFabricStateGetPayload) == 48U) ? 1 : -1
+];
+
+typedef char audio_fabric_state_result_payload_is_48_bytes[
+  (sizeof(ZZ9KAudioFabricStateResultPayload) == 48U) ? 1 : -1
+];
+typedef char audio_fabric_state_tail_is_append_only[
+  (offsetof(ZZ9KAudioFabricStateResultPayload, starvation_count) == 32U &&
+   offsetof(ZZ9KAudioFabricStateResultPayload, flags) == 36U &&
+   offsetof(ZZ9KAudioFabricStateResultPayload, peak) == 40U &&
+   offsetof(ZZ9KAudioFabricStateResultPayload, clip) == 44U) ? 1 : -1
+];
+typedef char audio_fabric_state_cursors_are_64_bit[
+  (offsetof(ZZ9KAudioFabricStateResultPayload, cursor_write_hi) == 16U &&
+   offsetof(ZZ9KAudioFabricStateResultPayload, cursor_write_lo) == 20U &&
+   offsetof(ZZ9KAudioFabricStateResultPayload, cursor_read_hi) == 24U &&
+   offsetof(ZZ9KAudioFabricStateResultPayload, cursor_read_lo) == 28U) ? 1 : -1
+];
+typedef char audio_ring_producer_line_is_one_cache_line[
+  (sizeof(ZZ9KAudioRingProducerLine) ==
+   ZZ9K_AUDIO_RING_CONTROL_LINE_SIZE) ? 1 : -1
+];
+typedef char audio_ring_firmware_line_is_one_cache_line[
+  (sizeof(ZZ9KAudioRingFirmwareLine) ==
+   ZZ9K_AUDIO_RING_CONTROL_LINE_SIZE) ? 1 : -1
+];
+typedef char audio_ring_producer_line_field_offsets[
+  (offsetof(ZZ9KAudioRingProducerLine, generation) == 4U &&
+   offsetof(ZZ9KAudioRingProducerLine, write_cursor_hi) == 8U &&
+   offsetof(ZZ9KAudioRingProducerLine, write_cursor_lo) == 12U &&
+   offsetof(ZZ9KAudioRingProducerLine, heartbeat) == 16U &&
+   offsetof(ZZ9KAudioRingProducerLine, flags) == 20U) ? 1 : -1
+];
+typedef char audio_ring_firmware_line_field_offsets[
+  (offsetof(ZZ9KAudioRingFirmwareLine, generation) == 4U &&
+   offsetof(ZZ9KAudioRingFirmwareLine, consumed_cursor_hi) == 8U &&
+   offsetof(ZZ9KAudioRingFirmwareLine, consumed_cursor_lo) == 12U &&
+   offsetof(ZZ9KAudioRingFirmwareLine, status) == 16U) ? 1 : -1
+];
+typedef char audio_ring_control_block_is_two_lines[
+  (ZZ9K_AUDIO_RING_CONTROL_SIZE ==
+   2U * ZZ9K_AUDIO_RING_CONTROL_LINE_SIZE &&
+   ZZ9K_AUDIO_RING_CONTROL_ALIGN == ZZ9K_AUDIO_RING_CONTROL_LINE_SIZE)
+    ? 1 : -1
+];
 typedef char crypto_hash_payload_is_48_bytes[
   (sizeof(ZZ9KCryptoHashPayload) == 48U) ? 1 : -1
 ];
@@ -216,10 +275,10 @@ int main(void)
   if (ZZ9K_REG_SDK_DIAG_Z3ADDR != 0x0118U) return 12;
   if (ZZ9K_REG_APERTURE_INFO_HI != 0x011cU) return 103;
   if (ZZ9K_REG_APERTURE_INFO_LO_ACK != 0x011eU) return 104;
-  if (ZZ9K_APERTURE_ACK_TOKEN != 0xa501U) return 105;
-  if (ZZ9K_APERTURE_INFO_2M != 0x5a010502UL) return 106;
-  if (ZZ9K_APERTURE_INFO_4M != 0x5a010704UL) return 107;
-  if (ZZ9K_APERTURE_INFO_8M != 0x5a010708UL) return 108;
+  if (ZZ9K_APERTURE_ACK_TOKEN != 0xa502U) return 105;
+  if (ZZ9K_APERTURE_INFO_2M != 0x5a020502UL) return 106;
+  if (ZZ9K_APERTURE_INFO_4M != 0x5a020704UL) return 107;
+  if (ZZ9K_APERTURE_INFO_8M != 0x5a020708UL) return 108;
   if (ZZ9K_INTERRUPT_SDK != 0x0008U) return 13;
   if (ZZ9K_CONFIG_ACK_MODE != 0x0008U) return 14;
   if (ZZ9K_CONFIG_ACK_SDK != 0x0080U) return 15;
@@ -267,6 +326,12 @@ int main(void)
                             ZZ9K_APERTURE_FLAG_ACKED |
                             ZZ9K_APERTURE_FLAG_HOST_WINDOW) !=
       0x00010007UL) return 112;
+  if (ZZ9K_APERTURE_LAYOUT_GENERATION_2 != 2U ||
+      ZZ9K_APERTURE_PROFILE(ZZ9K_APERTURE_LAYOUT_GENERATION_2,
+                            ZZ9K_APERTURE_FLAG_VALID |
+                            ZZ9K_APERTURE_FLAG_ACKED |
+                            ZZ9K_APERTURE_FLAG_HOST_WINDOW) !=
+          0x00020007UL) return 140;
   if (ZZ9K_APERTURE_LAYOUT_LEGACY != 0 ||
       ZZ9K_APERTURE_LAYOUT_UNACKNOWLEDGED != 1 ||
       ZZ9K_APERTURE_LAYOUT_ACTIVE != 2 ||
@@ -317,6 +382,37 @@ int main(void)
   if (ZZ9K_AUDIO_SCENE_SAVE_BUSY != 4U) return 115;
   if (ZZ9K_OP_AUDIO_SCENE_SAVE != 0x050dU) return 116;
   if (ZZ9K_OP_AUDIO_CONTROL_STATE_GET != 0x050eU) return 117;
+  if (ZZ9K_OP_AUDIO_FABRIC_STATE_GET != 0x0512U) return 126;
+  if (ZZ9K_OP_AUDIO_RING_ACQUIRE != 0x0513U) return 123;
+  if (ZZ9K_OP_AUDIO_RING_RELEASE != 0x0514U) return 124;
+  if (ZZ9K_OP_AUDIO_RING_ACQUIRE != ZZ9K_SERVICE_AUDIO + 0x13U) return 127;
+  if (ZZ9K_OP_AUDIO_RING_RELEASE != ZZ9K_SERVICE_AUDIO + 0x14U) return 125;
+  if (ZZ9K_OP_AUDIO_FABRIC_STATE_GET != ZZ9K_SERVICE_AUDIO + 0x12U) {
+    return 128;
+  }
+  if (ZZ9K_CAP_AUDIO_FABRIC != (1U << 27)) return 129;
+  if (ZZ9K_SERVICE_FLAG_AUDIO_FABRIC != (1U << 22)) return 130;
+  if (ZZ9K_AUDIO_FABRIC_SLOT_FREE != 0U ||
+      ZZ9K_AUDIO_FABRIC_SLOT_LEASED != 1U ||
+      ZZ9K_AUDIO_FABRIC_SLOT_ACTIVE != 2U ||
+      ZZ9K_AUDIO_FABRIC_SLOT_REVOKED != 3U) return 131;
+  if (ZZ9K_AUDIO_RING_CONTROL_LINE_SIZE != 64U ||
+      ZZ9K_AUDIO_RING_CONTROL_SIZE != 128U ||
+      ZZ9K_AUDIO_RING_CONTROL_ALIGN != 64U) return 132;
+  if (ZZ9K_AUDIO_RING_PERIOD_BYTES != 3840U ||
+      ZZ9K_AUDIO_RING_PERIOD_US != 20000U) return 133;
+  if (ZZ9K_AUDIO_RING_CONTRACT_NONE != 0U ||
+      ZZ9K_AUDIO_RING_CONTRACT_48K_STEREO_S16LE != 1U) return 134;
+  if (ZZ9K_AUDIO_RING_SLOT_MAX != 2U) return 135;
+  if (ZZ9K_AUDIO_RING_PRODUCER_FLAG_PAUSED != (1U << 0) ||
+      ZZ9K_AUDIO_RING_PRODUCER_FLAG_KNOWN !=
+          ZZ9K_AUDIO_RING_PRODUCER_FLAG_PAUSED) return 136;
+  if (ZZ9K_AUDIO_RING_STATUS_OK != 0U ||
+      ZZ9K_AUDIO_RING_STATUS_REVOKED_HEARTBEAT != 1U ||
+      ZZ9K_AUDIO_RING_STATUS_FAULT_CURSOR != 2U) return 137;
+  if (ZZ9K_AUDIO_RING_HEARTBEAT_UNKNOWN != 0xffffffffU) return 138;
+  if (ZZ9K_AUDIO_RING_RESULT_GAIN_BOUNDED != (1U << 0) ||
+      ZZ9K_AUDIO_RING_RESULT_BUS_ZORRO2 != (1U << 1)) return 139;
   if (ZZ9K_AUDIO_SCENE_PARAM_CALIBRATION != 17U) return 118;
   if (ZZ9K_AUDIO_CEILING_MIN != 1U ||
       ZZ9K_AUDIO_CEILING_MAX != 4095U) return 119;

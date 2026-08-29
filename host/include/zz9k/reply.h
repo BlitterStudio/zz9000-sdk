@@ -554,6 +554,87 @@ static inline int zz9k_reply_audio_stream_result(
   return ZZ9K_STATUS_OK;
 }
 
+static inline int zz9k_reply_audio_ring_acquire_result(
+    const ZZ9KMailboxEntry *reply,
+    ZZ9KAudioRingAcquireResult *result)
+{
+  const uint8_t *payload;
+  int status;
+
+  if (!result) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  memset(result, 0, sizeof(*result));
+  status = zz9k_reply_require(reply, ZZ9K_OP_AUDIO_RING_ACQUIRE,
+                              sizeof(ZZ9KAudioRingAcquireResultPayload));
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  payload = reply->payload.inline_data;
+  result->slot = zz9k_get_be32(&payload[0]);
+  result->generation = zz9k_get_be32(&payload[4]);
+  result->ring_offset = zz9k_get_be32(&payload[8]);
+  result->ring_capacity = zz9k_get_be32(&payload[12]);
+  result->control_offset = zz9k_get_be32(&payload[16]);
+  result->period_bytes = zz9k_get_be32(&payload[20]);
+  result->period_us = zz9k_get_be32(&payload[24]);
+  result->sample_contract = zz9k_get_be32(&payload[28]);
+  result->gain_applied = zz9k_get_be32(&payload[32]);
+  result->slot_count = zz9k_get_be32(&payload[36]);
+  result->flags = zz9k_get_be32(&payload[40]);
+
+  /* The decoded grant must be usable as-is (R3): clients dereference
+   * ring/control pointers straight out of it after this check. */
+  if (!zz9k_audio_ring_grant_valid(result)) {
+    memset(result, 0, sizeof(*result));
+    return ZZ9K_STATUS_INTERNAL_ERROR;
+  }
+
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_reply_audio_fabric_state_result(
+    const ZZ9KMailboxEntry *reply,
+    ZZ9KAudioFabricStateResult *result)
+{
+  const uint8_t *payload;
+  int status;
+
+  if (!result) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  memset(result, 0, sizeof(*result));
+  status = zz9k_reply_require(reply, ZZ9K_OP_AUDIO_FABRIC_STATE_GET,
+                              sizeof(ZZ9KAudioFabricStateResultPayload));
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  payload = reply->payload.inline_data;
+  result->slot = zz9k_get_be32(&payload[0]);
+  result->generation = zz9k_get_be32(&payload[4]);
+  result->state = zz9k_get_be32(&payload[8]);
+  result->heartbeat_ms = zz9k_get_be32(&payload[12]);
+  result->cursor_write = zz9k_media_u64_from_be(&payload[16], &payload[20]);
+  result->cursor_read = zz9k_media_u64_from_be(&payload[24], &payload[28]);
+  result->starvation_count = zz9k_get_be32(&payload[32]);
+  result->flags = zz9k_get_be32(&payload[36]);
+  result->peak = zz9k_get_be32(&payload[40]);
+  result->clip = zz9k_get_be32(&payload[44]);
+
+  if (result->slot > ZZ9K_AUDIO_RING_SLOT_MAX ||
+      result->state > ZZ9K_AUDIO_FABRIC_SLOT_REVOKED ||
+      (result->flags & ~ZZ9K_AUDIO_FABRIC_STATE_HOLD_RESET) != 0U) {
+    memset(result, 0, sizeof(*result));
+    return ZZ9K_STATUS_INTERNAL_ERROR;
+  }
+
+  return ZZ9K_STATUS_OK;
+}
+
 static inline int zz9k_reply_video_session_result(
     const ZZ9KMailboxEntry *reply,
     uint16_t opcode,

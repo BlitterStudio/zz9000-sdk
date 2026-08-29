@@ -696,6 +696,76 @@ static inline int zz9k_request_audio_stream_stop(ZZ9KRequest *request,
   return ZZ9K_STATUS_OK;
 }
 
+static inline int zz9k_request_audio_ring_acquire(
+    ZZ9KRequest *request,
+    const ZZ9KAudioRingAcquireDesc *desc)
+{
+  ZZ9KAudioRingAcquirePayload *payload;
+  ZZ9KAudioRingAcquireDesc validated;
+
+  if (!request || !desc ||
+      !zz9k_audio_build_ring_acquire_desc(&validated, desc->slot,
+                                          desc->identity, desc->gain,
+                                          desc->flags)) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  zz9k_request_init(request, ZZ9K_OP_AUDIO_RING_ACQUIRE);
+  request->entry.payload_len = sizeof(ZZ9KAudioRingAcquirePayload);
+  payload =
+      (ZZ9KAudioRingAcquirePayload *)request->entry.payload.inline_data;
+  zz9k_put_be32(payload->slot, validated.slot);
+  zz9k_put_be32(payload->identity, validated.identity);
+  zz9k_put_be32(payload->gain, validated.gain);
+  zz9k_put_be32(payload->flags, validated.flags);
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_request_audio_ring_release(ZZ9KRequest *request,
+                                                  uint32_t slot,
+                                                  uint32_t generation,
+                                                  uint32_t flags)
+{
+  ZZ9KAudioRingReleasePayload *payload;
+  ZZ9KAudioRingReleaseDesc validated;
+
+  if (!request ||
+      !zz9k_audio_build_ring_release_desc(&validated, slot, generation,
+                                          flags)) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  zz9k_request_init(request, ZZ9K_OP_AUDIO_RING_RELEASE);
+  request->entry.payload_len = sizeof(ZZ9KAudioRingReleasePayload);
+  payload =
+      (ZZ9KAudioRingReleasePayload *)request->entry.payload.inline_data;
+  zz9k_put_be32(payload->slot, validated.slot);
+  zz9k_put_be32(payload->generation, validated.generation);
+  zz9k_put_be32(payload->flags, validated.flags);
+  return ZZ9K_STATUS_OK;
+}
+
+static inline int zz9k_request_audio_fabric_state_get(
+    ZZ9KRequest *request,
+    const ZZ9KAudioFabricStateDesc *desc)
+{
+  ZZ9KAudioFabricStateGetPayload *payload;
+  ZZ9KAudioFabricStateDesc validated;
+
+  if (!request || !desc ||
+      !zz9k_audio_build_fabric_state_desc(
+          &validated, desc->slot, desc->flags)) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+  zz9k_request_init(request, ZZ9K_OP_AUDIO_FABRIC_STATE_GET);
+  request->entry.payload_len = sizeof(ZZ9KAudioFabricStateGetPayload);
+  payload =
+      (ZZ9KAudioFabricStateGetPayload *)request->entry.payload.inline_data;
+  zz9k_put_be32(payload->slot, validated.slot);
+  zz9k_put_be32(payload->flags, validated.flags);
+  return ZZ9K_STATUS_OK;
+}
+
 static inline int zz9k_request_video_session_begin(
     ZZ9KRequest *request,
     const ZZ9KVideoSessionBeginDesc *desc)

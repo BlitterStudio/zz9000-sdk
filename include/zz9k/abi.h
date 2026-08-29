@@ -7,6 +7,7 @@
 #ifndef ZZ9K_ABI_H
 #define ZZ9K_ABI_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -79,11 +80,11 @@ typedef struct ZZ9KMediaClock {
  * 0x111e once the 0x1000 direct-register window base is included. */
 #define ZZ9K_REG_APERTURE_INFO_HI    0x011cU
 #define ZZ9K_REG_APERTURE_INFO_LO_ACK 0x011eU
-#define ZZ9K_APERTURE_ACK_TOKEN      0xa501U
+#define ZZ9K_APERTURE_ACK_TOKEN      0xa502U
 #define ZZ9K_APERTURE_INFO_LEGACY    0x00000000UL
-#define ZZ9K_APERTURE_INFO_2M        0x5a010502UL
-#define ZZ9K_APERTURE_INFO_4M        0x5a010704UL
-#define ZZ9K_APERTURE_INFO_8M        0x5a010708UL
+#define ZZ9K_APERTURE_INFO_2M        0x5a020502UL
+#define ZZ9K_APERTURE_INFO_4M        0x5a020704UL
+#define ZZ9K_APERTURE_INFO_8M        0x5a020708UL
 
 /*
  * ZZ9000.CFG query interface (firmware ABI >= 2.3): write a key id to
@@ -197,6 +198,17 @@ enum ZZ9KOpcode {
   ZZ9K_OP_AUDIO_METER_READ = ZZ9K_SERVICE_AUDIO + 0x0c,
   ZZ9K_OP_AUDIO_SCENE_SAVE = ZZ9K_SERVICE_AUDIO + 0x0d,
   ZZ9K_OP_AUDIO_CONTROL_STATE_GET = ZZ9K_SERVICE_AUDIO + 0x0e,
+  /* Audio fabric direct-ring producer plane (implemented in
+   * firmware): producers acquire generation-bound host-visible PCM
+   * rings and publish cursors through shared control lines, so the
+   * steady data path needs no synchronous mailbox work. Dispatch is
+   * live but still deliberately not advertised until the on-hardware
+   * verification session passes (see ZZ9K_CAP_AUDIO_FABRIC). Values
+   * 0x050f..0x0511 belonged to the retired copy-submit lease
+   * transport and are never reused. */
+  ZZ9K_OP_AUDIO_FABRIC_STATE_GET = ZZ9K_SERVICE_AUDIO + 0x12,
+  ZZ9K_OP_AUDIO_RING_ACQUIRE = ZZ9K_SERVICE_AUDIO + 0x13,
+  ZZ9K_OP_AUDIO_RING_RELEASE = ZZ9K_SERVICE_AUDIO + 0x14,
 
   ZZ9K_OP_DECOMPRESS = ZZ9K_SERVICE_CODEC + 0x00,
   ZZ9K_OP_DECOMPRESS_TEST = ZZ9K_SERVICE_CODEC + 0x01,
@@ -269,13 +281,19 @@ enum ZZ9KCapability {
    * advertised by any capability word until the on-hardware verification
    * session qualifies them (R12). */
   ZZ9K_CAP_AUDIO_CONTROL = 1U << 25,
-  ZZ9K_CAP_AUDIO_METERING = 1U << 26
+  ZZ9K_CAP_AUDIO_METERING = 1U << 26,
+  /* Audio fabric compositor (direct-ring producer plane, opcodes
+   * 0x0512+). Append-only but deliberately NOT advertised by any
+   * capability word until the on-hardware verification session
+   * qualifies them, per the ZZ9K_CAP_AUDIO_CONTROL (R12) discipline. */
+  ZZ9K_CAP_AUDIO_FABRIC = 1U << 27
 };
 
 #define ZZ9K_APERTURE_LAYOUT_GENERATION_SHIFT 16U
 #define ZZ9K_APERTURE_LAYOUT_GENERATION_MASK  0xffff0000UL
 #define ZZ9K_APERTURE_LAYOUT_FLAGS_MASK       0x0000ffffUL
 #define ZZ9K_APERTURE_LAYOUT_GENERATION_1     1U
+#define ZZ9K_APERTURE_LAYOUT_GENERATION_2     2U
 #define ZZ9K_APERTURE_PROFILE(generation, flags) \
   ((((uint32_t)(generation)) << ZZ9K_APERTURE_LAYOUT_GENERATION_SHIFT) | \
    ((uint32_t)(flags) & ZZ9K_APERTURE_LAYOUT_FLAGS_MASK))
@@ -342,6 +360,11 @@ enum ZZ9KServiceFlags {
   /* Control-plane audio opcodes (0x0509+) are dispatchable. Follows the
    * ZZ9K_CAP_AUDIO_CONTROL gated-advertising discipline. */
   ZZ9K_SERVICE_FLAG_AUDIO_CONTROL = 1U << 21,
+  /* Direct-ring fabric opcodes (0x0512+) are dispatchable (firmware
+   * U3). Follows the ZZ9K_CAP_AUDIO_FABRIC gated-advertising
+   * discipline: still not reported in the audio service flags until
+   * qualified. */
+  ZZ9K_SERVICE_FLAG_AUDIO_FABRIC = 1U << 22,
 
   ZZ9K_SERVICE_FLAG_VIDEO_MPEG1 = 1U << 16,
   ZZ9K_SERVICE_FLAG_VIDEO_MPEG_PS = 1U << 17,
@@ -1015,6 +1038,214 @@ typedef struct ZZ9KAudioControlStateResultPayload {
   uint8_t save_status[4];
 } ZZ9KAudioControlStateResultPayload;
 
+/* --------------------------------------------------------------------
+ * Audio fabric direct-ring producer plane (opcodes 0x0512+). The
+ * plane is implemented in firmware (U3): dispatch is live but still
+ * deliberately not advertised in any capability word or service flag
+ * until it passes the on-hardware verification session (see
+ * ZZ9K_CAP_AUDIO_FABRIC). Mailbox payload fields are big-endian, 48
+ * bytes per the inline-payload convention. The control lines below
+ * are NOT mailbox payloads: they live in board-visible shared memory
+ * beside the granted PCM ring and are accessed through the seqlock
+ * helpers in zz9k/audio.h.
+ * ------------------------------------------------------------------ */
+
+/* Control-block geometry (KTD1): two ownership-separated 64-byte
+ * lines, each occupying one cache line at
+ * ZZ9K_AUDIO_RING_CONTROL_ALIGN. The producer line is written only by
+ * the producer, the firmware line only by firmware. Every field is a
+ * big-endian 32-bit word; the 64-bit cursors are hi/lo word pairs
+ * covered by the line's seqlock. The producer line sits at control
+ * offset +0, the firmware line at +64. */
+#define ZZ9K_AUDIO_RING_CONTROL_LINE_SIZE 64U
+#define ZZ9K_AUDIO_RING_CONTROL_SIZE      128U
+#define ZZ9K_AUDIO_RING_CONTROL_ALIGN     64U
+
+/* Fixed period geometry of the bypass compositor: one 20-ms period of
+ * 48 kHz stereo S16LE is 3840 bytes. Firmware consumes complete
+ * periods only (R7), and a granted ring capacity is a whole number
+ * of periods. */
+#define ZZ9K_AUDIO_RING_PERIOD_BYTES 3840U
+#define ZZ9K_AUDIO_RING_PERIOD_US    20000U
+
+/* Sample contract of a granted ring. The bypass path consumes 48 kHz
+ * stereo S16LE only; the enumerated word leaves room for future
+ * conversion-bearing contracts without moving any field. */
+#define ZZ9K_AUDIO_RING_CONTRACT_NONE             0U
+#define ZZ9K_AUDIO_RING_CONTRACT_48K_STEREO_S16LE 1U
+
+/* Highest leaseable direct-ring slot index. Slot 0 is the firmware
+ * pump and is never granted; the acquire result's slot_count reports
+ * the actual leaseable count for the active bus mode (two on Zorro
+ * III, one on Zorro II). */
+#define ZZ9K_AUDIO_RING_SLOT_MAX 2U
+
+/* Producer-line flags. PAUSED suppresses cursor progress but never
+ * suspends the heartbeat (R12). Firmware rejects lines carrying
+ * unknown flag bits. */
+#define ZZ9K_AUDIO_RING_PRODUCER_FLAG_PAUSED (1U << 0)
+#define ZZ9K_AUDIO_RING_PRODUCER_FLAG_KNOWN \
+  ZZ9K_AUDIO_RING_PRODUCER_FLAG_PAUSED
+
+/* Firmware-line status. REVOKED_HEARTBEAT and FAULT_CURSOR both
+ * invalidate the generation: consumption stops and the slot may be
+ * re-acquired without a card reset (R13, KTD4). */
+#define ZZ9K_AUDIO_RING_STATUS_OK                0U
+#define ZZ9K_AUDIO_RING_STATUS_REVOKED_HEARTBEAT 1U
+#define ZZ9K_AUDIO_RING_STATUS_FAULT_CURSOR      2U
+
+/* Heartbeat age reported by FABRIC_STATE_GET when firmware has no
+ * measurement for the slot (free, or not yet wired by the
+ * direct-ring lifecycle). */
+#define ZZ9K_AUDIO_RING_HEARTBEAT_UNKNOWN 0xffffffffU
+
+/* Per-slot status reported by ZZ9K_OP_AUDIO_FABRIC_STATE_GET. */
+#define ZZ9K_AUDIO_FABRIC_SLOT_FREE    0U
+#define ZZ9K_AUDIO_FABRIC_SLOT_LEASED  1U
+#define ZZ9K_AUDIO_FABRIC_SLOT_ACTIVE  2U
+#define ZZ9K_AUDIO_FABRIC_SLOT_REVOKED 3U
+
+/* Producer-owned control line. sequence is the even/odd seqlock
+ * (even = a stable snapshot, odd = an update in flight). generation
+ * must match the active lease or firmware ignores the line (R4).
+ * write_cursor is the monotonic 64-bit count of PCM bytes made
+ * visible to firmware, published only after the matching PCM bytes
+ * are committed (R6). heartbeat is a producer-refreshed liveness
+ * token: any change refreshes it, and firmware measures its age
+ * against its own clock (R11). flags carries
+ * ZZ9K_AUDIO_RING_PRODUCER_FLAG_*. */
+typedef struct ZZ9KAudioRingProducerLine {
+  uint8_t sequence[4];
+  uint8_t generation[4];
+  uint8_t write_cursor_hi[4];
+  uint8_t write_cursor_lo[4];
+  uint8_t heartbeat[4];
+  uint8_t flags[4];
+  uint8_t reserved[40];
+} ZZ9KAudioRingProducerLine;
+
+/* Firmware-owned control line. sequence is the even/odd seqlock.
+ * generation mirrors the lease the credits belong to: a differing
+ * generation means the lease was revoked and the credits are void.
+ * consumed_cursor is the monotonic 64-bit count of PCM bytes
+ * firmware has consumed -- ring credit the producer may overwrite
+ * (R7). status is a ZZ9K_AUDIO_RING_STATUS_* value. */
+typedef struct ZZ9KAudioRingFirmwareLine {
+  uint8_t sequence[4];
+  uint8_t generation[4];
+  uint8_t consumed_cursor_hi[4];
+  uint8_t consumed_cursor_lo[4];
+  uint8_t status[4];
+  uint8_t reserved[44];
+} ZZ9KAudioRingFirmwareLine;
+
+/* Producer intent for one direct-ring slot
+ * (ZZ9K_OP_AUDIO_RING_ACQUIRE). identity reuses the meter vocabulary
+ * (ZZ9K_AUDIO_METER_IDENTITY_*); gain is the single 0..255 mixer
+ * scale (128 = unity). flags is REQUIRED ZERO: a nonzero flags word
+ * is rejected ZZ9K_STATUS_BAD_REQUEST (the bypass path consumes
+ * 48 kHz stereo S16LE only). */
+typedef struct ZZ9KAudioRingAcquirePayload {
+  uint8_t slot[4];
+  uint8_t identity[4];
+  uint8_t gain[4];
+  uint8_t flags[4];
+  uint8_t reserved[32];
+} ZZ9KAudioRingAcquirePayload;
+
+/* The generation-bound grant (R1, R3): every address and capacity
+ * the producer may use is derived from this result -- clients never
+ * hard-code board offsets or ring sizes. ring_offset and
+ * control_offset are board-visible offsets of the PCM ring and the
+ * 128-byte control block, both inside the active board aperture and
+ * non-overlapping with every other granted range (R2). ring_capacity
+ * is a whole number of periods. period_bytes/period_us pin the
+ * 3840-byte 20-ms geometry; sample_contract is a
+ * ZZ9K_AUDIO_RING_CONTRACT_* value. gain_applied is the
+ * scene-composed scale the lease actually runs at: a reduced request
+ * is REPORTED -- with ZZ9K_AUDIO_RING_RESULT_GAIN_BOUNDED in flags --
+ * never silently clamped (the trim-bound pattern). slot_count is the
+ * actual leaseable slot count for the active bus mode (R10), and
+ * flags names the bus so Zorro II compact grants are visible as
+ * such. generation is the revocation token: release and every
+ * control-line publication carry it, and firmware rejects state
+ * whose generation differs (R4). */
+typedef struct ZZ9KAudioRingAcquireResultPayload {
+  uint8_t slot[4];
+  uint8_t generation[4];
+  uint8_t ring_offset[4];
+  uint8_t ring_capacity[4];
+  uint8_t control_offset[4];
+  uint8_t period_bytes[4];
+  uint8_t period_us[4];
+  uint8_t sample_contract[4];
+  uint8_t gain_applied[4];
+  uint8_t slot_count[4];
+  uint8_t flags[4];
+  uint8_t reserved[4];
+} ZZ9KAudioRingAcquireResultPayload;
+
+/* Surrender a direct-ring slot (ZZ9K_OP_AUDIO_RING_RELEASE). slot +
+ * generation identify the grant exactly as acquired; releasing a
+ * stale generation is idempotent (the slot may already have been
+ * revoked). flags is REQUIRED ZERO. No result payload is reserved:
+ * the completion status is the whole contract. */
+typedef struct ZZ9KAudioRingReleasePayload {
+  uint8_t slot[4];
+  uint8_t generation[4];
+  uint8_t flags[4];
+  uint8_t reserved[36];
+} ZZ9KAudioRingReleasePayload;
+
+/* Request one slot's fabric state; slot selects the compositor slot
+ * to report (0 = the pump). */
+typedef struct ZZ9KAudioFabricStateGetPayload {
+  uint8_t slot[4];
+  uint8_t flags[4];
+  uint8_t reserved[40];
+} ZZ9KAudioFabricStateGetPayload;
+
+/* One framed, non-tearing snapshot of one slot (R16): all words of a
+ * read carry the same generation; a differing generation across reads
+ * means the snapshot tore and must be retried. state is a
+ * ZZ9K_AUDIO_FABRIC_SLOT_* value (REVOKED = the generation was
+ * invalidated by heartbeat expiry or a cursor fault). heartbeat_ms is
+ * the firmware-measured age of the producer's heartbeat token
+ * (ZZ9K_AUDIO_RING_HEARTBEAT_UNKNOWN while free or unmeasured).
+ * cursor_write/cursor_read are the full 64-bit monotonic
+ * produced/consumed byte cursors of the slot's ring.
+ * starvation_count saturates, never wraps. peak is the slot's source
+ * peak-hold, unsigned 16.16 (0x00010000 = digital full scale),
+ * consumed by a ZZ9K_AUDIO_FABRIC_STATE_HOLD_RESET read per the
+ * scene-meter convention (the next compositor source read opens a
+ * fresh window); clip counts at-rail source regions and is monotonic
+ * within the lease. */
+typedef struct ZZ9KAudioFabricStateResultPayload {
+  uint8_t slot[4];
+  uint8_t generation[4];
+  uint8_t state[4];
+  uint8_t heartbeat_ms[4];
+  uint8_t cursor_write_hi[4];
+  uint8_t cursor_write_lo[4];
+  uint8_t cursor_read_hi[4];
+  uint8_t cursor_read_lo[4];
+  uint8_t starvation_count[4];
+  uint8_t flags[4];
+  uint8_t peak[4];
+  uint8_t clip[4];
+} ZZ9KAudioFabricStateResultPayload;
+
+/* Acquire-result flags: the scene composition reduced the requested
+ * gain (see gain_applied), and the grant lives on the Zorro II
+ * single-slot compact geometry. */
+#define ZZ9K_AUDIO_RING_RESULT_GAIN_BOUNDED (1U << 0)
+#define ZZ9K_AUDIO_RING_RESULT_BUS_ZORRO2   (1U << 1)
+
+/* FABRIC_STATE_GET request flag: consume the slot's peak-hold
+ * window on this read (mirrors ZZ9K_AUDIO_METER_RESULT_HOLD_RESET);
+ * the result's flags word echoes it when the read consumed it. */
+#define ZZ9K_AUDIO_FABRIC_STATE_HOLD_RESET (1U << 0)
+
 /* Decoder identity and immutable geometry are fixed at BEGIN. DECODE publishes
  * a decoder-owned frame to the active P96 overlay; client-visible bitmap
  * addresses and pitches are deliberately not part of this contract. */
@@ -1509,6 +1740,42 @@ typedef char ZZ9KAudioControlStateGetPayload_must_be_48_bytes[
     (sizeof(ZZ9KAudioControlStateGetPayload) == 48U) ? 1 : -1];
 typedef char ZZ9KAudioControlStateResultPayload_must_be_48_bytes[
     (sizeof(ZZ9KAudioControlStateResultPayload) == 48U) ? 1 : -1];
+typedef char ZZ9KAudioRingAcquirePayload_must_be_48_bytes[
+    (sizeof(ZZ9KAudioRingAcquirePayload) == 48U) ? 1 : -1];
+typedef char ZZ9KAudioRingAcquireResultPayload_must_be_48_bytes[
+    (sizeof(ZZ9KAudioRingAcquireResultPayload) == 48U) ? 1 : -1];
+typedef char ZZ9KAudioRingReleasePayload_must_be_48_bytes[
+    (sizeof(ZZ9KAudioRingReleasePayload) == 48U) ? 1 : -1];
+typedef char ZZ9KAudioFabricStateGetPayload_must_be_48_bytes[
+    (sizeof(ZZ9KAudioFabricStateGetPayload) == 48U) ? 1 : -1];
+typedef char ZZ9KAudioFabricStateResultPayload_must_be_48_bytes[
+    (sizeof(ZZ9KAudioFabricStateResultPayload) == 48U) ? 1 : -1];
+typedef char ZZ9KAudioRingProducerLine_is_one_cache_line[
+    (sizeof(ZZ9KAudioRingProducerLine) ==
+     ZZ9K_AUDIO_RING_CONTROL_LINE_SIZE) ? 1 : -1];
+typedef char ZZ9KAudioRingFirmwareLine_is_one_cache_line[
+    (sizeof(ZZ9KAudioRingFirmwareLine) ==
+     ZZ9K_AUDIO_RING_CONTROL_LINE_SIZE) ? 1 : -1];
+typedef char ZZ9KAudioRingProducerLine_field_offsets[
+    (offsetof(ZZ9KAudioRingProducerLine, generation) == 4U &&
+     offsetof(ZZ9KAudioRingProducerLine, write_cursor_hi) == 8U &&
+     offsetof(ZZ9KAudioRingProducerLine, write_cursor_lo) == 12U &&
+     offsetof(ZZ9KAudioRingProducerLine, heartbeat) == 16U &&
+     offsetof(ZZ9KAudioRingProducerLine, flags) == 20U) ? 1 : -1];
+typedef char ZZ9KAudioRingFirmwareLine_field_offsets[
+    (offsetof(ZZ9KAudioRingFirmwareLine, generation) == 4U &&
+     offsetof(ZZ9KAudioRingFirmwareLine, consumed_cursor_hi) == 8U &&
+     offsetof(ZZ9KAudioRingFirmwareLine, consumed_cursor_lo) == 12U &&
+     offsetof(ZZ9KAudioRingFirmwareLine, status) == 16U) ? 1 : -1];
+typedef char ZZ9KAudioRingControlBlock_is_two_lines[
+    (ZZ9K_AUDIO_RING_CONTROL_SIZE ==
+     2U * ZZ9K_AUDIO_RING_CONTROL_LINE_SIZE) ? 1 : -1];
+typedef char ZZ9KAudioFabricStateTailIsAppendOnly[
+    (offsetof(ZZ9KAudioFabricStateResultPayload, starvation_count) ==
+         32U &&
+     offsetof(ZZ9KAudioFabricStateResultPayload, flags) == 36U &&
+     offsetof(ZZ9KAudioFabricStateResultPayload, peak) == 40U &&
+     offsetof(ZZ9KAudioFabricStateResultPayload, clip) == 44U) ? 1 : -1];
 
 typedef union ZZ9KEntryPayload {
   uint8_t inline_data[48];
@@ -1869,6 +2136,83 @@ typedef struct ZZ9KAudioStreamResult {
   uint32_t bytes_produced;
   uint32_t flags;
 } ZZ9KAudioStreamResult;
+
+/* Fabric direct-ring plane: typed client descriptors and results for
+ * ZZ9K_OP_AUDIO_RING_ACQUIRE / RELEASE and
+ * ZZ9K_OP_AUDIO_FABRIC_STATE_GET. gain is the requested 0..255
+ * producer scale (128 = unity); firmware composes it against the
+ * enforced ceiling and reports the applied value back. */
+typedef struct ZZ9KAudioRingAcquireDesc {
+  uint32_t slot;
+  uint32_t identity;
+  uint32_t gain;
+  uint32_t flags;
+} ZZ9KAudioRingAcquireDesc;
+
+typedef struct ZZ9KAudioRingAcquireResult {
+  uint32_t slot;
+  uint32_t generation;
+  uint32_t ring_offset;
+  uint32_t ring_capacity;
+  uint32_t control_offset;
+  uint32_t period_bytes;
+  uint32_t period_us;
+  uint32_t sample_contract;
+  uint32_t gain_applied;
+  uint32_t slot_count;
+  uint32_t flags;
+} ZZ9KAudioRingAcquireResult;
+
+typedef struct ZZ9KAudioRingReleaseDesc {
+  uint32_t slot;
+  uint32_t generation;
+  uint32_t flags;
+} ZZ9KAudioRingReleaseDesc;
+
+typedef struct ZZ9KAudioFabricStateDesc {
+  uint32_t slot;
+  uint32_t flags;
+} ZZ9KAudioFabricStateDesc;
+
+/* Client-side producer session over one granted ring (plan U4).
+ * Hosted with the typed descriptors because the host API's session
+ * begin/end signatures name it; the pure data-path helpers that
+ * operate on it live in zz9k/audio.h. All members are public so
+ * tests and custom mappings can drive a session by hand. */
+typedef struct ZZ9KAudioRingSession {
+  ZZ9KAudioRingAcquireResult grant;    /* generation-bound grant (R1) */
+  volatile uint8_t *ring;              /* mapped PCM ring */
+  volatile ZZ9KAudioRingProducerLine *producer_line; /* control +0 */
+  volatile ZZ9KAudioRingFirmwareLine *firmware_line; /* control +64 */
+  uint64_t write_cursor;    /* PCM bytes staged so far (monotonic) */
+  uint64_t consumed_cursor; /* last validated firmware credit */
+  uint32_t heartbeat;       /* liveness token; any change refreshes */
+  uint32_t flags;           /* ZZ9K_AUDIO_RING_PRODUCER_FLAG_* */
+  uint32_t mapped;          /* begin() succeeded; helpers are live */
+} ZZ9KAudioRingSession;
+
+/* Outcome of one firmware-credit snapshot (zz9k/audio.h helpers):
+ * OK adopts the consumed cursor as ring credit; RETRY means the
+ * firmware line stayed unstable for the whole bounded attempt;
+ * REVOKED means the snapshot proves this generation is dead. */
+enum ZZ9KAudioRingCreditResult {
+  ZZ9K_AUDIO_RING_CREDIT_OK = 0,
+  ZZ9K_AUDIO_RING_CREDIT_RETRY = 1,
+  ZZ9K_AUDIO_RING_CREDIT_REVOKED = 2
+};
+
+typedef struct ZZ9KAudioFabricStateResult {
+  uint32_t slot;
+  uint32_t generation;
+  uint32_t state;
+  uint32_t heartbeat_ms;
+  uint64_t cursor_write;
+  uint64_t cursor_read;
+  uint32_t starvation_count;
+  uint32_t flags;
+  uint32_t peak;
+  uint32_t clip;
+} ZZ9KAudioFabricStateResult;
 
 typedef struct ZZ9KVideoSessionBeginDesc {
   uint32_t codec;

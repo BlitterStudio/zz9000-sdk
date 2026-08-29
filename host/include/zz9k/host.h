@@ -157,6 +157,55 @@ uint32_t zz9k_idle_backoff_limit(uint32_t ticks);
 int zz9k_query_caps(ZZ9KContext *ctx, ZZ9KCaps *caps);
 int zz9k_query_aperture_layout(ZZ9KContext *ctx,
                                ZZ9KApertureLayout *layout);
+
+/* True when [offset, offset+length) lies inside the layout's
+ * aperture and intersects none of the five reported regions -- the
+ * Zorro II direct-ring rule: a granted ring/control range may only
+ * live in unreported firmware-reserved space (the direct-region gap
+ * between the host window and audio base). Pure, so host tests can
+ * pin the region math against any served layout. */
+static inline int zz9k_aperture_range_free(
+    const ZZ9KApertureLayout *layout,
+    uint32_t offset,
+    uint32_t length)
+{
+  uint32_t end = offset + length;
+
+  if (!layout || length == 0U || end < offset ||
+      end > layout->aperture_size) {
+    return 0;
+  }
+  if (offset < layout->host_base + layout->host_size ||
+      end > layout->audio_base) {
+    return 0;
+  }
+  if (layout->framebuffer_size != 0U &&
+      offset < layout->framebuffer_base + layout->framebuffer_size &&
+      layout->framebuffer_base < end) {
+    return 0;
+  }
+  if (layout->pip_size != 0U &&
+      offset < layout->pip_base + layout->pip_size &&
+      layout->pip_base < end) {
+    return 0;
+  }
+  if (layout->template_size != 0U &&
+      offset < layout->template_base + layout->template_size &&
+      layout->template_base < end) {
+    return 0;
+  }
+  if (layout->host_size != 0U &&
+      offset < layout->host_base + layout->host_size &&
+      layout->host_base < end) {
+    return 0;
+  }
+  if (layout->audio_size != 0U &&
+      offset < layout->audio_base + layout->audio_size &&
+      layout->audio_base < end) {
+    return 0;
+  }
+  return 1;
+}
 int zz9k_query_service(ZZ9KContext *ctx, uint32_t service_id,
                        ZZ9KServiceInfo *service);
 int zz9k_ping(ZZ9KContext *ctx, const uint8_t *payload,
@@ -214,6 +263,34 @@ int zz9k_audio_stream_play(ZZ9KContext *ctx, uint32_t session,
 int zz9k_audio_stream_stop(ZZ9KContext *ctx, uint32_t session,
                            uint32_t flags,
                            ZZ9KAudioStreamResult *result);
+
+/* Audio fabric direct-ring plane (ZZ9K_OP_AUDIO_RING_*,
+ * ZZ9K_OP_AUDIO_FABRIC_STATE_GET): producers acquire generation-bound
+ * host-visible rings and publish cursors through shared control
+ * lines -- see the fabric section of docs/zz9k-library.md. */
+int zz9k_audio_ring_acquire(ZZ9KContext *ctx,
+                            const ZZ9KAudioRingAcquireDesc *desc,
+                            ZZ9KAudioRingAcquireResult *result);
+int zz9k_audio_ring_release(ZZ9KContext *ctx, uint32_t slot,
+                            uint32_t generation, uint32_t flags);
+int zz9k_audio_fabric_state_get(
+    ZZ9KContext *ctx, const ZZ9KAudioFabricStateDesc *desc,
+    ZZ9KAudioFabricStateResult *result);
+
+/* Direct-ring client session (plan U4): acquire one slot, validate
+ * the grant, and map the granted ring and control block into the
+ * active board aperture -- the session's data-path helpers in
+ * zz9k/audio.h never touch the mailbox again (R5). The returned
+ * status is the acquire's: a refusal (bus policy or occupied slot)
+ * fails cleanly and leaves the session zeroed. */
+int zz9k_audio_ring_session_begin(ZZ9KContext *ctx,
+                                  const ZZ9KAudioRingAcquireDesc *desc,
+                                  ZZ9KAudioRingSession *session);
+/* Release the session's slot under its generation (idempotent for a
+ * stale generation) and zero the session. Passing a session that
+ * never began is BAD_REQUEST; the release status is returned. */
+int zz9k_audio_ring_session_end(ZZ9KContext *ctx,
+                                ZZ9KAudioRingSession *session);
 int zz9k_video_session_begin(ZZ9KContext *ctx,
                              const ZZ9KVideoSessionBeginDesc *desc,
                              ZZ9KVideoSessionResult *result);

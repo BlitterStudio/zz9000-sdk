@@ -57,6 +57,33 @@ struct ExpansionBase *ExpansionBase;
  * base around the call. */
 struct DosLibrary *DOSBase;
 #endif
+void zz9k_audio_ring_cache_flush(const volatile void *address, uint32_t length)
+{
+#if ZZ9K_HOST_AMIGA
+  if (address && length != 0U) {
+    CacheClearE((APTR)(uintptr_t)address, (ULONG)length, CACRF_ClearD);
+  }
+#else
+  (void)address;
+  (void)length;
+#endif
+}
+
+void zz9k_audio_ring_cache_invalidate(const volatile void *address,
+                                      uint32_t length)
+{
+#if ZZ9K_HOST_AMIGA
+  if (address && length != 0U) {
+    /* The firmware-owned line is never written by the host, so clearing its
+     * clean CPU cache lines is an invalidate without a stale writeback. */
+    CacheClearE((APTR)(uintptr_t)address, (ULONG)length, CACRF_ClearD);
+  }
+#else
+  (void)address;
+  (void)length;
+#endif
+}
+
 
 #define ZZ9K_SYNC_COOKIE_MASK 0x5aa55aa5UL
 #define ZZ9K_MAILBOX_SEMAPHORE_NAME "zz9000.sdk.mailbox"
@@ -101,12 +128,21 @@ struct ZZ9KContext {
 static int zz9k_board_range_fits(uint32_t board_size,
                                  uint32_t board_offset, uint32_t length);
 
-static int zz9k_expected_aperture_layout(uint32_t aperture_size,
-                                         ZZ9KApertureLayout *layout)
+/* The direct-ring delivery carves a fixed 48-KiB Zorro II direct
+ * region out of each profile's host-window heap (KTD2): generation 2
+ * shrinks every heap by this amount and leaves the gap between the
+ * heap's new end and the audio region as firmware-reserved,
+ * unreported space the ring grants live in. */
+#define ZZ9K_Z2_DIRECT_REGION_CARVE 0x0000c000UL
+
+static int zz9k_expected_aperture_layout_gen(uint32_t aperture_size,
+                                             uint32_t generation,
+                                             ZZ9KApertureLayout *layout)
 {
   uint32_t flags;
 
-  if (!layout) {
+  if (!layout || generation < ZZ9K_APERTURE_LAYOUT_GENERATION_1 ||
+      generation > ZZ9K_APERTURE_LAYOUT_GENERATION_2) {
     return 0;
   }
   memset(layout, 0, sizeof(*layout));
@@ -149,20 +185,39 @@ static int zz9k_expected_aperture_layout(uint32_t aperture_size,
     return 0;
   }
 
-  layout->profile = ZZ9K_APERTURE_PROFILE(
-      ZZ9K_APERTURE_LAYOUT_GENERATION_1, flags);
+  if (generation >= ZZ9K_APERTURE_LAYOUT_GENERATION_2) {
+    layout->host_size -= ZZ9K_Z2_DIRECT_REGION_CARVE;
+  }
+  layout->profile = ZZ9K_APERTURE_PROFILE(generation, flags);
   return 1;
+}
+
+static int zz9k_expected_aperture_layout(uint32_t aperture_size,
+                                         ZZ9KApertureLayout *layout)
+{
+  return zz9k_expected_aperture_layout_gen(
+      aperture_size, ZZ9K_APERTURE_LAYOUT_GENERATION_1, layout);
 }
 
 static int zz9k_aperture_layout_matches(const ZZ9KBoard *board,
                                         const ZZ9KApertureLayout *layout)
 {
   ZZ9KApertureLayout expected;
+  uint32_t generation;
 
   if (!board || !layout || board->zorro_version != 2U ||
       board->board_size == 0U ||
-      layout->aperture_size != board->board_size ||
-      !zz9k_expected_aperture_layout(board->board_size, &expected)) {
+      layout->aperture_size != board->board_size) {
+    return 0;
+  }
+  /* Both layout generations are live on the wire (generation 2 is
+   * the direct-ring carve; generation 1 is every firmware before
+   * it): the reported generation picks which heap profile to
+   * expect. */
+  generation = (layout->profile & ZZ9K_APERTURE_LAYOUT_GENERATION_MASK) >>
+               ZZ9K_APERTURE_LAYOUT_GENERATION_SHIFT;
+  if (!zz9k_expected_aperture_layout_gen(board->board_size, generation,
+                                         &expected)) {
     return 0;
   }
   if (!zz9k_board_range_fits(layout->aperture_size,
@@ -2040,6 +2095,179 @@ int zz9k_audio_stream_stop(ZZ9KContext *ctx, uint32_t session,
   return zz9k_reply_audio_stream_result(&reply,
                                         ZZ9K_OP_AUDIO_STREAM_STOP,
                                         result);
+}
+
+int zz9k_audio_ring_acquire(ZZ9KContext *ctx,
+                            const ZZ9KAudioRingAcquireDesc *desc,
+                            ZZ9KAudioRingAcquireResult *result)
+{
+  ZZ9KRequest request;
+  ZZ9KMailboxEntry reply;
+  int status;
+
+  if (!ctx || !desc || !result) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  memset(result, 0, sizeof(*result));
+  memset(&reply, 0, sizeof(reply));
+  status = zz9k_request_audio_ring_acquire(&request, desc);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  status = zz9k_call(ctx, &request, &reply, ZZ9K_DEFAULT_TIMEOUT_TICKS);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  return zz9k_reply_audio_ring_acquire_result(&reply, result);
+}
+
+int zz9k_audio_ring_release(ZZ9KContext *ctx, uint32_t slot,
+                            uint32_t generation, uint32_t flags)
+{
+  ZZ9KRequest request;
+  ZZ9KMailboxEntry reply;
+  int status;
+
+  if (!ctx) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  memset(&reply, 0, sizeof(reply));
+  status = zz9k_request_audio_ring_release(&request, slot, generation,
+                                           flags);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  /* RELEASE reserves no result payload; the status word is the whole
+   * contract (OK, or BAD_HANDLE for a stale generation). */
+  return zz9k_call(ctx, &request, &reply, ZZ9K_DEFAULT_TIMEOUT_TICKS);
+}
+
+int zz9k_audio_fabric_state_get(
+    ZZ9KContext *ctx, const ZZ9KAudioFabricStateDesc *desc,
+    ZZ9KAudioFabricStateResult *result)
+{
+  ZZ9KRequest request;
+  ZZ9KMailboxEntry reply;
+  int status;
+
+  if (!ctx || !desc || !result) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  memset(result, 0, sizeof(*result));
+  memset(&reply, 0, sizeof(reply));
+  status = zz9k_request_audio_fabric_state_get(&request, desc);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  status = zz9k_call(ctx, &request, &reply, ZZ9K_DEFAULT_TIMEOUT_TICKS);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  return zz9k_reply_audio_fabric_state_result(&reply, result);
+}
+
+int zz9k_audio_ring_session_begin(ZZ9KContext *ctx,
+                                  const ZZ9KAudioRingAcquireDesc *desc,
+                                  ZZ9KAudioRingSession *session)
+{
+  volatile uint8_t *control;
+  int status;
+
+  if (!ctx || !desc || !session) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  /* Fail closed: a refused acquisition (bus policy, occupied slot,
+   * unadvertised plane) or any later validation error leaves the
+   * session zeroed, so the data-path helpers stay dead and no
+   * pointer is ever exposed from an unusable grant. */
+  memset(session, 0, sizeof(*session));
+  status = zz9k_audio_ring_acquire(ctx, desc, &session->grant);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+
+  /* The reply decoder already validated the grant (R3); mapping is
+   * the host's own check: both granted ranges must sit inside the
+   * active board aperture (R2) before any pointer is derived. On
+   * Zorro II that means the reported aperture layout as well -- a
+   * direct-ring grant may only live in unreported firmware-reserved
+   * space, never inside the framebuffer, PIP, template, host-window
+   * heap, or audio regions. Zorro III has no layout query: the
+   * board-window bound is the whole check. */
+  if (!zz9k_audio_ring_grant_valid(&session->grant) ||
+      !zz9k_board_range_fits(ctx->board.board_size,
+                             session->grant.ring_offset,
+                             session->grant.ring_capacity) ||
+      !zz9k_board_range_fits(ctx->board.board_size,
+                             session->grant.control_offset,
+                             ZZ9K_AUDIO_RING_CONTROL_SIZE)) {
+    memset(session, 0, sizeof(*session));
+    return ZZ9K_STATUS_INTERNAL_ERROR;
+  }
+  if (ctx->board.zorro_version == 2U) {
+    ZZ9KApertureLayout layout;
+
+    status = zz9k_query_aperture_layout(ctx, &layout);
+    if (status != ZZ9K_STATUS_OK ||
+        !zz9k_aperture_range_free(&layout, session->grant.ring_offset,
+                                  session->grant.ring_capacity) ||
+        !zz9k_aperture_range_free(&layout, session->grant.control_offset,
+                                  ZZ9K_AUDIO_RING_CONTROL_SIZE)) {
+      memset(session, 0, sizeof(*session));
+      return ZZ9K_STATUS_INTERNAL_ERROR;
+    }
+  }
+
+  session->ring = (volatile uint8_t *)(uintptr_t)ctx->board.board_addr +
+                  session->grant.ring_offset;
+  control = (volatile uint8_t *)(uintptr_t)ctx->board.board_addr +
+            session->grant.control_offset;
+  session->producer_line =
+      (volatile ZZ9KAudioRingProducerLine *)(void *)control;
+  session->firmware_line =
+      (volatile ZZ9KAudioRingFirmwareLine *)(void *)(control +
+          ZZ9K_AUDIO_RING_CONTROL_LINE_SIZE);
+  session->write_cursor = 0U;
+  session->consumed_cursor = 0U;
+  session->heartbeat = 1U;
+  session->flags = 0U;
+  session->mapped = 1U;
+
+  /* First publication: cursor 0, fresh heartbeat. The lease is live
+   * from acquisition (R11) even before any PCM is staged; firmware
+   * consumes complete periods only, so a zero cursor publishes
+   * nothing. A torn first credit read is harmless -- it leaves the
+   * consumed cursor at firmware's initialized zero. */
+  zz9k_audio_ring_publish(session);
+  (void)zz9k_audio_ring_take_credits(session, 4U);
+  return ZZ9K_STATUS_OK;
+}
+
+int zz9k_audio_ring_session_end(ZZ9KContext *ctx,
+                                ZZ9KAudioRingSession *session)
+{
+  uint32_t slot;
+  uint32_t generation;
+  int status;
+
+  if (!ctx || !session || !session->mapped) {
+    return ZZ9K_STATUS_BAD_REQUEST;
+  }
+
+  slot = session->grant.slot;
+  generation = session->grant.generation;
+  memset(session, 0, sizeof(*session));
+  /* Stale generations release idempotently: the slot may already
+   * have been revoked (R4, R13). */
+  status = zz9k_audio_ring_release(ctx, slot, generation, 0U);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  return ZZ9K_STATUS_OK;
 }
 
 static int zz9k_video_session_call(ZZ9KContext *ctx,

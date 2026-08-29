@@ -878,6 +878,28 @@ against, its bench-measured value, method, and the flip-after-pass runbook
 are documented in the firmware repo's
 `docs/audio-saturation-ceiling.md`.
 
+## Audio Fabric Direct-Ring Plane
+
+The audio fabric grants generation-bound host-visible PCM rings to independent producers. Firmware reserves slot 0 for the playback pump. Zorro III exposes two direct-ring slots; Zorro II exposes one compact slot and refuses a second acquisition.
+
+The plane is advertised: the hardware qualification session passed on 2026-08-28 (firmware `docs/audio-fabric.md`), so firmware now sets `ZZ9K_CAP_AUDIO_FABRIC` and reports `ZZ9K_SERVICE_FLAG_AUDIO_FABRIC` in the audio service. Clients must still treat a missing capability as a clean decline — firmware older than the qualified release advertises nothing here.
+
+| Opcode | Value | Purpose |
+| --- | --- | --- |
+| `ZZ9K_OP_AUDIO_FABRIC_STATE_GET` | `0x0512` | Read a framed per-slot snapshot with generation, 64-bit cursors, heartbeat age, starvation, peak, and clip state |
+| `ZZ9K_OP_AUDIO_RING_ACQUIRE` | `0x0513` | Acquire a generation-bound ring and negotiated control-block grant |
+| `ZZ9K_OP_AUDIO_RING_RELEASE` | `0x0514` | Release the slot under its active generation |
+
+Values `0x050f` through `0x0511` belonged to the withdrawn copy-submit experiment and are never reused.
+
+Each grant reports board-visible ring and control offsets, capacity, 3,840-byte/20-ms period geometry, sample contract, applied gain, and bus slot count. The control block has two ownership-separated 64-byte lines. The producer line publishes generation, write cursor, heartbeat, and flags. The firmware line publishes generation, consumed cursor, and status. Both lines use big-endian 32-bit fields and even/odd seqlocks.
+
+The steady data path performs no mailbox copy. A producer writes PCM, makes the range visible, and commits its write cursor. Firmware validates the producer line, consumes complete periods, and returns ring credits through the consumed cursor. Producers use those credits for backpressure; `FABRIC_STATE_GET` is telemetry, not pacing.
+
+The typed client surface in `include/zz9k/audio.h` validates grants, wraps ring writes, publishes producer state, reads firmware credits, refreshes heartbeats, and performs generation-bound release. `tools/zz9k-fabriclease.c` exercises acquire, direct writes, credit pacing, heartbeat recovery, low-rate telemetry, drain, Ctrl-C cleanup, and Zorro II single-slot refusal.
+
+Zorro II aperture-layout generation 2 reserves one 48-KiB direct region and leaves 16 KiB in the general host-window heap. Zorro III grants two 16-period rings. A firmware or bitstream that predates the matched layout is declined cleanly.
+
 ## Decompression Jobs
 
 SDK v2 reserves a buffer-to-buffer decompression job shape for archive tools:
