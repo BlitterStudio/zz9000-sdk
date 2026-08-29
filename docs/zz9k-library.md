@@ -894,6 +894,23 @@ Values `0x050f` through `0x0511` belonged to the withdrawn copy-submit experimen
 
 Each grant reports board-visible ring and control offsets, capacity, 3,840-byte/20-ms period geometry, sample contract, applied gain, and bus slot count. The control block has two ownership-separated 64-byte lines. The producer line publishes generation, write cursor, heartbeat, and flags. The firmware line publishes generation, consumed cursor, and status. Both lines use big-endian 32-bit fields and even/odd seqlocks.
 
+Rate-bearing leases (AHI migration) extend the acquire append-only: the
+request may carry `ZZ9K_AUDIO_RING_ACQUIRE_FLAG_SOURCE_RATE` with a
+`source_rate_hz` word carved from the former reserved area, and the
+grant then answers under sample contract
+`ZZ9K_AUDIO_RING_CONTRACT_SOURCE_RATE_STEREO_S16LE` with the validated
+rate echoed in its `source_rate` result word (populated as 48000 for
+bypass grants). The rate vocabulary is exactly the qualified conversion
+table — 8000, 12000, 24000, 32000, 44100, or 48000 Hz — and firmware
+converts each 20-ms source period (`rate/50 * 4` bytes) to the 48-kHz
+output domain with the qualified per-slot kernel; the ring geometry
+words still describe 3,840-byte periods. Firmware advertising this
+reports `ZZ9K_SERVICE_FLAG_AUDIO_FABRIC_RATE` in the audio service;
+older firmware rejects any nonzero acquire-flags word with
+`ZZ9K_STATUS_BAD_REQUEST`, which is a client's fallback signal. The
+first shipping consumer is the matched AHI driver, which mixes at its
+selected AHI rate and leases the card-side conversion.
+
 The steady data path performs no mailbox copy. A producer writes PCM, makes the range visible, and commits its write cursor. Firmware validates the producer line, consumes complete periods, and returns ring credits through the consumed cursor. Producers use those credits for backpressure; `FABRIC_STATE_GET` is telemetry, not pacing.
 
 The typed client surface in `include/zz9k/audio.h` validates grants, wraps ring writes, publishes producer state, reads firmware credits, refreshes heartbeats, and performs generation-bound release. `tools/zz9k-fabriclease.c` exercises acquire, direct writes, credit pacing, heartbeat recovery, low-rate telemetry, drain, Ctrl-C cleanup, and Zorro II single-slot refusal.

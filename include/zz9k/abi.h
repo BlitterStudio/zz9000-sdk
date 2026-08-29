@@ -365,6 +365,12 @@ enum ZZ9KServiceFlags {
    * discipline: still not reported in the audio service flags until
    * qualified. */
   ZZ9K_SERVICE_FLAG_AUDIO_FABRIC = 1U << 22,
+  /* Rate-bearing direct-ring leases (AHI migration): acquire may
+   * carry ZZ9K_AUDIO_RING_ACQUIRE_FLAG_SOURCE_RATE and a source rate;
+   * firmware converts per-slot with the qualified kernel. Gated the
+   * same way as AUDIO_FABRIC itself. */
+  ZZ9K_SERVICE_FLAG_AUDIO_FABRIC_RATE = 1U << 23,
+
 
   ZZ9K_SERVICE_FLAG_VIDEO_MPEG1 = 1U << 16,
   ZZ9K_SERVICE_FLAG_VIDEO_MPEG_PS = 1U << 17,
@@ -1073,6 +1079,8 @@ typedef struct ZZ9KAudioControlStateResultPayload {
  * conversion-bearing contracts without moving any field. */
 #define ZZ9K_AUDIO_RING_CONTRACT_NONE             0U
 #define ZZ9K_AUDIO_RING_CONTRACT_48K_STEREO_S16LE 1U
+#define ZZ9K_AUDIO_RING_CONTRACT_SOURCE_RATE_STEREO_S16LE 2U
+
 
 /* Highest leaseable direct-ring slot index. Slot 0 is the firmware
  * pump and is never granted; the acquire result's slot_count reports
@@ -1086,6 +1094,18 @@ typedef struct ZZ9KAudioControlStateResultPayload {
 #define ZZ9K_AUDIO_RING_PRODUCER_FLAG_PAUSED (1U << 0)
 #define ZZ9K_AUDIO_RING_PRODUCER_FLAG_KNOWN \
   ZZ9K_AUDIO_RING_PRODUCER_FLAG_PAUSED
+
+/* Acquire-request flags. SOURCE_RATE makes the carved
+ * source_rate_hz word meaningful: the lease delivers stereo S16LE at
+ * that rate and firmware converts to the 48-kHz output domain with
+ * the qualified per-slot kernel. The rate vocabulary is exactly the
+ * qualified conversion table (and the AHI mix-rate table):
+ * 8000/12000/24000/32000/44100/48000 Hz. Firmware without
+ * ZZ9K_SERVICE_FLAG_AUDIO_FABRIC_RATE rejects any nonzero flags word
+ * with BAD_REQUEST -- that refusal is the client's fallback signal. */
+#define ZZ9K_AUDIO_RING_ACQUIRE_FLAG_SOURCE_RATE (1U << 0)
+#define ZZ9K_AUDIO_RING_ACQUIRE_FLAG_KNOWN \
+  ZZ9K_AUDIO_RING_ACQUIRE_FLAG_SOURCE_RATE
 
 /* Firmware-line status. REVOKED_HEARTBEAT and FAULT_CURSOR both
  * invalidate the generation: consumption stops and the slot may be
@@ -1150,7 +1170,12 @@ typedef struct ZZ9KAudioRingAcquirePayload {
   uint8_t identity[4];
   uint8_t gain[4];
   uint8_t flags[4];
-  uint8_t reserved[32];
+  /* Carved from reserved (AHI migration): active only when flags
+   * carries ZZ9K_AUDIO_RING_ACQUIRE_FLAG_SOURCE_RATE; zero
+   * otherwise so bypass acquisitions stay byte-identical to the
+   * original 48-kHz-only ABI. */
+  uint8_t source_rate_hz[4];
+  uint8_t reserved[28];
 } ZZ9KAudioRingAcquirePayload;
 
 /* The generation-bound grant (R1, R3): every address and capacity
@@ -1182,7 +1207,13 @@ typedef struct ZZ9KAudioRingAcquireResultPayload {
   uint8_t gain_applied[4];
   uint8_t slot_count[4];
   uint8_t flags[4];
-  uint8_t reserved[4];
+  /* Carved from reserved (AHI migration): the granted source rate.
+   * Populated for both contracts -- 48000 for the bypass contract,
+   * the requested (validated) rate for the source-rate contract.
+   * period_bytes/period_us keep describing the ring geometry (one
+   * 48-kHz-equivalent period); a source-rate producer stages its own
+   * 20-ms period of rate/50 * 4 bytes per publication. */
+  uint8_t source_rate[4];
 } ZZ9KAudioRingAcquireResultPayload;
 
 /* Surrender a direct-ring slot (ZZ9K_OP_AUDIO_RING_RELEASE). slot +
@@ -2147,6 +2178,7 @@ typedef struct ZZ9KAudioRingAcquireDesc {
   uint32_t identity;
   uint32_t gain;
   uint32_t flags;
+  uint32_t source_rate_hz; /* 0 unless flags carries SOURCE_RATE */
 } ZZ9KAudioRingAcquireDesc;
 
 typedef struct ZZ9KAudioRingAcquireResult {
@@ -2161,6 +2193,7 @@ typedef struct ZZ9KAudioRingAcquireResult {
   uint32_t gain_applied;
   uint32_t slot_count;
   uint32_t flags;
+  uint32_t source_rate;
 } ZZ9KAudioRingAcquireResult;
 
 typedef struct ZZ9KAudioRingReleaseDesc {

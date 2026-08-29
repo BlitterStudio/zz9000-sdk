@@ -101,6 +101,8 @@ struct MockSlot {
   uint32_t ticks;           /* playback ticks since grant */
   uint32_t torn_ticks;      /* leave the firmware line odd (torn) */
   uint32_t revoke_at;      /* tick count that kills the generation */
+  uint32_t period_bytes;   /* consumption quantum: 3840 bypass, or
+                            * rate/50*4 for a source-rate lease */
 };
 
 
@@ -168,6 +170,7 @@ static void mock_grant_slot(uint32_t slot, uint32_t generation,
   struct MockSlot *s = mock_slot(slot);
 
   s->granted = 1;
+  s->period_bytes = ZZ9K_AUDIO_RING_PERIOD_BYTES;
   s->generation = generation;
   s->ring_offset = ring_offset;
   s->ring_capacity = ring_capacity;
@@ -294,17 +297,30 @@ static void mock_respond(void)
     break;
   case ZZ9K_OP_AUDIO_RING_ACQUIRE: {
     uint32_t slot = mock_req_word(req, 0);
+    uint32_t flags = mock_req_word(req, 3);
+    uint32_t rate = mock_req_word(req, 4);
+    uint32_t contract = ZZ9K_AUDIO_RING_CONTRACT_48K_STEREO_S16LE;
+    uint32_t granted_rate = 48000U;
     struct MockSlot *s = mock_slot(slot);
 
     g_mock.acquire_calls++;
     g_mock.acquire_slot[slot] = slot;
     /* Bus admission (R9/R10): a slot beyond the advertised count is
      * refused deterministically, exactly like the Zorro II second
-     * acquisition. */
-    if (slot > g_mock.slot_count) {
+     * acquisition. A rate-bearing acquire mirrors firmware: the
+     * contract flips to source-rate and the validated rate is
+     * echoed; an off-vocabulary rate is refused. */
+    if (slot > g_mock.slot_count ||
+        ((flags & ZZ9K_AUDIO_RING_ACQUIRE_FLAG_SOURCE_RATE) != 0U &&
+         !zz9k_audio_ring_rate_known(rate))) {
       g_mock.refused_acquires++;
       (void)mock_complete(req, ZZ9K_STATUS_BAD_REQUEST, 0U);
       break;
+    }
+    if ((flags & ZZ9K_AUDIO_RING_ACQUIRE_FLAG_SOURCE_RATE) != 0U) {
+      contract = ZZ9K_AUDIO_RING_CONTRACT_SOURCE_RATE_STEREO_S16LE;
+      granted_rate = rate;
+      s->period_bytes = (rate / 50U) * 4U;
     }
     reply = mock_complete(req, ZZ9K_STATUS_OK,
                           sizeof(ZZ9KAudioRingAcquireResultPayload));
@@ -315,12 +331,13 @@ static void mock_respond(void)
     mock_word(reply, 4, s->control_offset);
     mock_word(reply, 5, ZZ9K_AUDIO_RING_PERIOD_BYTES);
     mock_word(reply, 6, ZZ9K_AUDIO_RING_PERIOD_US);
-    mock_word(reply, 7, ZZ9K_AUDIO_RING_CONTRACT_48K_STEREO_S16LE);
+    mock_word(reply, 7, contract);
     mock_word(reply, 8, 128U); /* gain applied */
     mock_word(reply, 9, g_mock.slot_count);
     mock_word(reply, 10, g_mock.board.zorro_version == 2U
                               ? ZZ9K_AUDIO_RING_RESULT_BUS_ZORRO2
                               : 0U);
+    mock_word(reply, 11, granted_rate);
     break;
   }
   case ZZ9K_OP_AUDIO_RING_RELEASE:
@@ -401,8 +418,8 @@ static void mock_tick(void *user)
     }
     s->published = snap.write_cursor;
     s->last_heartbeat = snap.heartbeat;
-    if (snap.write_cursor - s->consumed >= ZZ9K_AUDIO_RING_PERIOD_BYTES) {
-      s->consumed += ZZ9K_AUDIO_RING_PERIOD_BYTES;
+    if (snap.write_cursor - s->consumed >= s->period_bytes) {
+      s->consumed += s->period_bytes;
     }
     zz9k_audio_ring_firmware_publish(firmware, s->generation, s->consumed,
                                      ZZ9K_AUDIO_RING_STATUS_OK);
@@ -788,8 +805,7 @@ static int test_publication_visibility(void)
     mock_window_free(mapping, 0x01000000UL);
     return 2;
   }
-  if (!zz9k_audio_build_ring_acquire_desc(
-          &desc, 1U, ZZ9K_AUDIO_METER_IDENTITY_SDK_STREAM, 128U, 0U) ||
+  if (!zz9k_audio_build_ring_acquire_desc(&desc, 1U, ZZ9K_AUDIO_METER_IDENTITY_SDK_STREAM, 128U, 0U, 0U) ||
       zz9k_audio_ring_session_begin(ctx, &desc, &session) !=
           ZZ9K_STATUS_OK) {
     zz9k_close(ctx);
@@ -989,15 +1005,13 @@ static int test_independent_contexts(void)
     mock_window_free(mapping, 0x01000000UL);
     return 2;
   }
-  if (!zz9k_audio_build_ring_acquire_desc(
-          &desc, 1U, ZZ9K_AUDIO_METER_IDENTITY_SDK_STREAM, 128U, 0U) ||
+  if (!zz9k_audio_build_ring_acquire_desc(&desc, 1U, ZZ9K_AUDIO_METER_IDENTITY_SDK_STREAM, 128U, 0U, 0U) ||
       zz9k_audio_ring_session_begin(ctx_a, &desc, &session_a) !=
           ZZ9K_STATUS_OK) {
     status = 3;
     goto out;
   }
-  if (!zz9k_audio_build_ring_acquire_desc(
-          &desc, 2U, ZZ9K_AUDIO_METER_IDENTITY_MEDIA, 128U, 0U) ||
+  if (!zz9k_audio_build_ring_acquire_desc(&desc, 2U, ZZ9K_AUDIO_METER_IDENTITY_MEDIA, 128U, 0U, 0U) ||
       zz9k_audio_ring_session_begin(ctx_b, &desc, &session_b) !=
           ZZ9K_STATUS_OK) {
     status = 4;
@@ -1105,8 +1119,7 @@ static int test_z2_second_client_refusal(void)
   /* The active producer acquires the single Zorro II slot through
    * the real session path: the generation-2 carve leaves its pinned
    * grant inside the direct-region gap, so mapping validates. */
-  if (!zz9k_audio_build_ring_acquire_desc(
-          &desc, 1U, ZZ9K_AUDIO_METER_IDENTITY_SDK_STREAM, 128U, 0U) ||
+  if (!zz9k_audio_build_ring_acquire_desc(&desc, 1U, ZZ9K_AUDIO_METER_IDENTITY_SDK_STREAM, 128U, 0U, 0U) ||
       zz9k_audio_ring_session_begin(ctx, &desc, &active) != ZZ9K_STATUS_OK ||
       (active.grant.flags & ZZ9K_AUDIO_RING_RESULT_BUS_ZORRO2) == 0U) {
     status = 3;
@@ -1127,8 +1140,7 @@ static int test_z2_second_client_refusal(void)
 
   /* The second client's acquisition: refused by bus admission, the
    * session fails closed, and nothing was released or disturbed. */
-  if (!zz9k_audio_build_ring_acquire_desc(
-          &desc, 2U, ZZ9K_AUDIO_METER_IDENTITY_SDK_STREAM, 128U, 0U)) {
+  if (!zz9k_audio_build_ring_acquire_desc(&desc, 2U, ZZ9K_AUDIO_METER_IDENTITY_SDK_STREAM, 128U, 0U, 0U)) {
     status = 6;
     goto out_rel;
   }
@@ -1196,8 +1208,7 @@ static int test_z2_grant_inside_region_rejected(void)
     mock_window_free(mapping, 0x00400000UL);
     return 2;
   }
-  if (!zz9k_audio_build_ring_acquire_desc(
-          &desc, 1U, ZZ9K_AUDIO_METER_IDENTITY_SDK_STREAM, 128U, 0U)) {
+  if (!zz9k_audio_build_ring_acquire_desc(&desc, 1U, ZZ9K_AUDIO_METER_IDENTITY_SDK_STREAM, 128U, 0U, 0U)) {
     zz9k_close(ctx);
     mock_remove_hooks();
     mock_window_free(mapping, 0x00400000UL);
@@ -1290,8 +1301,7 @@ static int test_z3_pinned_grant_geometry(void)
     mock_window_free(mapping, 0x08000000UL);
     return 2;
   }
-  if (!zz9k_audio_build_ring_acquire_desc(
-          &desc, 1U, ZZ9K_AUDIO_METER_IDENTITY_SDK_STREAM, 128U, 0U) ||
+  if (!zz9k_audio_build_ring_acquire_desc(&desc, 1U, ZZ9K_AUDIO_METER_IDENTITY_SDK_STREAM, 128U, 0U, 0U) ||
       zz9k_audio_ring_session_begin(ctx, &desc, &session) !=
           ZZ9K_STATUS_OK ||
       session.grant.ring_capacity != 16U * ZZ9K_AUDIO_RING_PERIOD_BYTES ||
@@ -1318,6 +1328,82 @@ out_rel:
     if (session.mapped &&
         zz9k_audio_ring_session_end(ctx, &session) != ZZ9K_STATUS_OK) {
       status = 6;
+    }
+  }
+out:
+  zz9k_close(ctx);
+  mock_remove_hooks();
+  mock_window_free(mapping, 0x08000000UL);
+  return status == ZZ9K_STATUS_OK ? 0 : status;
+}
+
+/* A rate-bearing acquire (AHI migration): the request carries the
+ * SOURCE_RATE flag and the mix rate, the grant comes back under the
+ * source-rate contract with the rate echoed, and a source-rate-sized
+ * period (44.1 kHz -> 3528 bytes per 20 ms) stages and publishes
+ * exactly like a bypass period. An off-vocabulary rate never reaches
+ * the mailbox: the builder rejects it and session_begin fails closed
+ * with a zeroed session. */
+static int test_rate_lease_session(void)
+{
+  void *mapping = mock_window_alloc(0x08000000UL);
+  ZZ9KContext *ctx = 0;
+  ZZ9KAudioRingAcquireDesc desc;
+  ZZ9KAudioRingSession session;
+  struct MockSlot *s;
+  uint8_t chunk[3528U];
+  int status;
+
+  mock_reset(ZZ9K_CAP_AUDIO_FABRIC, 3U, 0x08000000UL);
+  mock_grant_slot(1U, MOCK_GENERATION1, 0x07fd0080UL,
+                  16U * ZZ9K_AUDIO_RING_PERIOD_BYTES, 0x07fd0000UL);
+  memset(chunk, 0x5a, sizeof(chunk));
+  mock_install_hooks();
+  if (mock_attach(&ctx) != ZZ9K_STATUS_OK) {
+    mock_remove_hooks();
+    mock_window_free(mapping, 0x08000000UL);
+    return 1;
+  }
+  if (!zz9k_audio_build_ring_acquire_desc(
+          &desc, 1U, ZZ9K_AUDIO_METER_IDENTITY_AHI, 128U,
+          ZZ9K_AUDIO_RING_ACQUIRE_FLAG_SOURCE_RATE, 44100U)) {
+    status = 2;
+    goto out;
+  }
+  if (zz9k_audio_ring_session_begin(ctx, &desc, &session) !=
+          ZZ9K_STATUS_OK ||
+      session.grant.sample_contract !=
+          ZZ9K_AUDIO_RING_CONTRACT_SOURCE_RATE_STEREO_S16LE ||
+      session.grant.source_rate != 44100U) {
+    status = 3;
+    goto out;
+  }
+  if (zz9k_audio_ring_write(&session, chunk, sizeof(chunk)) !=
+          sizeof(chunk) ||
+      (zz9k_audio_ring_publish(&session), 0) != 0) {
+    status = 4;
+    goto out_rel;
+  }
+  mock_tick(0);
+  s = mock_slot(1U);
+  if (s->consumed != sizeof(chunk) || s->published != sizeof(chunk)) {
+    status = 5;
+    goto out_rel;
+  }
+  /* Off-vocabulary rate: the builder rejects it before any mailbox
+   * traffic (the firmware-side ring tests cover the raw refusal). */
+  if (zz9k_audio_build_ring_acquire_desc(
+          &desc, 1U, ZZ9K_AUDIO_METER_IDENTITY_AHI, 128U,
+          ZZ9K_AUDIO_RING_ACQUIRE_FLAG_SOURCE_RATE, 44101U)) {
+    status = 6;
+    goto out_rel;
+  }
+  status = ZZ9K_STATUS_OK;
+out_rel:
+  if (status != ZZ9K_STATUS_OK || session.mapped) {
+    if (session.mapped &&
+        zz9k_audio_ring_session_end(ctx, &session) != ZZ9K_STATUS_OK) {
+      status = 7;
     }
   }
 out:
@@ -1356,6 +1442,8 @@ int main(void)
   CHECK(r == 0, "grant inside a reported region fails closed");
   r = test_z2_pinned_grant_geometry();
   CHECK(r == 0, "pinned Z2 direct-region geometry validates");
+  r = test_rate_lease_session();
+  CHECK(r == 0, "rate lease grants contract 2 and paces source periods");
   r = test_z3_pinned_grant_geometry();
   CHECK(r == 0, "pinned Z3 grant geometry maps and plays");
 

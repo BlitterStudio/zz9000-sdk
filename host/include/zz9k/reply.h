@@ -584,6 +584,7 @@ static inline int zz9k_reply_audio_ring_acquire_result(
   result->gain_applied = zz9k_get_be32(&payload[32]);
   result->slot_count = zz9k_get_be32(&payload[36]);
   result->flags = zz9k_get_be32(&payload[40]);
+  result->source_rate = zz9k_get_be32(&payload[44]);
 
   /* The decoded grant must be usable as-is (R3): clients dereference
    * ring/control pointers straight out of it after this check. */
