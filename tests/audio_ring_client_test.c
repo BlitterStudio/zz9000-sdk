@@ -1209,7 +1209,10 @@ static int test_z2_grant_inside_region_rejected(void)
   mock_remove_hooks();
   mock_window_free(mapping, 0x00400000UL);
   if (status != ZZ9K_STATUS_INTERNAL_ERROR || session.mapped != 0U ||
-      session.ring != 0 || g_mock.release_calls != 0) {
+      session.ring != 0 || g_mock.release_calls != 1) {
+    /* PR #29 review: the slot is leased firmware-side from the successful
+     * acquire, so a failed validation must release it or the next acquire
+     * stays BUSY until heartbeat revocation. */
     return 4;
   }
   return 0;

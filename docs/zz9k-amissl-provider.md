@@ -104,8 +104,10 @@ host unit tests. Two things make them use the hardware:
   RSA-2048 verify, and record crypto (AES-GCM and ChaCha20-Poly1305) fall back
   to software; X25519 is offload-or-fail and returns failure once advertised.
 
-  Both shipped 2 MiB and 4 MiB Zorro II profiles provide the negotiated 64 KiB
-  host window needed by this path. That heap is shared with other CPU-visible
+  On Zorro II the negotiated host window is generation-dependent: 64 KiB on
+  generation-1 layouts and 16 KiB on the current generation-2 profiles (2 MiB
+  and 4 MiB), the difference reserved for the Z2 audio direct-ring grant.
+  That heap is shared with other CPU-visible
   SDK clients, so close idle image, archive, audio, or DataType users when
   qualifying offload. A provider whose 32-byte open-time probe cannot be
   allocated advertises no hardware path. If later shared-heap contention

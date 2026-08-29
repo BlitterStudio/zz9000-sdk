@@ -7,9 +7,14 @@ the RTG driver validates it against the AutoConfig size and reserves every
 region, and the driver then acknowledges it. Firmware exposes the compact host
 heap and optional PIP pool only after that two-sided handshake.
 
-Keep all four components from the same release set. Generation-1 descriptor
-regions, including the optional PIP pool, require the driver validation and
-ACK handshake: an invalid or unacknowledged descriptor fails closed, and
+Keep all four components from the same release set. The aperture layout has
+two generations: generation 1 (the previously supported layout, still
+published by older matched sets and older FPGA/firmware pairs) and generation
+2 (current matched sets), which shrinks the negotiated host heap to 16 KiB on
+the 2 MiB and 4 MiB profiles and reserves the freed 48 KiB for the Z2 audio
+direct-ring grant. Descriptor regions, including the optional PIP pool,
+require the driver validation and ACK handshake with the descriptor's own
+generation token: an invalid or unacknowledged descriptor fails closed, and
 `zz9k-info` reports the raw and validated layout. Descriptor-absent legacy
 4 MiB stacks intentionally retain the historical fixed 64 KiB `HOST_WINDOW`
 path; this compatibility path does not expose negotiated layout or PIP
@@ -17,21 +22,21 @@ features. Legacy 2 MiB stacks and unknown aperture sizes reject that path.
 
 ## Shipped profiles
 
-| Profile | CPU-visible host heap | PIP source pool | Practical result |
-| --- | ---: | ---: | --- |
-| 2 MiB Zorro II / A500 | 64 KiB | none | Compact audio, image, archive, and AmiSSL clients; no ZZPlay video |
-| 4 MiB Zorro II / A500 | 64 KiB | 224 KiB | The same compact clients plus one bounded packed-YUV PIP source |
+| Profile | Host heap (gen 2) | Host heap (gen 1 / legacy) | PIP source pool | Practical result |
+| --- | ---: | ---: | ---: | --- |
+| 2 MiB Zorro II / A500 | 16 KiB | 64 KiB | none | Compact audio, image, archive, and AmiSSL clients; no ZZPlay video |
+| 4 MiB Zorro II / A500 | 16 KiB | 64 KiB | 224 KiB | The same compact clients plus one bounded packed-YUV PIP source |
 
 The source also defines a software-side 8 MiB profile, but there is no shipped
 or verified 8 MiB AutoConfig bitstream variant. Do not select or advertise it
 as a supported board profile.
 
-The host heap is shared by every CPU-visible SDK client. It is not 64 KiB per
-application. Card-only compressed, PCM, and decode rings do not consume it,
-but two clients whose visible working sets total more than 64 KiB cannot run
-their accelerated paths concurrently. Close idle clients before diagnosing an
-allocation failure; `zz9k-info` reports total, free, largest-block, and invalid
-allocation counters.
+The host heap is shared by every CPU-visible SDK client. It is not provided
+per application. Card-only compressed, PCM, and decode rings do not consume
+it, but two clients whose visible working sets exceed the acknowledged
+generation's heap cannot run their accelerated paths concurrently. Close idle
+clients before diagnosing an allocation failure; `zz9k-info` reports total,
+free, largest-block, and invalid allocation counters.
 
 ## Client matrix
 
