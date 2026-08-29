@@ -19,7 +19,10 @@
 #endif
 
 #if ZZ9K_HOST_AMIGA
+/* CACRF_ClearD lives in execbase.h, not types.h; the amissl
+ * adtools build compiles this TU without it. */
 #include <exec/types.h>
+#include <exec/execbase.h>
 #include <exec/memory.h>
 #include <exec/semaphores.h>
 #include <libraries/configvars.h>
