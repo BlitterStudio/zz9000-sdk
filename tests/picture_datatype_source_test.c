@@ -138,15 +138,23 @@ int main(int argc, char **argv)
       source, "Copyright (C) 2024-2026, Dimitris Panokostas / BlitterStudio");
   ok &= expect_contains(source, "\"zz9k-picture.datatype\"");
   ok &= expect_contains(source, "ZZ9K_PICTURE_DATATYPE_VERSION 42");
-  ok &= expect_contains(source, "ZZ9K_PICTURE_DATATYPE_REVISION 148");
-  ok &= expect_contains(source, "$VER: zz9k-picture.datatype 42.148");
+  ok &= expect_contains(source, "ZZ9K_PICTURE_DATATYPE_REVISION 149");
+  ok &= expect_contains(source, "$VER: zz9k-picture.datatype 42.149");
   ok &= expect_contains(source, "ZZ9K_PICTURE_BUILD_MARKER");
   ok &= expect_contains(
       source,
-      "\"metadata: build 2026-08-08 datatype-render-lock-safe-v148\"");
-  ok &= expect_contains(source, "ZZ9K_PICTURE_FORCE_ALPHA_RGB_COMPAT 0");
+      "\"metadata: build 2026-08-30 screen-alpha-compat-v149\"");
+  ok &= expect_not_contains(source, "ZZ9K_PICTURE_FORCE_ALPHA_RGB_COMPAT");
   ok &= expect_contains(source, "ZZ9K_PICTURE_OBJECT_NAME_BYTES 128U");
   ok &= expect_contains(source, "char object_name[ZZ9K_PICTURE_OBJECT_NAME_BYTES];");
+  ok &= expect_contains(source, "uint8_t flatten_png_alpha;");
+  ok &= expect_contains(source, "zz9k_picture_capture_screen_alpha_policy");
+  ok &= expect_contains(source, "GetTagData(");
+  ok &= expect_contains(source, "PDTA_Screen, 0UL");
+  ok &= expect_contains(source, "GetBitMapAttr(screen->RastPort.BitMap, BMA_DEPTH)");
+  ok &= expect_contains(source, "screen_depth <= 16U");
+  ok &= expect_contains(
+      source, "\"metadata: png alpha flattened for low-depth screen\"");
   ok &= expect_contains(source, "zz9k_picture_capture_object_name");
   ok &= expect_contains(source, "zz9k_picture_apply_object_name");
   ok &= expect_contains(source, "zz9k_picture_instance_object_name");
@@ -576,8 +584,16 @@ int main(int argc, char **argv)
       "        \"metadata: datatype png alpha v43 rgba path\");");
   ok &= expect_contains(
       source, "\"metadata: datatype png alpha surface path\"");
-  ok &= expect_not_contains(
+  ok &= expect_contains(
       source, "\"metadata: datatype png alpha rgb compatibility path\"");
+  ok &= expect_contains(
+      source,
+      "if (png_has_alpha && instance->flatten_png_alpha) {\n"
+      "    zz9k_picture_trace_source(\n"
+      "        \"metadata: datatype png alpha rgb compatibility path\");\n"
+      "    png_has_alpha = 0;\n"
+      "    instance->png_has_alpha = 0U;\n"
+      "  }");
   ok &= expect_contains(
       source, "\"metadata: datatype png alpha v43 rgba path\"");
   ok &= expect_contains(
@@ -586,11 +602,6 @@ int main(int argc, char **argv)
       "    zz9k_picture_trace_source(\n"
       "        \"metadata: datatype png alpha surface path\");\n"
       "    if (!zz9k_picture_decode_png_to_datatype_pixels(");
-  ok &= expect_not_contains(
-      source,
-      "    png_has_alpha = 0;\n"
-      "    instance->png_has_alpha = 0U;\n"
-      "#else");
   ok &= expect_not_contains(source, "int png_alpha_rgb_compat");
   ok &= expect_not_contains(
       source,

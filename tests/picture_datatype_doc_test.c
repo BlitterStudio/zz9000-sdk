@@ -75,7 +75,7 @@ int main(int argc, char **argv)
   }
 
   ok = 1;
-  ok &= expect_contains(source, "zz9k-picture.datatype 42.148");
+  ok &= expect_contains(source, "zz9k-picture.datatype 42.149");
   ok &= expect_contains(source, "`GM_RENDER` lock-safe");
   ok &= expect_contains(source, "legacy `ENV:ZZ9K_PICTURE_RENDER_MODE`");
   ok &= expect_contains(source, "validated SDK v2 DataType");
@@ -90,6 +90,9 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "browser client");
   ok &= expect_contains(source, "`PBPAFMT_RGBA`");
   ok &= expect_contains(source, "`bmh_Masking = mskHasAlpha`");
+  ok &= expect_contains(source, "8-, 15-, and 16-bit screens");
+  ok &= expect_contains(source, "32-bit screens retain");
+  ok &= expect_contains(source, "per-pixel alpha.");
   ok &= expect_contains(source, "packaged inactive under `Storage/DataTypes`");
   ok &= expect_contains(
       source, "copy Storage/DataTypes/ZZ9000-JPEG#? TO DEVS:DataTypes/");
