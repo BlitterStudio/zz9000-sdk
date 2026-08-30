@@ -185,6 +185,9 @@ Expected pass signal:
 - DataType descriptors are activated from `Storage/DataTypes`, and
   `AddDataTypes LIST` shows `ZZ9000-JPEG` and `ZZ9000-PNG`.
 - DataTypes clients display JPEG and PNG through `zz9k-picture.datatype`.
+- Repeat the transparent-PNG DataType client and MUI startup checks on 8-,
+  15-, 16-, and 32-bit screens. Low-depth modes must not enter the sustained
+  software-alpha CPU stall, while 32-bit output must retain per-pixel alpha.
 - On Zorro 2, `zz9k-info` reports an active acknowledged layout while viewer
   and datatype decoding run; host-window free space returns after each close.
 
@@ -193,7 +196,9 @@ Failure routing:
 - Direct tool decode failures route to the image service or shared-buffer path.
 - Viewer restore/occlusion failures route to the image-window clipping path.
 - MultiView/browser-only failures route to `zz9k-picture.datatype`.
-- Transparent PNGs are a known deferred alpha-behavior area unless they crash.
+- Low-depth transparent-PNG startup or rendering stalls route to the
+  `PDTA_Screen` alpha-flattening policy in `zz9k-picture.datatype`; missing
+  transparency on a 32-bit screen routes to the retained RGBA path.
 
 ## Audio And MPEGA
 

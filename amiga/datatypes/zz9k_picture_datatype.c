@@ -34,16 +34,17 @@
 #include <proto/exec.h>
 #include <proto/graphics.h>
 #include <proto/intuition.h>
+#include <proto/utility.h>
 #include <stdint.h>
 #include <string.h>
 
 #define ZZ9K_PICTURE_DATATYPE_NAME "zz9k-picture.datatype"
 #define ZZ9K_PICTURE_DATATYPE_VERSION 42
-#define ZZ9K_PICTURE_DATATYPE_REVISION 148
+#define ZZ9K_PICTURE_DATATYPE_REVISION 149
 #define ZZ9K_PICTURE_DATATYPE_ID_STRING \
-  "$VER: zz9k-picture.datatype 42.148 (08.08.2026) ZZ9000 SDK"
+  "$VER: zz9k-picture.datatype 42.149 (30.08.2026) ZZ9000 SDK"
 #define ZZ9K_PICTURE_BUILD_MARKER \
-  "metadata: build 2026-08-08 datatype-render-lock-safe-v148"
+  "metadata: build 2026-08-30 screen-alpha-compat-v149"
 #define ZZ9K_PICTURE_OBJECT_NAME_BYTES 128U
 #define ZZ9K_PICTURE_SMALL_PLACEHOLDER_SIZE 64U
 #define ZZ9K_PICTURE_RGB_BYTES_PER_PIXEL 3U
@@ -68,7 +69,6 @@
 #define ZZ9K_PICTURE_ENABLE_DATATYPE_V47_DIRECT 0
 #define ZZ9K_PICTURE_ENABLE_JPEG_DATATYPE_V47_RGB_DIRECT 0
 #define ZZ9K_PICTURE_FORCE_REFERENCE_V43_WRITEPIXELS 1
-#define ZZ9K_PICTURE_FORCE_ALPHA_RGB_COMPAT 0
 #define ZZ9K_PICTURE_ENABLE_PNG_ALPHA_EXPERIMENTS 0
 #define ZZ9K_PICTURE_TRACE_ENABLED 0
 /* Gates the GM_RENDER traces separately from the master switch above; both
@@ -114,6 +114,7 @@ struct Library *DataTypesBase;
 struct Library *PictureBase;
 struct GfxBase *GfxBase;
 struct IntuitionBase *IntuitionBase;
+struct Library *UtilityBase;
 static ZZ9KCaps zz9k_picture_cached_caps;
 static ZZ9KServiceInfo zz9k_picture_cached_image_service;
 static ZZ9KContext *zz9k_picture_cached_ctx;
@@ -172,6 +173,7 @@ typedef struct ZZ9KPictureInstance {
   uint8_t datatype_sync_sent;
   uint8_t png_alpha_known;
   uint8_t png_has_alpha;
+  uint8_t flatten_png_alpha;
 } ZZ9KPictureInstance;
 
 typedef struct ZZ9KPictureDatatypeTarget {
@@ -1170,6 +1172,31 @@ static void zz9k_picture_copy_object_name(ZZ9KPictureInstance *instance,
   memcpy(instance->object_name, leaf, length);
   instance->object_name[length] = '\0';
   zz9k_picture_trace("metadata: source object name");
+}
+
+static void zz9k_picture_capture_screen_alpha_policy(
+    ZZ9KPictureInstance *instance,
+    const struct TagItem *attrs)
+{
+  struct Screen *screen;
+  ULONG screen_depth;
+
+  if (!instance || !attrs) {
+    return;
+  }
+
+  screen = (struct Screen *)GetTagData(
+      PDTA_Screen, 0UL, (struct TagItem *)attrs);
+  if (!screen || !screen->RastPort.BitMap) {
+    return;
+  }
+
+  screen_depth = GetBitMapAttr(screen->RastPort.BitMap, BMA_DEPTH);
+  if (screen_depth <= 16U) {
+    instance->flatten_png_alpha = 1U;
+    zz9k_picture_trace_source(
+        "metadata: png alpha flattened for low-depth screen");
+  }
 }
 
 static void zz9k_picture_capture_object_name(
@@ -6171,6 +6198,13 @@ static int zz9k_picture_decode_to_datatype_pixels(
         "metadata: datatype png alpha detected",
         (uint32_t)png_has_alpha);
   }
+  if (version >= 43U && png_has_alpha &&
+      instance->flatten_png_alpha) {
+    zz9k_picture_trace_source(
+        "metadata: datatype png alpha rgb compatibility path");
+    png_has_alpha = 0;
+    instance->png_has_alpha = 0U;
+  }
   if (png_has_alpha) {
     zz9k_picture_trace_source(
         "metadata: datatype png alpha v43 rgba path");
@@ -7561,6 +7595,8 @@ static ULONG zz9k_picture_datatype_dispatch(REG(a0, struct Hook *hook),
 
       memset(instance, 0, sizeof(*instance));
       instance->source_handle = ZZ9K_INVALID_HANDLE;
+      zz9k_picture_capture_screen_alpha_policy(
+          instance, ((struct opSet *)msg)->ops_AttrList);
       if (!zz9k_picture_load_metadata(cl, new_object, instance)) {
         CoerceMethod(cl, new_object, OM_DISPOSE);
         result = 0;
@@ -7661,6 +7697,10 @@ static BPTR zz9k_picture_datatype_close(
 
 static void zz9k_picture_datatype_close_system_bases(void)
 {
+  if (UtilityBase) {
+    CloseLibrary(UtilityBase);
+    UtilityBase = 0;
+  }
   if (DataTypesBase) {
     CloseLibrary(DataTypesBase);
     DataTypesBase = 0;
@@ -7752,6 +7792,11 @@ static ZZ9KPictureDatatypeBase *zz9k_picture_datatype_init(
   SysBase = *(struct ExecBase **)4;
   DOSBase = (struct DosLibrary *)OpenLibrary((CONST_STRPTR)"dos.library", 36);
   if (!DOSBase) {
+    return 0;
+  }
+  UtilityBase = OpenLibrary((CONST_STRPTR)"utility.library", 39);
+  if (!UtilityBase) {
+    zz9k_picture_datatype_close_system_bases();
     return 0;
   }
   IntuitionBase = (struct IntuitionBase *)OpenLibrary(

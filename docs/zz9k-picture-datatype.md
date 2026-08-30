@@ -2,7 +2,7 @@
 
 Copyright (C) 2024-2026, Dimitris Panokostas / BlitterStudio
 
-`zz9k-picture.datatype 42.148` is the validated SDK v2 DataType for
+`zz9k-picture.datatype 42.149` is the validated SDK v2 DataType for
 the current package. It is packaged as a side-by-side subclass of the system
 `picture.datatype` and must not replace `Classes/DataTypes/picture.datatype`.
 OS3.1 remains the minimum target: the class opens against
@@ -67,14 +67,16 @@ The `--draw-window` mode opens a temporary public-screen window, runs layout
 if needed, adds the datatype object to that window, refreshes it, and hashes
 the actual screen pixels over a capped diagnostic rectangle.
 
-The class decodes JPEG and PNG, including transparent PNGs, and hardware
-testing confirmed the validated decode path with no regressions. On
+The class decodes JPEG and PNG, including transparent PNGs. On
 `picture.datatype v43` and `v47`, JPEG and PNG both use the validated
-`PDTM_WRITEPIXELARRAY` path. Alpha PNGs keep their alpha state, request
-`RGBA8888` tiles from the SDK image service, prepare the picture object with
-`bmh_Masking = mskHasAlpha`, and write `PBPAFMT_RGBA` pixels through the
-superclass. The transparent PNG alpha path is the active validated DataType
-route, not a diagnostic-only experiment.
+`PDTM_WRITEPIXELARRAY` path. On 32-bit screens, alpha PNGs keep their alpha
+state, request `RGBA8888` tiles from the SDK image service, prepare the picture
+object with `bmh_Masking = mskHasAlpha`, and write `PBPAFMT_RGBA` pixels through
+the superclass. On 8-, 15-, and 16-bit screens, version 42.149 instead requests
+RGB tiles and clears the alpha contract before handoff. This matches the
+low-depth behavior of PNGdt44 and avoids repeated 68040 software alpha
+compositing when MUI applications load many images. 32-bit screens retain
+per-pixel alpha.
 
 With a negotiated Zorro 2 aperture, compressed input is capped at a 24 KiB
 host-window buffer and output is emitted through geometry-derived tiles capped
@@ -87,6 +89,11 @@ bitmap instead of aborting PNG decode. That OS3.1 fallback uses a 216-color
 palette, publishes a normal `PDTA_BitMap`, and degrades transparent PNG alpha to
 a transparent palette index because the v43/v47 alpha contracts are not
 available there.
+
+`42.149` selects the low-depth RGB compatibility path from the `PDTA_Screen`
+passed when the object is created. Objects without a screen remain RGBA so
+pixel-reading clients do not silently lose alpha, and 32-bit display objects
+continue to use the validated alpha route.
 
 `42.148` makes `GM_RENDER` lock-safe. The old undocumented framebuffer
 `fill`/`scale*` diagnostic modes synchronously called the SDK mailbox while
