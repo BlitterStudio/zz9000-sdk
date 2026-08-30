@@ -2106,6 +2106,9 @@ int zz9k_audio_ring_acquire(ZZ9KContext *ctx,
 {
   ZZ9KRequest request;
   ZZ9KMailboxEntry reply;
+  uint32_t granted_slot = 0U;
+  uint32_t granted_generation = 0U;
+  int grant_identified;
   int status;
 
   if (!ctx || !desc || !result) {
@@ -2122,7 +2125,38 @@ int zz9k_audio_ring_acquire(ZZ9KContext *ctx,
   if (status != ZZ9K_STATUS_OK) {
     return status;
   }
-  return zz9k_reply_audio_ring_acquire_result(&reply, result);
+  /* Preserve generation-bound ownership before the strict decoder can
+   * clear an otherwise complete but invalid grant. A malformed opcode,
+   * status, or payload never identifies a slot to release. */
+  grant_identified =
+      zz9k_reply_require(&reply, ZZ9K_OP_AUDIO_RING_ACQUIRE,
+                         sizeof(ZZ9KAudioRingAcquireResultPayload));
+  if (grant_identified == ZZ9K_STATUS_OK) {
+    granted_slot = zz9k_get_be32(&reply.payload.inline_data[0]);
+    granted_generation = zz9k_get_be32(&reply.payload.inline_data[4]);
+  }
+  status = zz9k_reply_audio_ring_acquire_result(&reply, result);
+  if (status != ZZ9K_STATUS_OK) {
+    if (grant_identified == ZZ9K_STATUS_OK &&
+        granted_slot >= 1U &&
+        granted_slot <= ZZ9K_AUDIO_RING_SLOT_MAX &&
+        granted_generation != 0U) {
+      (void)zz9k_audio_ring_release(ctx, granted_slot,
+                                    granted_generation, 0U);
+    }
+    return status;
+  }
+  /* A valid-but-different contract or rate is a firmware fault
+   * (PR #31 review): the grant must be exactly what was asked for.
+   * Release the slot so it does not stay BUSY until heartbeat
+   * revocation, and fail closed with a zeroed result. */
+  if (!zz9k_audio_ring_grant_matches_desc(desc, result)) {
+    (void)zz9k_audio_ring_release(ctx, result->slot, result->generation,
+                                  0U);
+    memset(result, 0, sizeof(*result));
+    return ZZ9K_STATUS_INTERNAL_ERROR;
+  }
+  return ZZ9K_STATUS_OK;
 }
 
 int zz9k_audio_ring_release(ZZ9KContext *ctx, uint32_t slot,

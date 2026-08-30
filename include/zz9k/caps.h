@@ -167,7 +167,7 @@ static inline uint32_t zz9k_known_service_flag_count(uint32_t service_id)
     return 16U;
   }
   if (service_id == ZZ9K_SERVICE_AUDIO) {
-    return 11U;
+    return 12U;
   }
   if (service_id == ZZ9K_SERVICE_CODEC) {
     return 19U;
@@ -284,6 +284,8 @@ static inline uint32_t zz9k_known_service_flag(uint32_t service_id,
       return ZZ9K_SERVICE_FLAG_AUDIO_CONTROL;
     case 10:
       return ZZ9K_SERVICE_FLAG_AUDIO_FABRIC;
+    case 11:
+      return ZZ9K_SERVICE_FLAG_AUDIO_FABRIC_RATE;
     default:
       return 0U;
     }
@@ -504,6 +506,8 @@ static inline const char *zz9k_service_flag_name(uint32_t service_id,
       return "audio-control";
     case ZZ9K_SERVICE_FLAG_AUDIO_FABRIC:
       return "audio-fabric";
+    case ZZ9K_SERVICE_FLAG_AUDIO_FABRIC_RATE:
+      return "audio-fabric-rate";
     default:
       return 0;
     }

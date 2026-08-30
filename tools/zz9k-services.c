@@ -101,7 +101,8 @@ static const ReleaseServiceRequirement release_services[] = {
       ZZ9K_SERVICE_FLAG_AUDIO_MP3_DECODE |
       ZZ9K_SERVICE_FLAG_AUDIO_MP3_STREAM |
       ZZ9K_SERVICE_FLAG_AUDIO_CONTROL |
-      ZZ9K_SERVICE_FLAG_AUDIO_FABRIC,
+      ZZ9K_SERVICE_FLAG_AUDIO_FABRIC |
+      ZZ9K_SERVICE_FLAG_AUDIO_FABRIC_RATE,
     ZZ9K_SERVICE_AUDIO,
     21U /* 0x0500..0x0514 incl. control plane + fabric leases
          * (0x0512-0x0514); qualified on hardware 2026-08-28

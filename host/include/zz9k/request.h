@@ -706,7 +706,8 @@ static inline int zz9k_request_audio_ring_acquire(
   if (!request || !desc ||
       !zz9k_audio_build_ring_acquire_desc(&validated, desc->slot,
                                           desc->identity, desc->gain,
-                                          desc->flags)) {
+                                          desc->flags,
+                                          desc->source_rate_hz)) {
     return ZZ9K_STATUS_BAD_REQUEST;
   }
 
@@ -718,6 +719,7 @@ static inline int zz9k_request_audio_ring_acquire(
   zz9k_put_be32(payload->identity, validated.identity);
   zz9k_put_be32(payload->gain, validated.gain);
   zz9k_put_be32(payload->flags, validated.flags);
+  zz9k_put_be32(payload->source_rate_hz, validated.source_rate_hz);
   return ZZ9K_STATUS_OK;
 }
 

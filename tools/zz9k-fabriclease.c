@@ -252,9 +252,7 @@ int zz9k_fabriclease_session(ZZ9KContext *ctx,
                      : (uint64_t)options->seconds *
                            (uint64_t)ZZ9K_FABRICLEASE_BYTES_PER_SECOND;
 
-  if (!zz9k_audio_build_ring_acquire_desc(
-          &acquire, options->slot, ZZ9K_AUDIO_METER_IDENTITY_SDK_STREAM,
-          options->gain, 0U)) {
+  if (!zz9k_audio_build_ring_acquire_desc(&acquire, options->slot, ZZ9K_AUDIO_METER_IDENTITY_SDK_STREAM, options->gain, 0U, 0U)) {
     return ZZ9K_STATUS_BAD_REQUEST;
   }
   status = zz9k_audio_ring_session_begin(ctx, &acquire, &session);

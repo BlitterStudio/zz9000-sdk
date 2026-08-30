@@ -20,6 +20,15 @@ static inline int zz9k_audio_sample_format_known(uint32_t format)
          format == ZZ9K_AUDIO_SAMPLE_FORMAT_S16BE;
 }
 
+/* Source-rate vocabulary of rate-bearing leases: exactly the
+ * qualified conversion table (and the AHI mix-rate table). 48000 is
+ * the bypass rate and is always in vocabulary. */
+static inline int zz9k_audio_ring_rate_known(uint32_t rate)
+{
+  return rate == 8000U || rate == 12000U || rate == 24000U ||
+         rate == 32000U || rate == 44100U || rate == 48000U;
+}
+
 static inline int zz9k_audio_build_decode_desc(
     ZZ9KAudioDecodeDesc *desc,
     uint32_t src_handle,
@@ -126,21 +135,33 @@ static inline int zz9k_audio_build_stream_feed_desc(
   return 1;
 }
 
-/* Direct-ring plane (ZZ9K_OP_AUDIO_RING_*): 48 kHz stereo S16LE only
- * (the bypass geometry; a nonzero acquire-flags word is rejected by
- * firmware). gain is the requested 0..255 producer scale (128 =
- * unity); firmware composes it against the enforced audio ceiling
- * and reports the applied value in the acquire result. */
+/* Direct-ring plane (ZZ9K_OP_AUDIO_RING_*). The default acquire is
+ * the 48-kHz stereo S16LE bypass lease (flags 0). With
+ * ZZ9K_AUDIO_RING_ACQUIRE_FLAG_SOURCE_RATE the desc also names a
+ * source rate from the qualified vocabulary: the lease delivers
+ * stereo S16LE at that rate and firmware converts per-slot (requires
+ * ZZ9K_SERVICE_FLAG_AUDIO_FABRIC_RATE; older firmware answers
+ * BAD_REQUEST, which is the caller's fallback signal). gain is the
+ * requested 0..255 producer scale (128 = unity); firmware composes
+ * it against the enforced audio ceiling and reports the applied
+ * value in the acquire result. */
 static inline int zz9k_audio_build_ring_acquire_desc(
     ZZ9KAudioRingAcquireDesc *desc,
     uint32_t slot,
     uint32_t identity,
     uint32_t gain,
-    uint32_t flags)
+    uint32_t flags,
+    uint32_t source_rate_hz)
 {
   if (!desc || slot == 0U || slot > ZZ9K_AUDIO_RING_SLOT_MAX ||
       identity > ZZ9K_AUDIO_METER_IDENTITY_SDK_STREAM ||
-      gain > 255U || flags != 0U) {
+      gain > 255U ||
+      (flags & ~ZZ9K_AUDIO_RING_ACQUIRE_FLAG_KNOWN) != 0U) {
+    return 0;
+  }
+  if ((flags & ZZ9K_AUDIO_RING_ACQUIRE_FLAG_SOURCE_RATE) != 0U
+          ? !zz9k_audio_ring_rate_known(source_rate_hz)
+          : source_rate_hz != 0U) {
     return 0;
   }
 
@@ -149,6 +170,7 @@ static inline int zz9k_audio_build_ring_acquire_desc(
   desc->identity = identity;
   desc->gain = gain;
   desc->flags = flags;
+  desc->source_rate_hz = source_rate_hz;
   return 1;
 }
 
@@ -316,11 +338,16 @@ static inline void zz9k_audio_ring_firmware_publish(
 
 /* A grant is usable only when it is self-consistent: a leaseable
  * slot inside the advertised count, a nonzero generation, the fixed
- * 3840-byte/20-ms period geometry and known sample contract, a
- * ring capacity that is a whole number of periods, a cache-line
- * aligned control block that does not overlap the ring, and no
- * unknown result flags. SDK clients validate before dereferencing
- * any granted pointer. */
+ * 3840-byte/20-ms period geometry and a known sample contract with
+ * a matching source rate (48000 for the bypass contract, a
+ * qualified-vocabulary rate for the source-rate contract), a ring
+ * capacity that is a whole number of periods, a cache-line aligned
+ * control block that does not overlap the ring, and no unknown
+ * result flags. SDK clients validate before dereferencing any
+ * granted pointer. The reply decoder normalizes the immediately
+ * preceding firmware's zero encoding of the reserved source-rate
+ * word to 48000 for bypass grants before calling this, so a legacy
+ * grant never reaches here with a zero rate. */
 static inline int zz9k_audio_ring_grant_valid(
     const ZZ9KAudioRingAcquireResult *grant)
 {
@@ -335,10 +362,23 @@ static inline int zz9k_audio_ring_grant_valid(
       grant->generation == 0U ||
       grant->period_bytes != ZZ9K_AUDIO_RING_PERIOD_BYTES ||
       grant->period_us != ZZ9K_AUDIO_RING_PERIOD_US ||
-      grant->sample_contract != ZZ9K_AUDIO_RING_CONTRACT_48K_STEREO_S16LE ||
       grant->gain_applied > 255U ||
       (grant->flags & ~(ZZ9K_AUDIO_RING_RESULT_GAIN_BOUNDED |
                         ZZ9K_AUDIO_RING_RESULT_BUS_ZORRO2)) != 0U) {
+    return 0;
+  }
+
+  if (grant->sample_contract ==
+      ZZ9K_AUDIO_RING_CONTRACT_48K_STEREO_S16LE) {
+    if (grant->source_rate != 48000U) {
+      return 0;
+    }
+  } else if (grant->sample_contract ==
+             ZZ9K_AUDIO_RING_CONTRACT_SOURCE_RATE_STEREO_S16LE) {
+    if (!zz9k_audio_ring_rate_known(grant->source_rate)) {
+      return 0;
+    }
+  } else {
     return 0;
   }
 
@@ -358,6 +398,29 @@ static inline int zz9k_audio_ring_grant_valid(
   }
 
   return 1;
+}
+
+/* A grant matches its request only when the sample contract and
+ * source rate are exactly what was asked for: a SOURCE_RATE request
+ * gets contract 2 at the requested rate; a flags-zero bypass request
+ * gets contract 1 at the normalized 48000. The reply decoder's
+ * legacy-zero normalization runs before this, so a bypass grant never
+ * carries a zero rate here. */
+static inline int zz9k_audio_ring_grant_matches_desc(
+    const ZZ9KAudioRingAcquireDesc *desc,
+    const ZZ9KAudioRingAcquireResult *grant)
+{
+  if (!desc || !grant) {
+    return 0;
+  }
+  if ((desc->flags & ZZ9K_AUDIO_RING_ACQUIRE_FLAG_SOURCE_RATE) != 0U) {
+    return grant->sample_contract ==
+               ZZ9K_AUDIO_RING_CONTRACT_SOURCE_RATE_STEREO_S16LE &&
+           grant->source_rate == desc->source_rate_hz;
+  }
+  return grant->sample_contract ==
+             ZZ9K_AUDIO_RING_CONTRACT_48K_STEREO_S16LE &&
+         grant->source_rate == 48000U;
 }
 
 /* The outstanding distance is write-minus-consumed: a backward

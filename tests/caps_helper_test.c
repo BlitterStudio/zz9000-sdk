@@ -534,7 +534,7 @@ static int test_service_flag_iteration(void)
   if (zz9k_known_service_flag(ZZ9K_SERVICE_CODEC, 19) != 0U) {
     return 28;
   }
-  if (zz9k_known_service_flag_count(ZZ9K_SERVICE_AUDIO) != 11U) {
+  if (zz9k_known_service_flag_count(ZZ9K_SERVICE_AUDIO) != 12U) {
     return 20;
   }
   if (zz9k_known_service_flag(ZZ9K_SERVICE_AUDIO, 4) !=
@@ -565,8 +565,12 @@ static int test_service_flag_iteration(void)
       ZZ9K_SERVICE_FLAG_AUDIO_FABRIC) {
     return 30;
   }
-  if (zz9k_known_service_flag(ZZ9K_SERVICE_AUDIO, 11) != 0U) {
+  if (zz9k_known_service_flag(ZZ9K_SERVICE_AUDIO, 11) !=
+      ZZ9K_SERVICE_FLAG_AUDIO_FABRIC_RATE) {
     return 48;
+  }
+  if (zz9k_known_service_flag(ZZ9K_SERVICE_AUDIO, 12) != 0U) {
+    return 49;
   }
   if (zz9k_known_service_flag_count(ZZ9K_SERVICE_VIDEO) != 15U ||
       zz9k_known_service_flag(ZZ9K_SERVICE_VIDEO, 4) !=
