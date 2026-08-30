@@ -2122,7 +2122,21 @@ int zz9k_audio_ring_acquire(ZZ9KContext *ctx,
   if (status != ZZ9K_STATUS_OK) {
     return status;
   }
-  return zz9k_reply_audio_ring_acquire_result(&reply, result);
+  status = zz9k_reply_audio_ring_acquire_result(&reply, result);
+  if (status != ZZ9K_STATUS_OK) {
+    return status;
+  }
+  /* A valid-but-different contract or rate is a firmware fault
+   * (PR #31 review): the grant must be exactly what was asked for.
+   * Release the slot so it does not stay BUSY until heartbeat
+   * revocation, and fail closed with a zeroed result. */
+  if (!zz9k_audio_ring_grant_matches_desc(desc, result)) {
+    (void)zz9k_audio_ring_release(ctx, result->slot, result->generation,
+                                  0U);
+    memset(result, 0, sizeof(*result));
+    return ZZ9K_STATUS_INTERNAL_ERROR;
+  }
+  return ZZ9K_STATUS_OK;
 }
 
 int zz9k_audio_ring_release(ZZ9KContext *ctx, uint32_t slot,

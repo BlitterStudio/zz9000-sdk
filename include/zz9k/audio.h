@@ -400,6 +400,29 @@ static inline int zz9k_audio_ring_grant_valid(
   return 1;
 }
 
+/* A grant matches its request only when the sample contract and
+ * source rate are exactly what was asked for: a SOURCE_RATE request
+ * gets contract 2 at the requested rate; a flags-zero bypass request
+ * gets contract 1 at the normalized 48000. The reply decoder's
+ * legacy-zero normalization runs before this, so a bypass grant never
+ * carries a zero rate here. */
+static inline int zz9k_audio_ring_grant_matches_desc(
+    const ZZ9KAudioRingAcquireDesc *desc,
+    const ZZ9KAudioRingAcquireResult *grant)
+{
+  if (!desc || !grant) {
+    return 0;
+  }
+  if ((desc->flags & ZZ9K_AUDIO_RING_ACQUIRE_FLAG_SOURCE_RATE) != 0U) {
+    return grant->sample_contract ==
+               ZZ9K_AUDIO_RING_CONTRACT_SOURCE_RATE_STEREO_S16LE &&
+           grant->source_rate == desc->source_rate_hz;
+  }
+  return grant->sample_contract ==
+             ZZ9K_AUDIO_RING_CONTRACT_48K_STEREO_S16LE &&
+         grant->source_rate == 48000U;
+}
+
 /* The outstanding distance is write-minus-consumed: a backward
  * cursor or a distance above the ring capacity is a fault on that
  * generation only (KTD4). */

@@ -123,6 +123,9 @@ static struct {
   uint32_t release_slot, release_generation;
   uint32_t slot_count;
   uint32_t z2_grant_ring_offset;  /* scriptable grant geometry */
+  int override_grant;
+  uint32_t override_contract;
+  uint32_t override_rate;
 } g_mock;
 
 static struct MockSlot *mock_slot(uint32_t slot)
@@ -321,6 +324,10 @@ static void mock_respond(void)
       contract = ZZ9K_AUDIO_RING_CONTRACT_SOURCE_RATE_STEREO_S16LE;
       granted_rate = rate;
       s->period_bytes = (rate / 50U) * 4U;
+    }
+    if (g_mock.override_grant) {
+      contract = g_mock.override_contract;
+      granted_rate = g_mock.override_rate;
     }
     reply = mock_complete(req, ZZ9K_STATUS_OK,
                           sizeof(ZZ9KAudioRingAcquireResultPayload));
@@ -1337,6 +1344,64 @@ out:
   return status == ZZ9K_STATUS_OK ? 0 : status;
 }
 
+static int test_mismatched_rate_grants_release(void)
+{
+  void *mapping = mock_window_alloc(0x08000000UL);
+  ZZ9KContext *ctx = 0;
+  ZZ9KAudioRingAcquireDesc desc;
+  ZZ9KAudioRingSession session;
+  int status = 0;
+
+  mock_reset(ZZ9K_CAP_AUDIO_FABRIC, 3U, 0x08000000UL);
+  mock_grant_slot(1U, MOCK_GENERATION1, 0x07fd0080UL,
+                  16U * ZZ9K_AUDIO_RING_PERIOD_BYTES, 0x07fd0000UL);
+  mock_install_hooks();
+  if (mock_attach(&ctx) != ZZ9K_STATUS_OK) {
+    status = 1;
+    goto out;
+  }
+  if (!zz9k_audio_build_ring_acquire_desc(
+          &desc, 1U, ZZ9K_AUDIO_METER_IDENTITY_AHI, 128U,
+          ZZ9K_AUDIO_RING_ACQUIRE_FLAG_SOURCE_RATE, 44100U)) {
+    status = 2;
+    goto out;
+  }
+
+  g_mock.override_grant = 1;
+  g_mock.override_contract =
+      ZZ9K_AUDIO_RING_CONTRACT_SOURCE_RATE_STEREO_S16LE;
+  g_mock.override_rate = 32000U;
+  memset(&session, 0xa5, sizeof(session));
+  if (zz9k_audio_ring_session_begin(ctx, &desc, &session) !=
+          ZZ9K_STATUS_INTERNAL_ERROR ||
+      session.mapped != 0U || session.grant.generation != 0U ||
+      g_mock.release_calls != 1 ||
+      g_mock.release_slot != 1U ||
+      g_mock.release_generation != MOCK_GENERATION1) {
+    status = 3;
+    goto out;
+  }
+
+  g_mock.override_contract = ZZ9K_AUDIO_RING_CONTRACT_48K_STEREO_S16LE;
+  g_mock.override_rate = 48000U;
+  memset(&session, 0xa5, sizeof(session));
+  if (zz9k_audio_ring_session_begin(ctx, &desc, &session) !=
+          ZZ9K_STATUS_INTERNAL_ERROR ||
+      session.mapped != 0U || session.grant.generation != 0U ||
+      g_mock.release_calls != 2 ||
+      g_mock.release_slot != 1U ||
+      g_mock.release_generation != MOCK_GENERATION1) {
+    status = 4;
+  }
+
+out:
+  if (ctx)
+    zz9k_close(ctx);
+  mock_remove_hooks();
+  mock_window_free(mapping, 0x08000000UL);
+  return status;
+}
+
 /* A rate-bearing acquire (AHI migration): the request carries the
  * SOURCE_RATE flag and the mix rate, the grant comes back under the
  * source-rate contract with the rate echoed, and a source-rate-sized
@@ -1444,6 +1509,8 @@ int main(void)
   CHECK(r == 0, "pinned Z2 direct-region geometry validates");
   r = test_rate_lease_session();
   CHECK(r == 0, "rate lease grants contract 2 and paces source periods");
+  r = test_mismatched_rate_grants_release();
+  CHECK(r == 0, "mismatched rate grants fail closed and release");
   r = test_z3_pinned_grant_geometry();
   CHECK(r == 0, "pinned Z3 grant geometry maps and plays");
 
