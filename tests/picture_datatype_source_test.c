@@ -588,7 +588,8 @@ int main(int argc, char **argv)
       source, "\"metadata: datatype png alpha rgb compatibility path\"");
   ok &= expect_contains(
       source,
-      "if (png_has_alpha && instance->flatten_png_alpha) {\n"
+      "if (version >= 43U && png_has_alpha &&\n"
+      "      instance->flatten_png_alpha) {\n"
       "    zz9k_picture_trace_source(\n"
       "        \"metadata: datatype png alpha rgb compatibility path\");\n"
       "    png_has_alpha = 0;\n"

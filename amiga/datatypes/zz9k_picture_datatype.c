@@ -6198,7 +6198,8 @@ static int zz9k_picture_decode_to_datatype_pixels(
         "metadata: datatype png alpha detected",
         (uint32_t)png_has_alpha);
   }
-  if (png_has_alpha && instance->flatten_png_alpha) {
+  if (version >= 43U && png_has_alpha &&
+      instance->flatten_png_alpha) {
     zz9k_picture_trace_source(
         "metadata: datatype png alpha rgb compatibility path");
     png_has_alpha = 0;
