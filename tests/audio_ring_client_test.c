@@ -1392,6 +1392,23 @@ static int test_mismatched_rate_grants_release(void)
       g_mock.release_slot != 1U ||
       g_mock.release_generation != MOCK_GENERATION1) {
     status = 4;
+    goto out;
+  }
+
+  /* Decoder-level validation still owns a successfully granted slot.
+   * The wrapper must preserve its generation long enough to release it
+   * even though the public result/session is cleared on rejection. */
+  g_mock.override_contract =
+      ZZ9K_AUDIO_RING_CONTRACT_SOURCE_RATE_STEREO_S16LE;
+  g_mock.override_rate = 44101U;
+  memset(&session, 0xa5, sizeof(session));
+  if (zz9k_audio_ring_session_begin(ctx, &desc, &session) !=
+          ZZ9K_STATUS_INTERNAL_ERROR ||
+      session.mapped != 0U || session.grant.generation != 0U ||
+      g_mock.release_calls != 3 ||
+      g_mock.release_slot != 1U ||
+      g_mock.release_generation != MOCK_GENERATION1) {
+    status = 5;
   }
 
 out:
