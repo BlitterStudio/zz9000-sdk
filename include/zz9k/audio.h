@@ -344,7 +344,10 @@ static inline void zz9k_audio_ring_firmware_publish(
  * capacity that is a whole number of periods, a cache-line aligned
  * control block that does not overlap the ring, and no unknown
  * result flags. SDK clients validate before dereferencing any
- * granted pointer. */
+ * granted pointer. The reply decoder normalizes the immediately
+ * preceding firmware's zero encoding of the reserved source-rate
+ * word to 48000 for bypass grants before calling this, so a legacy
+ * grant never reaches here with a zero rate. */
 static inline int zz9k_audio_ring_grant_valid(
     const ZZ9KAudioRingAcquireResult *grant)
 {

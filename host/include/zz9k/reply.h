@@ -585,6 +585,16 @@ static inline int zz9k_reply_audio_ring_acquire_result(
   result->slot_count = zz9k_get_be32(&payload[36]);
   result->flags = zz9k_get_be32(&payload[40]);
   result->source_rate = zz9k_get_be32(&payload[44]);
+  /* The immediately preceding audio-fabric firmware left the reserved
+   * source-rate word at zero for bypass grants; normalize that legacy
+   * encoding to the bypass rate before validation so every successful
+   * grant stays usable as-is. Contract-2 keeps its strict vocabulary
+   * check: zero is off-vocabulary there and still rejected. */
+  if (result->source_rate == 0U &&
+      result->sample_contract ==
+      ZZ9K_AUDIO_RING_CONTRACT_48K_STEREO_S16LE) {
+    result->source_rate = 48000U;
+  }
 
   /* The decoded grant must be usable as-is (R3): clients dereference
    * ring/control pointers straight out of it after this check. */

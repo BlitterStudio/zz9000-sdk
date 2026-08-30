@@ -265,6 +265,30 @@ static int test_acquire_reply(void)
       grant.flags != 0U) {
     return 1;
   }
+  /* Legacy firmware left the reserved source-rate word at zero for
+   * bypass grants; the decoder normalizes it to the bypass rate. */
+  put_acquire_reply(&reply, 1U, 5U, Z3_RING_OFFSET, Z3_RING_CAPACITY,
+                    Z3_CONTROL_OFFSET, 128U, 2U, 0U);
+  zz9k_put_be32(&reply.payload.inline_data[44], 0U);
+  if (zz9k_reply_audio_ring_acquire_result(&reply, &grant) !=
+          ZZ9K_STATUS_OK ||
+      grant.sample_contract !=
+          ZZ9K_AUDIO_RING_CONTRACT_48K_STEREO_S16LE ||
+      grant.source_rate != 48000U) {
+    return 19; /* legacy zero source rate not normalized to 48000 */
+  }
+
+  /* The zero encoding is contract-1 only: a contract-2 grant with a
+   * zero rate stays off-vocabulary and malformed. */
+  put_acquire_reply(&reply, 1U, 5U, Z3_RING_OFFSET, Z3_RING_CAPACITY,
+                    Z3_CONTROL_OFFSET, 128U, 2U, 0U);
+  zz9k_put_be32(&reply.payload.inline_data[28],
+                ZZ9K_AUDIO_RING_CONTRACT_SOURCE_RATE_STEREO_S16LE);
+  zz9k_put_be32(&reply.payload.inline_data[44], 0U);
+  if (zz9k_reply_audio_ring_acquire_result(&reply, &grant) !=
+      ZZ9K_STATUS_INTERNAL_ERROR) {
+    return 20; /* contract-2 zero source rate stays malformed */
+  }
 
   /* Zorro II compact grant: one slot, bounded gain flagged. */
   put_acquire_reply(&reply, 1U, 9U, 0x1000U,
