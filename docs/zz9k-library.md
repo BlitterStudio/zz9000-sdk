@@ -8,7 +8,7 @@ The current library identity is:
 ```c
 #define ZZ9K_LIBRARY_NAME "zz9k.library"
 #define ZZ9K_LIBRARY_VERSION 2
-#define ZZ9K_LIBRARY_REVISION 28
+#define ZZ9K_LIBRARY_REVISION 29
 ```
 
 Open the library with at least version 2:
@@ -1777,6 +1777,14 @@ for the secondary (HI) CLUT, which firmware does not shadow, so it returns
 `ZZ9K_LIBRARY_MIN_REVISION_QUERY_PALETTE` and the
 `ZZ9K_SERVICE_FLAG_SURFACE_PALETTE_QUERY` surface-service flag; the op returns
 `ZZ9K_STATUS_UNSUPPORTED` on firmware that does not implement it.
+
+Library revision 29 hardens direct audio-ring lease acquisition without adding
+an LVO. The resident mailbox path accepts the legacy bypass grant only for a
+request that did not ask for source-rate conversion, verifies that a returned
+grant matches the requested contract and source rate, and releases malformed
+or mismatched grants before reporting failure. This prevents a failed acquire
+from leaking a firmware lease and prevents clients from accepting a different
+audio contract than they requested.
 
 `ZZ9KAudioStreamBeginDesc.low_water_bytes` is the PCM-ring refill
 threshold: while a session is bound to the AX output, the firmware tops the
