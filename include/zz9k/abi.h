@@ -1162,9 +1162,12 @@ typedef struct ZZ9KAudioRingFirmwareLine {
 /* Producer intent for one direct-ring slot
  * (ZZ9K_OP_AUDIO_RING_ACQUIRE). identity reuses the meter vocabulary
  * (ZZ9K_AUDIO_METER_IDENTITY_*); gain is the single 0..255 mixer
- * scale (128 = unity). flags is REQUIRED ZERO: a nonzero flags word
- * is rejected ZZ9K_STATUS_BAD_REQUEST (the bypass path consumes
- * 48 kHz stereo S16LE only). */
+ * scale (128 = unity). flags zero requests the 48-kHz stereo S16LE
+ * bypass contract and requires source_rate_hz zero. The
+ * ZZ9K_AUDIO_RING_ACQUIRE_FLAG_SOURCE_RATE flag instead requests
+ * stereo S16LE at a qualified nonzero source rate for firmware-side
+ * conversion. Unknown flag bits, an unsupported rate, or a nonzero
+ * bypass rate is rejected with ZZ9K_STATUS_BAD_REQUEST. */
 typedef struct ZZ9KAudioRingAcquirePayload {
   uint8_t slot[4];
   uint8_t identity[4];
