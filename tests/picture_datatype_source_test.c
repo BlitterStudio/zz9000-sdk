@@ -138,12 +138,33 @@ int main(int argc, char **argv)
       source, "Copyright (C) 2024-2026, Dimitris Panokostas / BlitterStudio");
   ok &= expect_contains(source, "\"zz9k-picture.datatype\"");
   ok &= expect_contains(source, "ZZ9K_PICTURE_DATATYPE_VERSION 42");
-  ok &= expect_contains(source, "ZZ9K_PICTURE_DATATYPE_REVISION 149");
-  ok &= expect_contains(source, "$VER: zz9k-picture.datatype 42.149");
+  ok &= expect_contains(source, "ZZ9K_PICTURE_DATATYPE_REVISION 150");
+  ok &= expect_contains(source, "$VER: zz9k-picture.datatype 42.150");
   ok &= expect_contains(source, "ZZ9K_PICTURE_BUILD_MARKER");
   ok &= expect_contains(
       source,
-      "\"metadata: build 2026-08-30 screen-alpha-compat-v149\"");
+      "\"metadata: build 2026-09-03 png-palette-lut8-v150\"");
+  ok &= expect_contains(source, "ZZ9K_PICTURE_PNG_PALETTE_MAX_ENTRIES 256U");
+  ok &= expect_contains(source, "ZZ9K_PICTURE_PNG_TRANSPARENT_NONE 0xFFU");
+  ok &= expect_contains(source, "ZZ9K_PICTURE_LUT8_MAP_SLOTS 512U");
+  ok &= expect_contains(source, "ZZ9KPicturePngPalette png_palette;");
+  ok &= expect_contains(source, "zz9k_picture_prepare_png_palette_lut8_v43");
+  ok &= expect_contains(source, "zz9k_picture_write_palette_lut8_tile_to_object");
+  ok &= expect_contains(source, "zz9k_picture_build_png_lut8_map");
+  ok &= expect_contains(source, "zz9k_picture_png_lut8_lookup");
+  ok &= expect_contains(source, "zz9k_picture_png_nearest_palette_index");
+  ok &= expect_contains(
+      source, "\"metadata: datatype png palette lut8 path\"");
+  ok &= expect_contains(source, "\"metadata: png lut8 ready\"");
+  ok &= expect_contains(source, "\"metadata: png palette entries\"");
+  ok &= expect_contains(source, "\"decode: datatype lut8 tile written\"");
+  ok &= expect_contains(source, "\"decode: datatype lut8 map alloc failed\"");
+  ok &= expect_contains(source, "PBPAFMT_LUT8");
+  ok &= expect_contains(source, "PDTA_NumColors, (ULONG)palette->count");
+  ok &= expect_contains(source, "header->bmh_Depth = 8;");
+  ok &= expect_contains(source, "header->bmh_Masking = mskHasTransparentColor;");
+  ok &= expect_contains(source, "target->png_lut8");
+  ok &= expect_contains(source, "instance->png_palette.present");
   ok &= expect_not_contains(source, "ZZ9K_PICTURE_FORCE_ALPHA_RGB_COMPAT");
   ok &= expect_contains(source, "ZZ9K_PICTURE_OBJECT_NAME_BYTES 128U");
   ok &= expect_contains(source, "char object_name[ZZ9K_PICTURE_OBJECT_NAME_BYTES];");

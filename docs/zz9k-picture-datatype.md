@@ -2,7 +2,7 @@
 
 Copyright (C) 2024-2026, Dimitris Panokostas / BlitterStudio
 
-`zz9k-picture.datatype 42.149` is the validated SDK v2 DataType for
+`zz9k-picture.datatype 42.150` is the validated SDK v2 DataType for
 the current package. It is packaged as a side-by-side subclass of the system
 `picture.datatype` and must not replace `Classes/DataTypes/picture.datatype`.
 OS3.1 remains the minimum target: the class opens against
@@ -94,6 +94,20 @@ available there.
 passed when the object is created. Objects without a screen remain RGBA so
 pixel-reading clients do not silently lose alpha, and 32-bit display objects
 continue to use the validated alpha route.
+
+`42.150` adds a PNGdt44-compatible LUT8 path for indexed PNGs. When the PNG
+is colour type 3, the class captures the file's own `PLTE` and `tRNS`
+palette metadata during the header scan, decodes through the same firmware
+tile pipeline as before, maps the truecolour pixels back to the file's own
+palette indices on the Amiga side, and publishes the picture as depth 8
+with `PDTA_NumColors`, `PDTA_ColorRegisters`, `PDTA_CRegs`, and - when
+`tRNS` marks a fully transparent entry - `mskHasTransparentColor` plus
+`bmh_Transparent`. No per-pixel alpha is advertised for these files. This
+is the picture contract MUI converts through its fast palette path; it
+removes the multi-second startup slowdown reported for MUI applications
+such as IBrowse and YAM when their 8-bit PNG image sets are routed through
+`zz9k-picture.datatype` (GitHub issue #73), on every screen depth.
+Truecolour PNGs with alpha keep the 42.149 behaviour.
 
 `42.148` makes `GM_RENDER` lock-safe. The old undocumented framebuffer
 `fill`/`scale*` diagnostic modes synchronously called the SDK mailbox while
