@@ -101,8 +101,10 @@ palette metadata during the header scan, decodes through the same firmware
 tile pipeline as before, maps the truecolour pixels back to the file's own
 palette indices on the Amiga side, and publishes the picture as depth 8
 with `PDTA_NumColors`, `PDTA_ColorRegisters`, `PDTA_CRegs`, and - when
-`tRNS` marks a fully transparent entry - `mskHasTransparentColor` plus
-`bmh_Transparent`. No per-pixel alpha is advertised for these files. This
+`tRNS` marks at least one fully transparent entry - `mskHasTransparentColor`
+plus `bmh_Transparent`. All fully transparent palette entries are mapped
+onto the published transparent index; indexed PNGs whose `tRNS` table
+contains partial alpha keep the per-pixel alpha path instead. This
 is the picture contract MUI converts through its fast palette path; it
 removes the multi-second startup slowdown reported for MUI applications
 such as IBrowse and YAM when their 8-bit PNG image sets are routed through

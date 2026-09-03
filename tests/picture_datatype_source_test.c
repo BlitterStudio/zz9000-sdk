@@ -144,10 +144,14 @@ int main(int argc, char **argv)
   ok &= expect_contains(
       source,
       "\"metadata: build 2026-09-03 png-palette-lut8-v150\"");
-  ok &= expect_contains(source, "ZZ9K_PICTURE_PNG_PALETTE_MAX_ENTRIES 256U");
-  ok &= expect_contains(source, "ZZ9K_PICTURE_PNG_TRANSPARENT_NONE 0xFFU");
+  ok &= expect_contains(source, "ZZ9K_PICTURE_PNG_TRANSPARENT_NONE 0x0100U");
   ok &= expect_contains(source, "ZZ9K_PICTURE_LUT8_MAP_SLOTS 512U");
   ok &= expect_contains(source, "ZZ9KPicturePngPalette png_palette;");
+  ok &= expect_contains(source, "uint8_t transparent_mask[");
+  ok &= expect_contains(source, "uint8_t partial_alpha;");
+  ok &= expect_contains(source, "palette->partial_alpha = 1U;");
+  ok &= expect_contains(source, "!instance->png_palette.partial_alpha");
+  ok &= expect_contains(source, "ZZ9K_PICTURE_PNG_TRANSPARENT_MASK_BYTES 32U");
   ok &= expect_contains(source, "zz9k_picture_prepare_png_palette_lut8_v43");
   ok &= expect_contains(source, "zz9k_picture_write_palette_lut8_tile_to_object");
   ok &= expect_contains(source, "zz9k_picture_build_png_lut8_map");

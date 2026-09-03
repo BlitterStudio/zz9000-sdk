@@ -86,7 +86,10 @@
 #define ZZ9K_PICTURE_SOURCE_FILE 1U
 #define ZZ9K_PICTURE_SOURCE_MEMORY 2U
 #define ZZ9K_PICTURE_PNG_PALETTE_MAX_ENTRIES 256U
-#define ZZ9K_PICTURE_PNG_TRANSPARENT_NONE 0xFFU
+/* Wider than uint8_t so palette index 255 never collides with the
+ * "no transparent entry" sentinel. */
+#define ZZ9K_PICTURE_PNG_TRANSPARENT_NONE 0x0100U
+#define ZZ9K_PICTURE_PNG_TRANSPARENT_MASK_BYTES 32U
 /* Open-addressed reverse map from decoded RGB triples back to PNG palette
  * indices. 512 slots keep the load factor at or below 0.5 for a full
  * 256-entry palette so lookups stay near one probe. */
@@ -169,8 +172,10 @@ static ZZ9KPictureRenderMode zz9k_picture_cached_render_mode;
  * pipeline handles quickly. */
 typedef struct ZZ9KPicturePngPalette {
   uint8_t rgb[ZZ9K_PICTURE_PNG_PALETTE_MAX_ENTRIES * 3U];
+  uint8_t transparent_mask[ZZ9K_PICTURE_PNG_TRANSPARENT_MASK_BYTES];
   uint16_t count;
-  uint8_t transparent_index;
+  uint16_t transparent_index;
+  uint8_t partial_alpha;
   uint8_t present;
 } ZZ9KPicturePngPalette;
 
@@ -1041,8 +1046,16 @@ static int zz9k_picture_read_png_metadata(ZZ9KPictureSource *source,
         palette->transparent_index = ZZ9K_PICTURE_PNG_TRANSPARENT_NONE;
         for (index = 0U; index < length; index++) {
           if (trns[index] == 0U) {
-            palette->transparent_index = (uint8_t)index;
-            break;
+            palette->transparent_mask[index >> 3] |=
+                (uint8_t)(1U << (index & 7U));
+            if (palette->transparent_index ==
+                ZZ9K_PICTURE_PNG_TRANSPARENT_NONE) {
+              palette->transparent_index = (uint16_t)index;
+            }
+          } else if (trns[index] != 255U) {
+            /* Partial alpha cannot be represented by a single transparent
+             * colour; the caller keeps the per-pixel alpha path. */
+            palette->partial_alpha = 1U;
           }
         }
       }
@@ -3214,7 +3227,8 @@ static int zz9k_picture_prepare_png_palette_lut8_v43(
     return 0;
   }
   palette = &instance->png_palette;
-  if (!palette->present || palette->count == 0U ||
+  if (!palette->present || palette->partial_alpha ||
+      palette->count == 0U ||
       palette->count > ZZ9K_PICTURE_PNG_PALETTE_MAX_ENTRIES) {
     zz9k_picture_trace("metadata: png lut8 invalid palette");
     SetIoErr(DTERROR_INVALID_DATA);
@@ -3306,7 +3320,8 @@ static int zz9k_picture_prepare_png_datatype_v43(
     return 0;
   }
 
-  if (instance->png_palette.present) {
+  if (instance->png_palette.present &&
+      !instance->png_palette.partial_alpha) {
     return zz9k_picture_prepare_png_palette_lut8_v43(object, instance);
   }
 
@@ -4555,22 +4570,28 @@ static void zz9k_picture_build_png_lut8_map(
   memset(keys, 0, sizeof(uint32_t) * ZZ9K_PICTURE_LUT8_MAP_SLOTS);
   memset(vals, 0, sizeof(uint8_t) * ZZ9K_PICTURE_LUT8_MAP_SLOTS);
 
-  /* Two passes so a colour shared by an opaque and the transparent entry
+  /* Two passes so a colour shared by an opaque and a transparent entry
    * maps to the opaque index: spurious holes in UI chrome are worse than
-   * keeping a pixel visible. */
+   * keeping a pixel visible. All fully transparent entries are inserted
+   * in the second pass pointing at the published transparent index, so
+   * several zero-alpha entries share one mskHasTransparentColor index. */
   for (pass = 0U; pass < 2U; pass++) {
     for (index = 0U; index < (uint32_t)palette->count; index++) {
+      uint32_t transparent;
+      uint32_t mapped_index;
       uint32_t key;
       uint32_t slot;
 
-      if (pass == 0U &&
-          index == (uint32_t)palette->transparent_index) {
+      transparent =
+          (palette->transparent_mask[index >> 3] >> (index & 7U)) & 1U;
+      if (pass == 0U && transparent != 0U) {
         continue;
       }
-      if (pass == 1U &&
-          index != (uint32_t)palette->transparent_index) {
+      if (pass == 1U && transparent == 0U) {
         continue;
       }
+      mapped_index = transparent != 0U ?
+          (uint32_t)palette->transparent_index : index;
       key = ((uint32_t)palette->rgb[(index * 3U) + 0U] << 16) |
             ((uint32_t)palette->rgb[(index * 3U) + 1U] << 8) |
             (uint32_t)palette->rgb[(index * 3U) + 2U];
@@ -4581,7 +4602,7 @@ static void zz9k_picture_build_png_lut8_map(
       }
       if (keys[slot] == 0U) {
         keys[slot] = key;
-        vals[slot] = (uint8_t)(index + 1U);
+        vals[slot] = (uint8_t)(mapped_index + 1U);
       }
     }
   }
@@ -6576,7 +6597,8 @@ static int zz9k_picture_decode_to_datatype_pixels(
     instance->png_has_alpha = 0U;
   }
   if (version >= 43U && instance->codec == ZZ9K_PICTURE_CODEC_PNG &&
-      instance->png_palette.present) {
+      instance->png_palette.present &&
+      !instance->png_palette.partial_alpha) {
     /* Indexed PNG: decode stays truecolor on the firmware side but is
      * published as LUT8 with the file's own palette, matching PNGdt44.
      * tRNS transparency becomes the transparent colour instead of a
