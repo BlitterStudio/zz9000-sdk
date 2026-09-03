@@ -40,11 +40,11 @@
 
 #define ZZ9K_PICTURE_DATATYPE_NAME "zz9k-picture.datatype"
 #define ZZ9K_PICTURE_DATATYPE_VERSION 42
-#define ZZ9K_PICTURE_DATATYPE_REVISION 149
+#define ZZ9K_PICTURE_DATATYPE_REVISION 150
 #define ZZ9K_PICTURE_DATATYPE_ID_STRING \
-  "$VER: zz9k-picture.datatype 42.149 (30.08.2026) ZZ9000 SDK"
+  "$VER: zz9k-picture.datatype 42.150 (3.9.2026) ZZ9000 SDK"
 #define ZZ9K_PICTURE_BUILD_MARKER \
-  "metadata: build 2026-08-30 screen-alpha-compat-v149"
+  "metadata: build 2026-09-03 png-palette-lut8-v150"
 #define ZZ9K_PICTURE_OBJECT_NAME_BYTES 128U
 #define ZZ9K_PICTURE_SMALL_PLACEHOLDER_SIZE 64U
 #define ZZ9K_PICTURE_RGB_BYTES_PER_PIXEL 3U
@@ -85,6 +85,16 @@
 #define ZZ9K_PICTURE_TRACE_PERSIST_PATH "SYS:zz9k-picture.datatype.log"
 #define ZZ9K_PICTURE_SOURCE_FILE 1U
 #define ZZ9K_PICTURE_SOURCE_MEMORY 2U
+#define ZZ9K_PICTURE_PNG_PALETTE_MAX_ENTRIES 256U
+/* Wider than uint8_t so palette index 255 never collides with the
+ * "no transparent entry" sentinel. */
+#define ZZ9K_PICTURE_PNG_TRANSPARENT_NONE 0x0100U
+#define ZZ9K_PICTURE_PNG_TRANSPARENT_MASK_BYTES 32U
+/* Open-addressed reverse map from decoded RGB triples back to PNG palette
+ * indices. 512 slots keep the load factor at or below 0.5 for a full
+ * 256-entry palette so lookups stay near one probe. */
+#define ZZ9K_PICTURE_LUT8_MAP_SLOTS 512U
+#define ZZ9K_PICTURE_LUT8_MAP_HASH_MULTIPLIER 2654435761UL
 
 #define ZZ9K_PICTURE_RENDER_TRACE_SOURCE_NOT_READY (1UL << 0)
 #define ZZ9K_PICTURE_RENDER_TRACE_SCREEN_REJECTED (1UL << 1)
@@ -155,6 +165,20 @@ typedef enum ZZ9KPictureRenderMode {
 /* Guarded by zz9k_picture_render_mode_ready; see zz9k_picture_render_mode(). */
 static ZZ9KPictureRenderMode zz9k_picture_cached_render_mode;
 
+/* PLTE/tRNS metadata captured from indexed (color type 3) PNG files. It
+ * drives the PNGdt-compatible LUT8 output path: decoded truecolor tiles are
+ * mapped back to the file's own palette indices and published as a depth-8
+ * picture with a transparent colour, which is the contract MUI's picture
+ * pipeline handles quickly. */
+typedef struct ZZ9KPicturePngPalette {
+  uint8_t rgb[ZZ9K_PICTURE_PNG_PALETTE_MAX_ENTRIES * 3U];
+  uint8_t transparent_mask[ZZ9K_PICTURE_PNG_TRANSPARENT_MASK_BYTES];
+  uint16_t count;
+  uint16_t transparent_index;
+  uint8_t partial_alpha;
+  uint8_t present;
+} ZZ9KPicturePngPalette;
+
 typedef struct ZZ9KPictureInstance {
   ZZ9KPictureCodec codec;
   char object_name[ZZ9K_PICTURE_OBJECT_NAME_BYTES];
@@ -174,6 +198,7 @@ typedef struct ZZ9KPictureInstance {
   uint8_t png_alpha_known;
   uint8_t png_has_alpha;
   uint8_t flatten_png_alpha;
+  ZZ9KPicturePngPalette png_palette;
 } ZZ9KPictureInstance;
 
 typedef struct ZZ9KPictureDatatypeTarget {
@@ -191,8 +216,12 @@ typedef struct ZZ9KPictureDatatypeTarget {
   uint32_t output_bpp;
   uint32_t tile_rows;
   uint32_t tiles_written;
+  const ZZ9KPicturePngPalette *lut8_palette;
+  uint32_t *lut8_map_keys;
+  uint8_t *lut8_map_vals;
   uint8_t direct;
   uint8_t legacy_has_alpha;
+  uint8_t png_lut8;
 } ZZ9KPictureDatatypeTarget;
 
 typedef struct ZZ9KPictureStreamInput {
@@ -944,11 +973,13 @@ static int zz9k_picture_read_jpeg_dimensions(ZZ9KPictureSource *source,
 static int zz9k_picture_read_png_metadata(ZZ9KPictureSource *source,
                                           uint32_t *out_width,
                                           uint32_t *out_height,
-                                          int *has_alpha)
+                                          int *has_alpha,
+                                          ZZ9KPicturePngPalette *palette)
 {
   static const uint8_t signature[8] = {
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
   };
+  uint8_t trns[ZZ9K_PICTURE_PNG_PALETTE_MAX_ENTRIES];
   uint8_t header[33];
   uint8_t chunk[8];
   uint32_t length;
@@ -956,6 +987,10 @@ static int zz9k_picture_read_png_metadata(ZZ9KPictureSource *source,
   uint32_t height;
   uint8_t color_type;
 
+  if (palette) {
+    memset(palette, 0, sizeof(*palette));
+    palette->transparent_index = ZZ9K_PICTURE_PNG_TRANSPARENT_NONE;
+  }
   if (!source ||
       !zz9k_picture_read_exact(source, header, (uint32_t)sizeof(header))) {
     return 0;
@@ -988,7 +1023,42 @@ static int zz9k_picture_read_png_metadata(ZZ9KPictureSource *source,
       return 0;
     }
     length = zz9k_picture_read_be32(chunk);
+    if (palette && color_type == 3U &&
+        memcmp(&chunk[4], "PLTE", 4U) == 0 &&
+        length >= 3U && length <= 768U && (length % 3U) == 0U) {
+      if (!zz9k_picture_read_exact(source, palette->rgb, length) ||
+          !zz9k_picture_skip_bytes(source, 4U)) {
+        return 0;
+      }
+      palette->count = (uint16_t)(length / 3U);
+      palette->present = 1U;
+      continue;
+    }
     if (memcmp(&chunk[4], "tRNS", 4U) == 0) {
+      if (palette && palette->present &&
+          length >= 1U && length <= ZZ9K_PICTURE_PNG_PALETTE_MAX_ENTRIES) {
+        uint32_t index;
+
+        if (!zz9k_picture_read_exact(source, trns, length) ||
+            !zz9k_picture_skip_bytes(source, 4U)) {
+          return 0;
+        }
+        palette->transparent_index = ZZ9K_PICTURE_PNG_TRANSPARENT_NONE;
+        for (index = 0U; index < length; index++) {
+          if (trns[index] == 0U) {
+            palette->transparent_mask[index >> 3] |=
+                (uint8_t)(1U << (index & 7U));
+            if (palette->transparent_index ==
+                ZZ9K_PICTURE_PNG_TRANSPARENT_NONE) {
+              palette->transparent_index = (uint16_t)index;
+            }
+          } else if (trns[index] != 255U) {
+            /* Partial alpha cannot be represented by a single transparent
+             * colour; the caller keeps the per-pixel alpha path. */
+            palette->partial_alpha = 1U;
+          }
+        }
+      }
       *has_alpha = 1;
       return 1;
     }
@@ -1007,17 +1077,18 @@ static int zz9k_picture_read_png_dimensions(ZZ9KPictureSource *source,
                                             uint32_t *out_width,
                                             uint32_t *out_height)
 {
-  return zz9k_picture_read_png_metadata(source, out_width, out_height, 0);
+  return zz9k_picture_read_png_metadata(source, out_width, out_height, 0, 0);
 }
 
 static int zz9k_picture_read_png_metadata_with_alpha(
     ZZ9KPictureSource *source,
     uint32_t *out_width,
     uint32_t *out_height,
-    int *has_alpha)
+    int *has_alpha,
+    ZZ9KPicturePngPalette *palette)
 {
   return zz9k_picture_read_png_metadata(source, out_width, out_height,
-                                        has_alpha);
+                                        has_alpha, palette);
 }
 
 static int zz9k_picture_seek_begin(ZZ9KPictureSource *source);
@@ -1036,7 +1107,7 @@ static int zz9k_picture_read_png_alpha_flag(ZZ9KPictureSource *source,
   width = 0U;
   height = 0U;
   return zz9k_picture_read_png_metadata_with_alpha(
-      source, &width, &height, has_alpha);
+      source, &width, &height, has_alpha, 0);
 }
 
 static int zz9k_picture_png_has_alpha(ZZ9KPictureSource *source,
@@ -1080,7 +1151,8 @@ static int zz9k_picture_read_dimensions(ZZ9KPictureSource *source,
                                         ZZ9KPictureCodec *codec,
                                         uint32_t *width,
                                         uint32_t *height,
-                                        int *png_has_alpha)
+                                        int *png_has_alpha,
+                                        ZZ9KPicturePngPalette *palette)
 {
   LONG original_pos;
 
@@ -1106,7 +1178,7 @@ static int zz9k_picture_read_dimensions(ZZ9KPictureSource *source,
     return 0;
   }
   if (zz9k_picture_read_png_metadata_with_alpha(
-          source, width, height, png_has_alpha)) {
+          source, width, height, png_has_alpha, palette)) {
     zz9k_picture_restore_pos(source, original_pos);
     *codec = ZZ9K_PICTURE_CODEC_PNG;
     return 1;
@@ -3132,6 +3204,146 @@ static int zz9k_picture_prepare_datatype_v43(Object *object,
   return 1;
 }
 
+/* The LUT8 path is only lossless when the palette survives the truecolour
+ * round trip: a fully transparent entry sharing its RGB triple with an
+ * opaque entry would render its pixels visibly after reverse mapping, so
+ * such files stay on the per-pixel alpha path. */
+static int zz9k_picture_png_palette_lut8_eligible(
+    const ZZ9KPicturePngPalette *palette)
+{
+  uint32_t transparent_index;
+  uint32_t opaque_index;
+
+  if (!palette || !palette->present || palette->partial_alpha ||
+      palette->count == 0U ||
+      palette->count > ZZ9K_PICTURE_PNG_PALETTE_MAX_ENTRIES) {
+    return 0;
+  }
+  for (transparent_index = 0U;
+       transparent_index < (uint32_t)palette->count;
+       transparent_index++) {
+    if (((palette->transparent_mask[transparent_index >> 3] >>
+          (transparent_index & 7U)) & 1U) == 0U) {
+      continue;
+    }
+    for (opaque_index = 0U;
+         opaque_index < (uint32_t)palette->count;
+         opaque_index++) {
+      if (((palette->transparent_mask[opaque_index >> 3] >>
+            (opaque_index & 7U)) & 1U) != 0U) {
+        continue;
+      }
+      if (memcmp(&palette->rgb[transparent_index * 3U],
+                 &palette->rgb[opaque_index * 3U], 3U) == 0) {
+        return 0;
+      }
+    }
+  }
+  return 1;
+}
+
+/* PNGdt-compatible contract for indexed PNGs: publish a depth-8 picture
+ * carrying the file's own palette plus (when tRNS marks a fully transparent
+ * entry) a transparent colour instead of per-pixel alpha. MUI's picture
+ * pipeline converts such objects through its fast palette path instead of
+ * software-compositing a 32-bit alpha surface (GitHub issue #73). */
+static int zz9k_picture_prepare_png_palette_lut8_v43(
+    Object *object,
+    const ZZ9KPictureInstance *instance)
+{
+  const ZZ9KPicturePngPalette *palette;
+  struct BitMapHeader *header;
+  struct ColorRegister *colors;
+  ULONG *cregs;
+  uint32_t index;
+
+  if (!object || !instance || instance->width == 0U ||
+      instance->height == 0U ||
+      instance->width > 65535U || instance->height > 65535U) {
+    zz9k_picture_trace("metadata: png lut8 invalid palette");
+    SetIoErr(DTERROR_INVALID_DATA);
+    return 0;
+  }
+  palette = &instance->png_palette;
+  if (!zz9k_picture_png_palette_lut8_eligible(palette)) {
+    zz9k_picture_trace("metadata: png lut8 invalid palette");
+    SetIoErr(DTERROR_INVALID_DATA);
+    return 0;
+  }
+
+  zz9k_picture_trace("metadata: png lut8 before header");
+  header = 0;
+  if (GetDTAttrs(object, PDTA_BitMapHeader, (ULONG)&header, TAG_END) < 1 ||
+      !header) {
+    zz9k_picture_trace("metadata: png lut8 header unavailable");
+    SetIoErr(ERROR_OBJECT_NOT_FOUND);
+    return 0;
+  }
+
+  header->bmh_Width = (UWORD)instance->width;
+  header->bmh_Height = (UWORD)instance->height;
+  header->bmh_Depth = 8;
+  if (palette->transparent_index != ZZ9K_PICTURE_PNG_TRANSPARENT_NONE) {
+    header->bmh_Masking = mskHasTransparentColor;
+    header->bmh_Transparent = (UWORD)palette->transparent_index;
+  } else {
+    header->bmh_Masking = mskNone;
+    header->bmh_Transparent = 0;
+  }
+  header->bmh_Compression = cmpNone;
+  header->bmh_Pad = 0;
+  header->bmh_XAspect = 1;
+  header->bmh_YAspect = 1;
+  header->bmh_PageWidth = (WORD)instance->width;
+  header->bmh_PageHeight = (WORD)instance->height;
+
+  (void)SetDTAttrs(
+      object, 0, 0,
+      DTA_ErrorNumber, 0,
+      DTA_NominalHoriz, instance->width,
+      DTA_NominalVert, instance->height,
+      PDTA_ModeID, 0,
+      PDTA_SourceMode, PMODE_V43,
+      PDTA_DestMode, PMODE_V43,
+      PDTA_SubClassRendersAll, FALSE,
+      PDTA_Remap, TRUE,
+      PDTA_AlphaChannel, FALSE,
+      PDTA_NumColors, (ULONG)palette->count,
+      DTA_ObjName, (ULONG)zz9k_picture_object_name(instance->codec),
+      TAG_END);
+
+  colors = 0;
+  cregs = 0;
+  (void)GetDTAttrs(
+      object,
+      PDTA_ColorRegisters, (ULONG)&colors,
+      PDTA_CRegs, (ULONG)&cregs,
+      TAG_END);
+  if (!colors || !cregs) {
+    zz9k_picture_trace("metadata: png lut8 palette unavailable");
+    SetIoErr(ERROR_OBJECT_NOT_FOUND);
+    return 0;
+  }
+  for (index = 0U; index < (uint32_t)palette->count; index++) {
+    uint32_t red;
+    uint32_t green;
+    uint32_t blue;
+
+    red = (uint32_t)palette->rgb[(index * 3U) + 0U];
+    green = (uint32_t)palette->rgb[(index * 3U) + 1U];
+    blue = (uint32_t)palette->rgb[(index * 3U) + 2U];
+    colors[index].red = (UBYTE)red;
+    colors[index].green = (UBYTE)green;
+    colors[index].blue = (UBYTE)blue;
+    cregs[(index * 3U) + 0U] = red * 0x01010101UL;
+    cregs[(index * 3U) + 1U] = green * 0x01010101UL;
+    cregs[(index * 3U) + 2U] = blue * 0x01010101UL;
+  }
+
+  zz9k_picture_trace("metadata: png lut8 ready");
+  return 1;
+}
+
 static int zz9k_picture_prepare_png_datatype_v43(
     Object *object,
     const ZZ9KPictureInstance *instance,
@@ -3142,6 +3354,10 @@ static int zz9k_picture_prepare_png_datatype_v43(
     zz9k_picture_trace("metadata: reference invalid dimensions");
     SetIoErr(DTERROR_INVALID_DATA);
     return 0;
+  }
+
+  if (zz9k_picture_png_palette_lut8_eligible(&instance->png_palette)) {
+    return zz9k_picture_prepare_png_palette_lut8_v43(object, instance);
   }
 
   zz9k_picture_trace("metadata: png datatype v43 prepare begin");
@@ -4340,6 +4556,121 @@ static void zz9k_picture_bgra_to_rgba(const volatile uint8_t *src,
   dst[3] = src[3];
 }
 
+static uint32_t zz9k_picture_lut8_map_slot(uint32_t key)
+{
+  return ((key * ZZ9K_PICTURE_LUT8_MAP_HASH_MULTIPLIER) >> 23U) &
+         (ZZ9K_PICTURE_LUT8_MAP_SLOTS - 1U);
+}
+
+static uint8_t zz9k_picture_png_nearest_palette_index(
+    const ZZ9KPicturePngPalette *palette,
+    uint8_t red,
+    uint8_t green,
+    uint8_t blue)
+{
+  uint32_t best_index;
+  uint32_t best_distance;
+  uint32_t index;
+
+  best_index = 0U;
+  best_distance = 0xFFFFFFFFUL;
+  for (index = 0U; index < (uint32_t)palette->count; index++) {
+    uint32_t red_delta;
+    uint32_t green_delta;
+    uint32_t blue_delta;
+    uint32_t distance;
+
+    red_delta = (uint32_t)red - palette->rgb[(index * 3U) + 0U];
+    green_delta = (uint32_t)green - palette->rgb[(index * 3U) + 1U];
+    blue_delta = (uint32_t)blue - palette->rgb[(index * 3U) + 2U];
+    distance = (red_delta * red_delta) +
+               (green_delta * green_delta) +
+               (blue_delta * blue_delta);
+    if (distance < best_distance) {
+      best_distance = distance;
+      best_index = index;
+    }
+  }
+  return (uint8_t)best_index;
+}
+
+static void zz9k_picture_build_png_lut8_map(
+    const ZZ9KPicturePngPalette *palette,
+    uint32_t *keys,
+    uint8_t *vals)
+{
+  uint32_t pass;
+  uint32_t index;
+
+  memset(keys, 0, sizeof(uint32_t) * ZZ9K_PICTURE_LUT8_MAP_SLOTS);
+  memset(vals, 0, sizeof(uint8_t) * ZZ9K_PICTURE_LUT8_MAP_SLOTS);
+
+  /* Two passes so opaque entries claim their colour first; remaining
+   * duplicate colours only occur between entries of equal transparency,
+   * which map to the shared transparent index anyway (mixed-opacity
+   * duplicates are rejected by zz9k_picture_png_palette_lut8_eligible
+   * before the decode path is chosen). All fully transparent entries are
+   * inserted in the second pass pointing at the published transparent
+   * index, so several zero-alpha entries share one
+   * mskHasTransparentColor index. */
+  for (pass = 0U; pass < 2U; pass++) {
+    for (index = 0U; index < (uint32_t)palette->count; index++) {
+      uint32_t transparent;
+      uint32_t mapped_index;
+      uint32_t key;
+      uint32_t slot;
+
+      transparent =
+          (palette->transparent_mask[index >> 3] >> (index & 7U)) & 1U;
+      if (pass == 0U && transparent != 0U) {
+        continue;
+      }
+      if (pass == 1U && transparent == 0U) {
+        continue;
+      }
+      mapped_index = transparent != 0U ?
+          (uint32_t)palette->transparent_index : index;
+      key = ((uint32_t)palette->rgb[(index * 3U) + 0U] << 16) |
+            ((uint32_t)palette->rgb[(index * 3U) + 1U] << 8) |
+            (uint32_t)palette->rgb[(index * 3U) + 2U];
+      key += 1U; /* 0 marks an empty slot */
+      slot = zz9k_picture_lut8_map_slot(key);
+      while (keys[slot] != 0U && keys[slot] != key) {
+        slot = (slot + 1U) & (ZZ9K_PICTURE_LUT8_MAP_SLOTS - 1U);
+      }
+      if (keys[slot] == 0U) {
+        keys[slot] = key;
+        vals[slot] = (uint8_t)(mapped_index + 1U);
+      }
+    }
+  }
+}
+
+static uint8_t zz9k_picture_png_lut8_lookup(
+    const ZZ9KPicturePngPalette *palette,
+    const uint32_t *keys,
+    const uint8_t *vals,
+    uint8_t red,
+    uint8_t green,
+    uint8_t blue)
+{
+  uint32_t key;
+  uint32_t slot;
+
+  key = ((uint32_t)red << 16) | ((uint32_t)green << 8) | (uint32_t)blue;
+  key += 1U;
+  slot = zz9k_picture_lut8_map_slot(key);
+  while (keys[slot] != 0U) {
+    if (keys[slot] == key) {
+      return (uint8_t)(vals[slot] - 1U);
+    }
+    slot = (slot + 1U) & (ZZ9K_PICTURE_LUT8_MAP_SLOTS - 1U);
+  }
+  /* Exact-decode pixels always hit the map; the nearest match only covers
+   * firmware paths that hand back colour-transformed pixels. */
+  return zz9k_picture_png_nearest_palette_index(palette, red, green, blue);
+}
+
 static uint8_t zz9k_picture_rgb_to_legacy_lut8_index(uint8_t red,
                                                      uint8_t green,
                                                      uint8_t blue)
@@ -4620,6 +4951,98 @@ static int zz9k_picture_write_bgra_tile_to_object(
   target->tiles_written++;
   if (target->tiles_written == 1U) {
     zz9k_picture_trace("decode: datatype tile written");
+  }
+  return 1;
+}
+
+static int zz9k_picture_write_palette_lut8_tile_to_object(
+    const ZZ9KSharedBuffer *tile,
+    const ZZ9KImageSessionResult *result,
+    ZZ9KPictureDatatypeTarget *target,
+    uint32_t tile_stride)
+{
+  struct pdtBlitPixelArray pixels;
+  uint32_t src_bytes_per_pixel;
+  uint32_t row;
+  uint32_t col;
+  uint32_t src_min_row_bytes;
+  uint32_t dst_min_row_bytes;
+  ULONG method_result;
+
+  if (!tile || !tile->data || !result || !target || !target->object ||
+      !target->cl || !target->lut8_palette || !target->lut8_map_keys ||
+      !target->lut8_map_vals || !target->scratch_pixels ||
+      target->scratch_pitch == 0U ||
+      result->tile_width == 0U || result->tile_height == 0U ||
+      result->tile_x > target->width ||
+      result->tile_y > target->height ||
+      result->tile_width > (target->width - result->tile_x) ||
+      result->tile_height > (target->height - result->tile_y) ||
+      result->tile_height > target->tile_rows) {
+    return 0;
+  }
+  if (target->output_format == ZZ9K_SURFACE_FORMAT_RGB888) {
+    src_bytes_per_pixel = ZZ9K_PICTURE_RGB_BYTES_PER_PIXEL;
+  } else if (target->output_format == ZZ9K_SURFACE_FORMAT_BGRA8888) {
+    src_bytes_per_pixel = ZZ9K_PICTURE_BGRA_BYTES_PER_PIXEL;
+  } else {
+    zz9k_picture_trace("decode: datatype lut8 tile format rejected");
+    return 0;
+  }
+  if (!zz9k_picture_min_row_bytes(
+          result->tile_width, src_bytes_per_pixel, &src_min_row_bytes) ||
+      !zz9k_picture_min_row_bytes(
+          result->tile_width, 1U, &dst_min_row_bytes) ||
+      tile_stride < src_min_row_bytes ||
+      target->scratch_pitch < dst_min_row_bytes) {
+    return 0;
+  }
+
+  for (row = 0U; row < result->tile_height; row++) {
+    volatile uint8_t *src;
+    uint8_t *dst;
+
+    src = (volatile uint8_t *)tile->data + (row * tile_stride);
+    dst = target->scratch_pixels + (row * target->scratch_pitch);
+    for (col = 0U; col < result->tile_width; col++) {
+      uint8_t red;
+      uint8_t green;
+      uint8_t blue;
+
+      if (src_bytes_per_pixel == ZZ9K_PICTURE_RGB_BYTES_PER_PIXEL) {
+        red = src[0];
+        green = src[1];
+        blue = src[2];
+      } else {
+        blue = src[0];
+        green = src[1];
+        red = src[2];
+      }
+      dst[col] = zz9k_picture_png_lut8_lookup(
+          target->lut8_palette, target->lut8_map_keys,
+          target->lut8_map_vals, red, green, blue);
+      src += src_bytes_per_pixel;
+    }
+  }
+
+  memset(&pixels, 0, sizeof(pixels));
+  pixels.MethodID = PDTM_WRITEPIXELARRAY;
+  pixels.pbpa_PixelData = target->scratch_pixels;
+  pixels.pbpa_PixelFormat = PBPAFMT_LUT8;
+  pixels.pbpa_PixelArrayMod = target->scratch_pitch;
+  pixels.pbpa_Left = result->tile_x;
+  pixels.pbpa_Top = result->tile_y;
+  pixels.pbpa_Width = result->tile_width;
+  pixels.pbpa_Height = result->tile_height;
+  method_result = DoSuperMethodA(target->cl, target->object, (Msg)&pixels);
+  if (method_result == 0UL) {
+    zz9k_picture_trace("decode: datatype writepixelarray failed");
+    return 0;
+  }
+
+  target->tiles_written++;
+  if (target->tiles_written == 1U) {
+    zz9k_picture_trace("decode: datatype lut8 tile written");
   }
   return 1;
 }
@@ -5410,6 +5833,10 @@ static int zz9k_picture_copy_tile_to_datatype(
     return zz9k_picture_write_legacy_bitmap_tile(
         tile, result, target, tile_stride);
   }
+  if (target->png_lut8) {
+    return zz9k_picture_write_palette_lut8_tile_to_object(
+        tile, result, target, tile_stride);
+  }
   if (target->direct) {
     if (target->output_format == ZZ9K_SURFACE_FORMAT_RGB888 &&
       target->direct_pixels->pbpa_PixelFormat == PBPAFMT_RGB) {
@@ -6158,6 +6585,7 @@ static int zz9k_picture_decode_to_datatype_pixels(
   LONG original_pos;
   UWORD version;
   int png_has_alpha;
+  int png_lut8;
 #if ZZ9K_PICTURE_ENABLE_PNG_ALPHA_EXPERIMENTS
   int png_alpha_opaque;
 #endif
@@ -6179,6 +6607,7 @@ static int zz9k_picture_decode_to_datatype_pixels(
   zz9k_picture_trace_u32("metadata: image width", instance->width);
   zz9k_picture_trace_u32("metadata: image height", instance->height);
   png_has_alpha = 0;
+  png_lut8 = 0;
 #if ZZ9K_PICTURE_ENABLE_PNG_ALPHA_EXPERIMENTS
   png_alpha_opaque = 0;
 #endif
@@ -6204,6 +6633,18 @@ static int zz9k_picture_decode_to_datatype_pixels(
         "metadata: datatype png alpha rgb compatibility path");
     png_has_alpha = 0;
     instance->png_has_alpha = 0U;
+  }
+  if (version >= 43U && instance->codec == ZZ9K_PICTURE_CODEC_PNG &&
+      zz9k_picture_png_palette_lut8_eligible(&instance->png_palette)) {
+    /* Indexed PNG: decode stays truecolor on the firmware side but is
+     * published as LUT8 with the file's own palette, matching PNGdt44.
+     * tRNS transparency becomes the transparent colour instead of a
+     * per-pixel alpha channel that MUI composites in software. */
+    png_lut8 = 1;
+    png_has_alpha = 0;
+    instance->png_has_alpha = 0U;
+    zz9k_picture_trace_source(
+        "metadata: datatype png palette lut8 path");
   }
   if (png_has_alpha) {
     zz9k_picture_trace_source(
@@ -6237,6 +6678,10 @@ static int zz9k_picture_decode_to_datatype_pixels(
   memset(&result, 0, sizeof(result));
   memset(&pixels, 0, sizeof(pixels));
   zz9k_picture_init_datatype_target(&target, cl, object, instance, 0U, 0U);
+  if (png_lut8) {
+    target.png_lut8 = 1U;
+    target.lut8_palette = &instance->png_palette;
+  }
   tile.handle = ZZ9K_INVALID_HANDLE;
   scratch_pixels = 0;
   session = 0U;
@@ -6476,10 +6921,14 @@ static int zz9k_picture_decode_to_datatype_pixels(
   zz9k_picture_trace("decode: datatype tile alloc ok");
 
   if (!target.direct && !target.legacy_bitmap &&
-      target.output_format == ZZ9K_SURFACE_FORMAT_BGRA8888) {
+      (target.png_lut8 ||
+       target.output_format == ZZ9K_SURFACE_FORMAT_BGRA8888)) {
+    uint32_t scratch_bytes_per_pixel;
+
+    scratch_bytes_per_pixel = target.png_lut8 ?
+        1U : ZZ9K_PICTURE_RGB_BYTES_PER_PIXEL;
     if (!zz9k_picture_min_row_bytes(
-            instance->width, ZZ9K_PICTURE_RGB_BYTES_PER_PIXEL,
-            &scratch_pitch) ||
+            instance->width, scratch_bytes_per_pixel, &scratch_pitch) ||
         !zz9k_picture_accumulate_surface_bytes(
             tile_rows, scratch_pitch, &scratch_bytes)) {
       failure = "decode: datatype writepixelarray layout failed";
@@ -6496,6 +6945,21 @@ static int zz9k_picture_decode_to_datatype_pixels(
     target.scratch_pitch = scratch_pitch;
     zz9k_picture_trace("metadata: datatype writepixelarray ready");
   }
+
+  if (target.png_lut8) {
+    target.lut8_map_keys = (uint32_t *)AllocMem(
+        sizeof(uint32_t) * ZZ9K_PICTURE_LUT8_MAP_SLOTS, MEMF_PUBLIC);
+    target.lut8_map_vals = (uint8_t *)AllocMem(
+        sizeof(uint8_t) * ZZ9K_PICTURE_LUT8_MAP_SLOTS, MEMF_PUBLIC);
+    if (!target.lut8_map_keys || !target.lut8_map_vals) {
+      failure = "decode: datatype lut8 map alloc failed";
+      goto cleanup;
+    }
+    zz9k_picture_build_png_lut8_map(
+        target.lut8_palette, target.lut8_map_keys, target.lut8_map_vals);
+    zz9k_picture_trace("metadata: datatype lut8 map ready");
+  }
+
 
   image_codec = zz9k_picture_image_codec(instance->codec);
   zz9k_picture_trace_u32("decode: datatype image codec", image_codec);
@@ -6586,6 +7050,16 @@ cleanup:
   if (target.legacy_bitmap) {
     FreeBitMap(target.legacy_bitmap);
     target.legacy_bitmap = 0;
+  }
+  if (target.lut8_map_keys) {
+    FreeMem(target.lut8_map_keys,
+            sizeof(uint32_t) * ZZ9K_PICTURE_LUT8_MAP_SLOTS);
+    target.lut8_map_keys = 0;
+  }
+  if (target.lut8_map_vals) {
+    FreeMem(target.lut8_map_vals,
+            sizeof(uint8_t) * ZZ9K_PICTURE_LUT8_MAP_SLOTS);
+    target.lut8_map_vals = 0;
   }
   if (ok) {
     zz9k_picture_trace("metadata: datatype pixels ready");
@@ -6872,6 +7346,7 @@ static int zz9k_picture_load_metadata(Class *cl,
 {
   ZZ9KPictureSource source;
   ZZ9KPictureCodec codec;
+  ZZ9KPicturePngPalette palette;
   uint32_t width;
   uint32_t height;
   ZZ9KPictureRenderMode render_mode;
@@ -6879,6 +7354,8 @@ static int zz9k_picture_load_metadata(Class *cl,
 
   zz9k_picture_source_reset(&source);
   codec = ZZ9K_PICTURE_CODEC_UNKNOWN;
+  memset(&palette, 0, sizeof(palette));
+  palette.transparent_index = ZZ9K_PICTURE_PNG_TRANSPARENT_NONE;
   width = 0U;
   height = 0U;
   render_mode = ZZ9K_PICTURE_RENDER_MODE_DATATYPE;
@@ -6892,7 +7369,7 @@ static int zz9k_picture_load_metadata(Class *cl,
   zz9k_picture_capture_object_name(object, instance);
 
   if (!zz9k_picture_read_dimensions(
-          &source, &codec, &width, &height, &png_has_alpha)) {
+          &source, &codec, &width, &height, &png_has_alpha, &palette)) {
     zz9k_picture_trace("metadata: dimension read failed");
     SetIoErr(DTERROR_INVALID_DATA);
     return 0;
@@ -6922,6 +7399,12 @@ static int zz9k_picture_load_metadata(Class *cl,
   instance->png_alpha_known =
       codec == ZZ9K_PICTURE_CODEC_PNG ? 1U : 0U;
   instance->png_has_alpha = png_has_alpha ? 1U : 0U;
+  memset(&instance->png_palette, 0, sizeof(instance->png_palette));
+  if (codec == ZZ9K_PICTURE_CODEC_PNG && palette.present) {
+    instance->png_palette = palette;
+    zz9k_picture_trace_source_hex(
+        "metadata: png palette entries", (uint32_t)palette.count);
+  }
 
   render_mode = zz9k_picture_render_mode();
 #if ZZ9K_PICTURE_FORCE_DATATYPE_V43_WRITEPIXELS
