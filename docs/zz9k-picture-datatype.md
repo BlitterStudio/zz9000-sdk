@@ -104,7 +104,8 @@ with `PDTA_NumColors`, `PDTA_ColorRegisters`, `PDTA_CRegs`, and - when
 `tRNS` marks at least one fully transparent entry - `mskHasTransparentColor`
 plus `bmh_Transparent`. All fully transparent palette entries are mapped
 onto the published transparent index; indexed PNGs whose `tRNS` table
-contains partial alpha keep the per-pixel alpha path instead. This
+contains partial alpha, or whose fully transparent entries share an RGB
+triple with an opaque entry, keep the per-pixel alpha path instead. This
 is the picture contract MUI converts through its fast palette path; it
 removes the multi-second startup slowdown reported for MUI applications
 such as IBrowse and YAM when their 8-bit PNG image sets are routed through

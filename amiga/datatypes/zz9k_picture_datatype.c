@@ -3204,6 +3204,44 @@ static int zz9k_picture_prepare_datatype_v43(Object *object,
   return 1;
 }
 
+/* The LUT8 path is only lossless when the palette survives the truecolour
+ * round trip: a fully transparent entry sharing its RGB triple with an
+ * opaque entry would render its pixels visibly after reverse mapping, so
+ * such files stay on the per-pixel alpha path. */
+static int zz9k_picture_png_palette_lut8_eligible(
+    const ZZ9KPicturePngPalette *palette)
+{
+  uint32_t transparent_index;
+  uint32_t opaque_index;
+
+  if (!palette || !palette->present || palette->partial_alpha ||
+      palette->count == 0U ||
+      palette->count > ZZ9K_PICTURE_PNG_PALETTE_MAX_ENTRIES) {
+    return 0;
+  }
+  for (transparent_index = 0U;
+       transparent_index < (uint32_t)palette->count;
+       transparent_index++) {
+    if (((palette->transparent_mask[transparent_index >> 3] >>
+          (transparent_index & 7U)) & 1U) == 0U) {
+      continue;
+    }
+    for (opaque_index = 0U;
+         opaque_index < (uint32_t)palette->count;
+         opaque_index++) {
+      if (((palette->transparent_mask[opaque_index >> 3] >>
+            (opaque_index & 7U)) & 1U) != 0U) {
+        continue;
+      }
+      if (memcmp(&palette->rgb[transparent_index * 3U],
+                 &palette->rgb[opaque_index * 3U], 3U) == 0) {
+        return 0;
+      }
+    }
+  }
+  return 1;
+}
+
 /* PNGdt-compatible contract for indexed PNGs: publish a depth-8 picture
  * carrying the file's own palette plus (when tRNS marks a fully transparent
  * entry) a transparent colour instead of per-pixel alpha. MUI's picture
@@ -3227,9 +3265,7 @@ static int zz9k_picture_prepare_png_palette_lut8_v43(
     return 0;
   }
   palette = &instance->png_palette;
-  if (!palette->present || palette->partial_alpha ||
-      palette->count == 0U ||
-      palette->count > ZZ9K_PICTURE_PNG_PALETTE_MAX_ENTRIES) {
+  if (!zz9k_picture_png_palette_lut8_eligible(palette)) {
     zz9k_picture_trace("metadata: png lut8 invalid palette");
     SetIoErr(DTERROR_INVALID_DATA);
     return 0;
@@ -3320,8 +3356,7 @@ static int zz9k_picture_prepare_png_datatype_v43(
     return 0;
   }
 
-  if (instance->png_palette.present &&
-      !instance->png_palette.partial_alpha) {
+  if (zz9k_picture_png_palette_lut8_eligible(&instance->png_palette)) {
     return zz9k_picture_prepare_png_palette_lut8_v43(object, instance);
   }
 
@@ -4570,11 +4605,14 @@ static void zz9k_picture_build_png_lut8_map(
   memset(keys, 0, sizeof(uint32_t) * ZZ9K_PICTURE_LUT8_MAP_SLOTS);
   memset(vals, 0, sizeof(uint8_t) * ZZ9K_PICTURE_LUT8_MAP_SLOTS);
 
-  /* Two passes so a colour shared by an opaque and a transparent entry
-   * maps to the opaque index: spurious holes in UI chrome are worse than
-   * keeping a pixel visible. All fully transparent entries are inserted
-   * in the second pass pointing at the published transparent index, so
-   * several zero-alpha entries share one mskHasTransparentColor index. */
+  /* Two passes so opaque entries claim their colour first; remaining
+   * duplicate colours only occur between entries of equal transparency,
+   * which map to the shared transparent index anyway (mixed-opacity
+   * duplicates are rejected by zz9k_picture_png_palette_lut8_eligible
+   * before the decode path is chosen). All fully transparent entries are
+   * inserted in the second pass pointing at the published transparent
+   * index, so several zero-alpha entries share one
+   * mskHasTransparentColor index. */
   for (pass = 0U; pass < 2U; pass++) {
     for (index = 0U; index < (uint32_t)palette->count; index++) {
       uint32_t transparent;
@@ -6597,8 +6635,7 @@ static int zz9k_picture_decode_to_datatype_pixels(
     instance->png_has_alpha = 0U;
   }
   if (version >= 43U && instance->codec == ZZ9K_PICTURE_CODEC_PNG &&
-      instance->png_palette.present &&
-      !instance->png_palette.partial_alpha) {
+      zz9k_picture_png_palette_lut8_eligible(&instance->png_palette)) {
     /* Indexed PNG: decode stays truecolor on the firmware side but is
      * published as LUT8 with the file's own palette, matching PNGdt44.
      * tRNS transparency becomes the transparent colour instead of a
