@@ -45,6 +45,12 @@
 #include <string.h>
 
 #define ZZPLAY_INPUT_BYTES (64U * 1024U)
+/* File reads land straight in the card-visible input buffer in sub-frame
+ * chunks: the m68k is the present clock, and one 64 KB blocking read at
+ * real-disk throughput stalled it for 1-2 frame periods, which showed as
+ * a pause on every read. ~16 KB keeps a read under one frame period even
+ * at ~2 MB/s and removes the staging copy entirely. */
+#define ZZPLAY_READ_CHUNK_BYTES (16U * 1024U)
 #define ZZPLAY_PCM_BYTES (128U * 1024U)
 #define ZZPLAY_Z2_INPUT_BYTES (24U * 1024U)
 #define ZZPLAY_Z2_PCM_BYTES (32U * 1024U)
@@ -62,8 +68,6 @@
 struct Library *P96Base;
 struct Device *TimerBase;
 
-static uint32_t zzplay_input_staging[
-    ZZPLAY_INPUT_BYTES / sizeof(uint32_t)];
 static volatile sig_atomic_t zzplay_ctrl_c_requested;
 
 static const char zzplay_version[] = "$VER: ZZPlay 0.4 (07.08.2026)";
@@ -499,44 +503,38 @@ static ZZPlayControlAction zzplay_poll_control(
   return zzplay_control_resolve(&input);
 }
 
-/* Screen dimensions for fullscreen placement. Taken from the open window
- * when there is one; otherwise from the public screen. This runs in the
- * application, not inside a P96 driver callback, so LockPubScreen is safe
- * here (the deadlock noted in the P96 contract is a CreateFeature hazard). */
-/* Cache the screen dimensions whenever a window exists. The fullscreen
- * toggle has to close the PIP before reopening it, and at that moment
- * WScreen is gone; relying on LockPubScreen there was the reason the first
- * bench round went borderless at the source size instead of scaling up. */
+/* Cache the screen dimensions. The fullscreen toggle has to close the
+ * PIP before reopening it, and at that moment WScreen is gone. This
+ * runs in the application, not inside a P96 driver callback, so the
+ * LockPubScreen fallback is safe here (the deadlock noted in the P96
+ * contract is a CreateFeature hazard). */
 static void zzplay_cache_screen(struct ZZPlayRuntime *runtime)
-{
-  if (runtime->window && runtime->window->WScreen) {
-    runtime->screen_w = (uint16_t)runtime->window->WScreen->Width;
-    runtime->screen_h = (uint16_t)runtime->window->WScreen->Height;
-  }
-}
-
-static void zzplay_screen_size(struct ZZPlayRuntime *runtime,
-                               uint16_t *width, uint16_t *height)
 {
   struct Screen *screen;
 
-  zzplay_cache_screen(runtime);
-  if (runtime->screen_w != 0U && runtime->screen_h != 0U) {
-    *width = runtime->screen_w;
-    *height = runtime->screen_h;
+  /* The dedicated fullscreen screen is authoritative whenever it is
+   * open: the Workbench window (or a public screen) reports the wrong
+   * dimensions for placing the fullscreen PIP. */
+  if (runtime->screen) {
+    runtime->screen_w = (uint16_t)runtime->screen->Width;
+    runtime->screen_h = (uint16_t)runtime->screen->Height;
     return;
   }
-  *width = 0U;
-  *height = 0U;
-  screen = LockPubScreen(0);
+  if (runtime->window && runtime->window->WScreen) {
+    runtime->screen_w = (uint16_t)runtime->window->WScreen->Width;
+    runtime->screen_h = (uint16_t)runtime->window->WScreen->Height;
+    return;
+  }
+  /* No window yet (first open, or the toggle's close-reopen window):
+   * measure the same named screen the PIP opens on, not whatever the
+   * system default public screen happens to be. */
+  screen = LockPubScreen((CONST_STRPTR)"Workbench");
   if (!screen) {
     return;
   }
   runtime->screen_w = (uint16_t)screen->Width;
   runtime->screen_h = (uint16_t)screen->Height;
   UnlockPubScreen(0, screen);
-  *width = runtime->screen_w;
-  *height = runtime->screen_h;
 }
 
 /* `placement` is the window; the PIP always fills its inner area. Setting
@@ -601,12 +599,16 @@ static struct Window *zzplay_open_pip(const ZZPlayVideoInfo *info,
   open_tags[i].ti_Tag = WA_MaxHeight;
   open_tags[i++].ti_Data = limit_h != 0U ? limit_h : (ULONG)~0UL;
   if (fullscreen) {
-    /* On its own screen the window is a borderless backdrop filling it, so
-     * the PIP is a plain 1:1 fill and nothing has to be resized. */
+    /* Borderless, deliberately NOT a backdrop window: Intuition manages
+     * backdrop windows' position/size itself, and both fullscreen
+     * rounds that used WA_Backdrop on the dedicated screen never got
+     * their forced geometry (r5 "borderless but still 640x480", and
+     * the colour-key window of issue #83 testing) while every
+     * non-backdrop resize -- user drags, forced reopens -- scales
+     * correctly. The letterbox margins show the dedicated screen's
+     * black background. */
     open_tags[i].ti_Tag = WA_Borderless;
     open_tags[i++].ti_Data = TRUE;
-    open_tags[i].ti_Tag = WA_Backdrop;
-    open_tags[i++].ti_Data = screen ? TRUE : FALSE;
   } else {
     open_tags[i].ti_Tag = WA_Title;
     open_tags[i++].ti_Data = (ULONG)title;
@@ -733,13 +735,14 @@ static int zzplay_open_video_screen(struct ZZPlayRuntime *runtime)
                 (unsigned)width, (unsigned)height);
     return 0;
   }
-  /* The PIP obtains a pen for its colour key. A screen opened without
-   * shareable pens has none to give and the PIP open fails with
-   * PIPERR_OUTOFPENS (4), which is what froze the r5 bench round. */
+  /* Open the mode at its NATIVE size, never at the video's size: a
+   * custom-sized P96 screen is carved out of the bigger mode raster and
+   * renders top-left with a background-pen border on this card, which
+   * is exactly the "fullscreen but not centred" report of issue #83.
+   * The video itself is then scaled by the window fit to fill the
+   * screen. */
   runtime->screen = p96OpenScreenTags(
       P96SA_DisplayID, mode,
-      P96SA_Width, (ULONG)width,
-      P96SA_Height, (ULONG)height,
       P96SA_Depth, depth,
       P96SA_Title, (ULONG)"ZZPlay",
       P96SA_ShowTitle, FALSE,
@@ -749,8 +752,7 @@ static int zzplay_open_video_screen(struct ZZPlayRuntime *runtime)
       P96SA_Pens, (ULONG)zzplay_screen_pens,
       TAG_DONE);
   if (!runtime->screen) {
-    zzplay_info("zzplay: could not open a %ux%u fullscreen display\n",
-                (unsigned)width, (unsigned)height);
+    zzplay_info("zzplay: could not open a fullscreen display\n");
     return 0;
   }
   (void)zzplay_resource_acquire(
@@ -765,23 +767,15 @@ static void zzplay_close_video_screen(struct ZZPlayRuntime *runtime)
       zzplay_release_resource, runtime);
 }
 
-/* Where the window should sit for the requested mode. */
+/* Where the windowed window should sit (fullscreen placement is a
+ * zzplay_geometry_fit against the dedicated screen's real dimensions). */
 static ZZPlayRect zzplay_pip_placement(struct ZZPlayRuntime *runtime,
                                        int fullscreen)
 {
   ZZPlayRect rect;
 
-  if (fullscreen) {
-    uint16_t screen_w;
-    uint16_t screen_h;
-
-    zzplay_screen_size(runtime, &screen_w, &screen_h);
-    if (screen_w != 0U && screen_h != 0U) {
-      return zzplay_geometry_fit(
-          runtime->video_info.width, runtime->video_info.height,
-          screen_w, screen_h);
-    }
-  } else if (zzplay_geometry_restore(&runtime->saved_geometry, &rect)) {
+  (void)fullscreen;
+  if (zzplay_geometry_restore(&runtime->saved_geometry, &rect)) {
     return rect;
   }
   memset(&rect, 0, sizeof(rect));
@@ -804,6 +798,7 @@ static int zzplay_open_pip_mode(struct ZZPlayRuntime *runtime,
                                 int fullscreen)
 {
   ZZPlayRect placement;
+  ZZPlayRect open_rect;
 
   if (fullscreen && !zzplay_open_video_screen(runtime)) {
     /* Say so rather than silently presenting a windowed player as though
@@ -811,20 +806,46 @@ static int zzplay_open_pip_mode(struct ZZPlayRuntime *runtime,
     zzplay_info("zzplay: staying windowed\n");
     fullscreen = 0;
   }
-  placement = zzplay_pip_placement(runtime, fullscreen);
   if (fullscreen) {
-    /* Fill the dedicated screen exactly: source size, at the origin. No
-     * scaling and no resizing are involved on this path. */
-    memset(&placement, 0, sizeof(placement));
-    placement.width = (uint16_t)runtime->video_info.width;
-    placement.height = (uint16_t)runtime->video_info.height;
+    /* Scale to fill the dedicated screen, aspect preserved and centred
+     * (zz9000-drivers#83). A 1:1 window on an exact-size dedicated screen
+     * is not reliable either: small modes render top-left on the card's
+     * minimum raster, which is what "fullscreen but not centred" was.
+     * The window opens at the 1:1 source size (P96 does not reliably
+     * adopt a larger opening size) and is then forced to the fitted
+     * rectangle through the already-proven resize route below. */
+    zzplay_cache_screen(runtime);
+    placement = zzplay_geometry_fit(
+        (uint16_t)runtime->video_info.width,
+        (uint16_t)runtime->video_info.height,
+        runtime->screen_w ? runtime->screen_w
+                          : (uint16_t)runtime->video_info.width,
+        runtime->screen_h ? runtime->screen_h
+                          : (uint16_t)runtime->video_info.height);
+    if (placement.width == 0U || placement.height == 0U) {
+      /* Degenerate screen information: fall back to 1:1 at the origin
+       * rather than refusing to present at all. */
+      placement.x = 0;
+      placement.y = 0;
+      placement.width = (uint16_t)runtime->video_info.width;
+      placement.height = (uint16_t)runtime->video_info.height;
+    }
+    open_rect = placement;
+    open_rect.width = (uint16_t)runtime->video_info.width;
+    open_rect.height = (uint16_t)runtime->video_info.height;
   } else {
+    placement = zzplay_pip_placement(runtime, 0);
     zzplay_close_video_screen(runtime);
+    /* The dedicated screen just closed: re-read the public screen so
+     * the windowed reopen's limits match the Workbench, not the
+     * (smaller) fullscreen screen. */
+    zzplay_cache_screen(runtime);
+    open_rect = placement;
   }
 
   runtime->pip_error = 0;
   runtime->window = zzplay_open_pip(
-      &runtime->video_info, &placement, fullscreen, runtime->screen,
+      &runtime->video_info, &open_rect, fullscreen, runtime->screen,
       runtime->screen_w, runtime->screen_h, runtime->title,
       &runtime->bitmap, &runtime->pip_error);
   if (!runtime->window) {
@@ -842,16 +863,16 @@ static int zzplay_open_pip_mode(struct ZZPlayRuntime *runtime,
     zzplay_close_video_screen(runtime);
     return 0;
   }
-  zzplay_cache_screen(runtime);
   /* p96PIP_OpenTagList() does not reliably adopt an opening size larger
    * than the PIP source, which left the first two bench rounds borderless
    * but still 640x480. Resizing afterwards is the same route a user drag
    * takes, and that path was already proven to scale correctly, so the
    * requested geometry is enforced here rather than trusted at open. */
   runtime->fullscreen = fullscreen ? 1U : 0U;
-  if (!runtime->screen) {
-    zzplay_force_geometry(runtime, &placement);
-  }
+  /* Windowed reopens and scaled fullscreen both enforce the requested
+   * geometry through the proven resize route; a 1:1 fullscreen (screen
+   * exactly the video size) is already there. */
+  zzplay_force_geometry(runtime, &placement);
   runtime->present_recheck = 1U;
   runtime->title_dirty = 1U;
   (void)zzplay_resource_acquire(
@@ -2419,11 +2440,16 @@ playback_session:
       size_t read_capacity = runtime.input.length;
       size_t got;
 
-      if (read_capacity > sizeof(zzplay_input_staging)) {
-        read_capacity = sizeof(zzplay_input_staging);
+      if (read_capacity > ZZPLAY_READ_CHUNK_BYTES) {
+        read_capacity = ZZPLAY_READ_CHUNK_BYTES;
       }
+      /* Read straight into the card-visible input buffer: the previous
+       * chunk was fully accepted (pending is empty), so offset zero is
+       * free. The write op below orders these stores to the card before
+       * the firmware can read them, exactly as the old staging copy
+       * did. */
       zzplay_profile_begin(&runtime, &started);
-      got = fread(zzplay_input_staging, 1U,
+      got = fread((void *)runtime.input.data, 1U,
                   read_capacity, runtime.file);
       zzplay_profile_end(
           &runtime, &started, ZZPLAY_PROFILE_FILE_READ);
@@ -2432,23 +2458,6 @@ playback_session:
         zzplay_error(&runtime, "zzplay: input read failed\n");
         zzplay_fail(&runtime, ZZPLAY_FAILURE_IO, ZZ9K_STATUS_IO_ERROR);
         break;
-      }
-      if (got != 0U) {
-        int copied;
-
-        zzplay_profile_begin(&runtime, &started);
-        copied = zz9k_shared_copy_to(
-            &runtime.input, 0U, zzplay_input_staging,
-            (uint32_t)got);
-        zzplay_profile_end(
-            &runtime, &started, ZZPLAY_PROFILE_INPUT_COPY);
-        if (!copied) {
-          zzplay_error(&runtime, "zzplay: input staging copy failed\n");
-          zzplay_fail(
-              &runtime, ZZPLAY_FAILURE_IO,
-              ZZ9K_STATUS_INTERNAL_ERROR);
-          break;
-        }
       }
       zzplay_transport_set_chunk(
           &transport, (uint32_t)got, got < read_capacity);

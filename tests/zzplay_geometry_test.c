@@ -71,6 +71,7 @@ static int test_bounds(void)
   return 0;
 }
 
+
 static int test_geometry_memory(void)
 {
   ZZPlayWindowGeometry saved;

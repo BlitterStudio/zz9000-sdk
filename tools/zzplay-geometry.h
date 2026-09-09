@@ -31,6 +31,7 @@ typedef struct ZZPlayWindowGeometry {
 ZZPlayRect zzplay_geometry_fit(uint16_t src_w, uint16_t src_h,
                                uint16_t avail_w, uint16_t avail_h);
 
+
 /* True when the fit is exactly 1:1, i.e. the native fast path is reachable
  * at this size. */
 int zzplay_geometry_is_exact(const ZZPlayRect *rect,

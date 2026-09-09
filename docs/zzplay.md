@@ -97,14 +97,16 @@ stealing it, and `AUTO` falls back and says so.
 
 ### Fullscreen
 
-Fullscreen opens a **dedicated screen matching the video's own size** and
-shows the picture on it 1:1 — a 640x480 clip gets a 640x480 display. Your
-monitor changes mode and does its own upscaling.
+Fullscreen opens a **dedicated screen** at the closest display mode and
+scales the picture to fill it, aspect preserved and centred -- the same
+scaling route a window resize takes, so 4:3 content on a 4:3 screen
+fills it completely, and everything else letterboxes or pillarboxes.
+Small dedicated modes render top-left on the card's minimum raster, so
+exact-size 1:1 screens are not used for presentation.
 
-This is deliberately not "stretch the video to the desktop resolution". 1:1
-is the fastest path there is: the FPGA scaler is not involved at all, and
-nothing has to be resized. It also means no part of Workbench is visible, so
-it suits a program showing a video sequence.
+Scaling is aspect-preserving -- the picture is never stretched -- and no
+part of Workbench is visible, so it suits a program showing a video
+sequence.
 
 Pressing F again closes that screen and returns to the exact window position
 and size you had before.
