@@ -731,13 +731,14 @@ static int zzplay_open_video_screen(struct ZZPlayRuntime *runtime)
                 (unsigned)width, (unsigned)height);
     return 0;
   }
-  /* The PIP obtains a pen for its colour key. A screen opened without
-   * shareable pens has none to give and the PIP open fails with
-   * PIPERR_OUTOFPENS (4), which is what froze the r5 bench round. */
+  /* Open the mode at its NATIVE size, never at the video's size: a
+   * custom-sized P96 screen is carved out of the bigger mode raster and
+   * renders top-left with a background-pen border on this card, which
+   * is exactly the "fullscreen but not centred" report of issue #83.
+   * The video itself is then scaled by the window fit to fill the
+   * screen. */
   runtime->screen = p96OpenScreenTags(
       P96SA_DisplayID, mode,
-      P96SA_Width, (ULONG)width,
-      P96SA_Height, (ULONG)height,
       P96SA_Depth, depth,
       P96SA_Title, (ULONG)"ZZPlay",
       P96SA_ShowTitle, FALSE,
@@ -747,8 +748,7 @@ static int zzplay_open_video_screen(struct ZZPlayRuntime *runtime)
       P96SA_Pens, (ULONG)zzplay_screen_pens,
       TAG_DONE);
   if (!runtime->screen) {
-    zzplay_info("zzplay: could not open a %ux%u fullscreen display\n",
-                (unsigned)width, (unsigned)height);
+    zzplay_info("zzplay: could not open a fullscreen display\n");
     return 0;
   }
   (void)zzplay_resource_acquire(
