@@ -45,6 +45,12 @@
 #include <string.h>
 
 #define ZZPLAY_INPUT_BYTES (64U * 1024U)
+/* File reads land straight in the card-visible input buffer in sub-frame
+ * chunks: the m68k is the present clock, and one 64 KB blocking read at
+ * real-disk throughput stalled it for 1-2 frame periods, which showed as
+ * a pause on every read. ~16 KB keeps a read under one frame period even
+ * at ~2 MB/s and removes the staging copy entirely. */
+#define ZZPLAY_READ_CHUNK_BYTES (16U * 1024U)
 #define ZZPLAY_PCM_BYTES (128U * 1024U)
 #define ZZPLAY_Z2_INPUT_BYTES (24U * 1024U)
 #define ZZPLAY_Z2_PCM_BYTES (32U * 1024U)
@@ -62,8 +68,6 @@
 struct Library *P96Base;
 struct Device *TimerBase;
 
-static uint32_t zzplay_input_staging[
-    ZZPLAY_INPUT_BYTES / sizeof(uint32_t)];
 static volatile sig_atomic_t zzplay_ctrl_c_requested;
 
 static const char zzplay_version[] = "$VER: ZZPlay 0.4 (07.08.2026)";
@@ -2436,11 +2440,16 @@ playback_session:
       size_t read_capacity = runtime.input.length;
       size_t got;
 
-      if (read_capacity > sizeof(zzplay_input_staging)) {
-        read_capacity = sizeof(zzplay_input_staging);
+      if (read_capacity > ZZPLAY_READ_CHUNK_BYTES) {
+        read_capacity = ZZPLAY_READ_CHUNK_BYTES;
       }
+      /* Read straight into the card-visible input buffer: the previous
+       * chunk was fully accepted (pending is empty), so offset zero is
+       * free. The write op below orders these stores to the card before
+       * the firmware can read them, exactly as the old staging copy
+       * did. */
       zzplay_profile_begin(&runtime, &started);
-      got = fread(zzplay_input_staging, 1U,
+      got = fread((void *)runtime.input.data, 1U,
                   read_capacity, runtime.file);
       zzplay_profile_end(
           &runtime, &started, ZZPLAY_PROFILE_FILE_READ);
@@ -2449,23 +2458,6 @@ playback_session:
         zzplay_error(&runtime, "zzplay: input read failed\n");
         zzplay_fail(&runtime, ZZPLAY_FAILURE_IO, ZZ9K_STATUS_IO_ERROR);
         break;
-      }
-      if (got != 0U) {
-        int copied;
-
-        zzplay_profile_begin(&runtime, &started);
-        copied = zz9k_shared_copy_to(
-            &runtime.input, 0U, zzplay_input_staging,
-            (uint32_t)got);
-        zzplay_profile_end(
-            &runtime, &started, ZZPLAY_PROFILE_INPUT_COPY);
-        if (!copied) {
-          zzplay_error(&runtime, "zzplay: input staging copy failed\n");
-          zzplay_fail(
-              &runtime, ZZPLAY_FAILURE_IO,
-              ZZ9K_STATUS_INTERNAL_ERROR);
-          break;
-        }
       }
       zzplay_transport_set_chunk(
           &transport, (uint32_t)got, got < read_capacity);
