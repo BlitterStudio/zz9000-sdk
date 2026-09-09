@@ -99,7 +99,10 @@ stealing it, and `AUTO` falls back and says so.
 
 Fullscreen opens a **dedicated screen matching the video's own size** and
 shows the picture on it 1:1 — a 640x480 clip gets a 640x480 display. Your
-monitor changes mode and does its own upscaling.
+monitor changes mode and does its own upscaling. When the closest available
+display mode is larger than the video (a 512x384 clip, for which P96
+typically opens a 640x480-class mode), the picture stays 1:1 but is centred
+on that screen instead of sitting in its top-left corner.
 
 This is deliberately not "stretch the video to the desktop resolution". 1:1
 is the fastest path there is: the FPGA scaler is not involved at all, and

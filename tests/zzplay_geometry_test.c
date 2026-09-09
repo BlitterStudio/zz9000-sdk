@@ -71,6 +71,35 @@ static int test_bounds(void)
   return 0;
 }
 
+/* Fullscreen 1:1 centering (zz9000-drivers#83): the P96 best-mode
+ * screen can be larger than the video; the video must sit centred, at
+ * its own size, never scaled by this path. */
+static int test_fullscreen_center(void)
+{
+  ZZPlayRect r = zzplay_geometry_center(512U, 384U, 640U, 480U);
+
+  if (r.width != 512U || r.height != 384U) return 1;
+  if (r.x != 64 || r.y != 48) return 2;
+  /* An exact-size screen is centred trivially at the origin. */
+  r = zzplay_geometry_center(512U, 384U, 512U, 384U);
+  if (r.x != 0 || r.y != 0) return 3;
+  if (r.width != 512U || r.height != 384U) return 4;
+  /* A screen smaller than the video clamps to the origin (the overlay
+   * clips), never a negative position. */
+  r = zzplay_geometry_center(640U, 480U, 512U, 384U);
+  if (r.x != 0 || r.y != 0) return 5;
+  if (r.width != 640U || r.height != 480U) return 6;
+  /* Odd differences floor to the centre pixel. */
+  r = zzplay_geometry_center(100U, 100U, 101U, 103U);
+  if (r.x != 0 || r.y != 1) return 7;
+  /* Degenerate inputs produce an empty rect rather than nonsense. */
+  r = zzplay_geometry_center(0U, 100U, 100U, 100U);
+  if (r.width != 0U || r.height != 0U) return 8;
+  r = zzplay_geometry_center(100U, 100U, 0U, 100U);
+  if (r.width != 0U || r.height != 0U) return 9;
+  return 0;
+}
+
 static int test_geometry_memory(void)
 {
   ZZPlayWindowGeometry saved;
@@ -162,6 +191,8 @@ int main(void)
   if (rc != 0) { printf("downscale %d\n", rc); return 70 + rc; }
   rc = test_bounds();
   if (rc != 0) { printf("bounds %d\n", rc); return 90 + rc; }
+  rc = test_fullscreen_center();
+  if (rc != 0) { printf("fscenter %d\n", rc); return 150 + rc; }
   rc = test_geometry_memory();
   if (rc != 0) { printf("memory %d\n", rc); return 110 + rc; }
   rc = test_controls();

@@ -152,6 +152,18 @@ static int check_player(const char *path)
     rc = 24;
     goto done;
   }
+  /* Fullscreen video must be centred on the actual dedicated screen: the
+   * P96 best-mode search can return a larger mode, and pinning the 1:1
+   * window to the origin left the picture in the screen's top-left
+   * corner (zz9000-drivers#83). */
+  if (find(s, "zzplay_geometry_center(") < 0L) { rc = 25; goto done; }
+  if (find(s, "memset(&placement, 0, sizeof(placement));") >= 0L) {
+    rc = 26;
+    goto done;
+  }
+  /* The dedicated screen's dimensions are authoritative while it is open,
+   * or the placement fits against the wrong (Workbench) screen. */
+  if (find(s, "if (runtime->screen) {") < 0L) { rc = 27; goto done; }
   /* The PIP takes a pen for its colour key; a screen with none to give
    * fails with PIPERR_OUTOFPENS (4). */
   if (find(s, "P96SA_SharePens") < 0L) { rc = 25; goto done; }

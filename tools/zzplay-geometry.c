@@ -47,6 +47,25 @@ ZZPlayRect zzplay_geometry_fit(uint16_t src_w, uint16_t src_h,
   return rect;
 }
 
+ZZPlayRect zzplay_geometry_center(uint16_t src_w, uint16_t src_h,
+                                 uint16_t screen_w, uint16_t screen_h)
+{
+  ZZPlayRect rect;
+
+  memset(&rect, 0, sizeof(rect));
+  if (src_w == 0U || src_h == 0U || screen_w == 0U || screen_h == 0U) {
+    return rect;
+  }
+  rect.width = src_w;
+  rect.height = src_h;
+  /* Centre, never negative: a screen that does not fully contain the
+   * video clamps to the origin and lets the overlay clip, matching the
+   * pre-centering behaviour. */
+  rect.x = (int16_t)(screen_w > src_w ? (screen_w - src_w) / 2U : 0U);
+  rect.y = (int16_t)(screen_h > src_h ? (screen_h - src_h) / 2U : 0U);
+  return rect;
+}
+
 int zzplay_geometry_is_exact(const ZZPlayRect *rect,
                              uint16_t src_w, uint16_t src_h)
 {

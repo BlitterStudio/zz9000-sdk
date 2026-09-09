@@ -499,35 +499,31 @@ static ZZPlayControlAction zzplay_poll_control(
   return zzplay_control_resolve(&input);
 }
 
-/* Screen dimensions for fullscreen placement. Taken from the open window
- * when there is one; otherwise from the public screen. This runs in the
- * application, not inside a P96 driver callback, so LockPubScreen is safe
- * here (the deadlock noted in the P96 contract is a CreateFeature hazard). */
-/* Cache the screen dimensions whenever a window exists. The fullscreen
- * toggle has to close the PIP before reopening it, and at that moment
- * WScreen is gone; relying on LockPubScreen there was the reason the first
- * bench round went borderless at the source size instead of scaling up. */
+/* Cache the screen dimensions. The fullscreen toggle has to close the
+ * PIP before reopening it, and at that moment WScreen is gone. This
+ * runs in the application, not inside a P96 driver callback, so the
+ * LockPubScreen fallback is safe here (the deadlock noted in the P96
+ * contract is a CreateFeature hazard). */
 static void zzplay_cache_screen(struct ZZPlayRuntime *runtime)
-{
-  if (runtime->window && runtime->window->WScreen) {
-    runtime->screen_w = (uint16_t)runtime->window->WScreen->Width;
-    runtime->screen_h = (uint16_t)runtime->window->WScreen->Height;
-  }
-}
-
-static void zzplay_screen_size(struct ZZPlayRuntime *runtime,
-                               uint16_t *width, uint16_t *height)
 {
   struct Screen *screen;
 
-  zzplay_cache_screen(runtime);
-  if (runtime->screen_w != 0U && runtime->screen_h != 0U) {
-    *width = runtime->screen_w;
-    *height = runtime->screen_h;
+  /* The dedicated fullscreen screen is authoritative whenever it is
+   * open: the Workbench window (or a public screen) reports the wrong
+   * dimensions for placing the fullscreen PIP. */
+  if (runtime->screen) {
+    runtime->screen_w = (uint16_t)runtime->screen->Width;
+    runtime->screen_h = (uint16_t)runtime->screen->Height;
     return;
   }
-  *width = 0U;
-  *height = 0U;
+  if (runtime->window && runtime->window->WScreen) {
+    runtime->screen_w = (uint16_t)runtime->window->WScreen->Width;
+    runtime->screen_h = (uint16_t)runtime->window->WScreen->Height;
+    return;
+  }
+  /* Neither is open (between the PIP close and the reopen): ask the
+   * public screen, so a windowed reopen after a dedicated screen
+   * closed does not inherit that (smaller) screen's limits. */
   screen = LockPubScreen(0);
   if (!screen) {
     return;
@@ -535,8 +531,6 @@ static void zzplay_screen_size(struct ZZPlayRuntime *runtime,
   runtime->screen_w = (uint16_t)screen->Width;
   runtime->screen_h = (uint16_t)screen->Height;
   UnlockPubScreen(0, screen);
-  *width = runtime->screen_w;
-  *height = runtime->screen_h;
 }
 
 /* `placement` is the window; the PIP always fills its inner area. Setting
@@ -765,23 +759,15 @@ static void zzplay_close_video_screen(struct ZZPlayRuntime *runtime)
       zzplay_release_resource, runtime);
 }
 
-/* Where the window should sit for the requested mode. */
+/* Where the windowed window should sit (fullscreen placement is
+ * zzplay_geometry_center on the dedicated screen's real dimensions). */
 static ZZPlayRect zzplay_pip_placement(struct ZZPlayRuntime *runtime,
                                        int fullscreen)
 {
   ZZPlayRect rect;
 
-  if (fullscreen) {
-    uint16_t screen_w;
-    uint16_t screen_h;
-
-    zzplay_screen_size(runtime, &screen_w, &screen_h);
-    if (screen_w != 0U && screen_h != 0U) {
-      return zzplay_geometry_fit(
-          runtime->video_info.width, runtime->video_info.height,
-          screen_w, screen_h);
-    }
-  } else if (zzplay_geometry_restore(&runtime->saved_geometry, &rect)) {
+  (void)fullscreen;
+  if (zzplay_geometry_restore(&runtime->saved_geometry, &rect)) {
     return rect;
   }
   memset(&rect, 0, sizeof(rect));
@@ -811,15 +797,25 @@ static int zzplay_open_pip_mode(struct ZZPlayRuntime *runtime,
     zzplay_info("zzplay: staying windowed\n");
     fullscreen = 0;
   }
-  placement = zzplay_pip_placement(runtime, fullscreen);
   if (fullscreen) {
-    /* Fill the dedicated screen exactly: source size, at the origin. No
-     * scaling and no resizing are involved on this path. */
-    memset(&placement, 0, sizeof(placement));
-    placement.width = (uint16_t)runtime->video_info.width;
-    placement.height = (uint16_t)runtime->video_info.height;
+    /* The P96 best-mode search can hand back a screen larger than the
+     * video (there is no 512x384 mode, so 512x384 content opens on a
+     * 640x480-class screen). Keep the 1:1 no-scaling fast path but
+     * centre it on the actual screen instead of pinning the video to
+     * the origin (zz9000-drivers#83: fullscreen launches but is not
+     * centred). */
+    zzplay_cache_screen(runtime);
+    placement = zzplay_geometry_center(
+        (uint16_t)runtime->video_info.width,
+        (uint16_t)runtime->video_info.height,
+        runtime->screen_w, runtime->screen_h);
   } else {
+    placement = zzplay_pip_placement(runtime, 0);
     zzplay_close_video_screen(runtime);
+    /* The dedicated screen just closed: re-read the public screen so
+     * the windowed reopen's limits match the Workbench, not the
+     * (smaller) fullscreen screen. */
+    zzplay_cache_screen(runtime);
   }
 
   runtime->pip_error = 0;
@@ -842,7 +838,6 @@ static int zzplay_open_pip_mode(struct ZZPlayRuntime *runtime,
     zzplay_close_video_screen(runtime);
     return 0;
   }
-  zzplay_cache_screen(runtime);
   /* p96PIP_OpenTagList() does not reliably adopt an opening size larger
    * than the PIP source, which left the first two bench rounds borderless
    * but still 640x480. Resizing afterwards is the same route a user drag
