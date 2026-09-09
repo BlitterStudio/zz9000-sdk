@@ -525,10 +525,10 @@ static void zzplay_cache_screen(struct ZZPlayRuntime *runtime)
     runtime->screen_h = (uint16_t)runtime->window->WScreen->Height;
     return;
   }
-  /* Neither is open (between the PIP close and the reopen): ask the
-   * public screen, so a windowed reopen after a dedicated screen
-   * closed does not inherit that (smaller) screen's limits. */
-  screen = LockPubScreen(0);
+  /* No window yet (first open, or the toggle's close-reopen window):
+   * measure the same named screen the PIP opens on, not whatever the
+   * system default public screen happens to be. */
+  screen = LockPubScreen((CONST_STRPTR)"Workbench");
   if (!screen) {
     return;
   }
