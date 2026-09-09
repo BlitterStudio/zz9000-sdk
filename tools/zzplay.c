@@ -595,12 +595,16 @@ static struct Window *zzplay_open_pip(const ZZPlayVideoInfo *info,
   open_tags[i].ti_Tag = WA_MaxHeight;
   open_tags[i++].ti_Data = limit_h != 0U ? limit_h : (ULONG)~0UL;
   if (fullscreen) {
-    /* On its own screen the window is a borderless backdrop filling it, so
-     * the PIP is a plain 1:1 fill and nothing has to be resized. */
+    /* Borderless, deliberately NOT a backdrop window: Intuition manages
+     * backdrop windows' position/size itself, and both fullscreen
+     * rounds that used WA_Backdrop on the dedicated screen never got
+     * their forced geometry (r5 "borderless but still 640x480", and
+     * the colour-key window of issue #83 testing) while every
+     * non-backdrop resize -- user drags, forced reopens -- scales
+     * correctly. The letterbox margins show the dedicated screen's
+     * black background. */
     open_tags[i].ti_Tag = WA_Borderless;
     open_tags[i++].ti_Data = TRUE;
-    open_tags[i].ti_Tag = WA_Backdrop;
-    open_tags[i++].ti_Data = screen ? TRUE : FALSE;
   } else {
     open_tags[i].ti_Tag = WA_Title;
     open_tags[i++].ti_Data = (ULONG)title;

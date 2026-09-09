@@ -174,6 +174,10 @@ static int check_player(const char *path)
     rc = 28;
     goto done;
   }
+  /* WA_Backdrop must not come back: Intuition manages backdrop windows'
+   * position and size, and both fullscreen rounds that used it on the
+   * dedicated screen never received their forced geometry. */
+  if (find(s, "ti_Tag = WA_Backdrop") >= 0L) { rc = 29; goto done; }
   /* The PIP takes a pen for its colour key; a screen with none to give
    * fails with PIPERR_OUTOFPENS (4). */
   if (find(s, "P96SA_SharePens") < 0L) { rc = 25; goto done; }
