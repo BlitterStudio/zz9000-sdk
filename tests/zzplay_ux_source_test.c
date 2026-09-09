@@ -94,9 +94,8 @@ static int check_player(const char *path)
     rc = 11;
     goto done;
   }
-  /* And a fullscreen request with no known screen must say so rather than
-   * silently opening a borderless source-size window. */
-  if (find(s, "staying windowed") < 0L) { rc = 12; goto done; }
+  /* Fullscreen on the public screen has no mode to fail finding; a PIP
+   * open failure is reported through the P96 error text above. */
 
   /* p96PIP_OpenTagList does not reliably adopt an opening size larger than
    * the PIP source, so the geometry must be enforced afterwards through the
@@ -130,53 +129,27 @@ static int check_player(const char *path)
   /* A failed PIP open must report the P96 error, not just fall back. */
   if (find(s, "P96 error") < 0L) { rc = 18; goto done; }
 
-  /* Fullscreen uses a dedicated screen sized to the video, so the PIP is a
-   * 1:1 fill and nothing is resized. The screen must be released through
-   * the resource stack, and it must sit BELOW the window in the resource
-   * order so release_all - which runs highest index first - closes the
-   * window before the screen it lives on. */
-  if (find(s, "p96OpenScreenTags") < 0L) { rc = 19; goto done; }
-  if (find(s, "WA_CustomScreen") < 0L) { rc = 20; goto done; }
-  if (find(s, "ZZPLAY_RESOURCE_VIDEO_SCREEN") < 0L) { rc = 21; goto done; }
-  if (find(s, "p96CloseScreen") < 0L) { rc = 22; goto done; }
-  /* Leaving fullscreen must give the screen back. */
-  if (find(s, "zzplay_close_video_screen(runtime);") < 0L) {
-    rc = 23;
-    goto done;
-  }
-  /* A PIP that fails to open on the dedicated screen must take the screen
-   * down with it. Leaving a custom screen displayed with no window driving
-   * it wedged the machine on the r5 bench round. */
-  if (find(s, "zzplay_pip_error_name(runtime->pip_error));\n"
-              "    /* Never leave a custom screen open") < 0L) {
-    rc = 24;
-    goto done;
-  }
-  /* Fullscreen scales the video to fill the actual dedicated screen,
-   * aspect-preserved and centred through zzplay_geometry_fit: a 1:1
-   * window on a dedicated screen rendered top-left on the card's
-   * minimum raster was the "fullscreen but not centred" report
-   * (zz9000-drivers#83). */
+  /* Fullscreen is a borderless window on the public screen, scaled to
+   * fill it through zzplay_geometry_fit (aspect preserved, centred).
+   * A dedicated screen is deliberately NOT used: on a custom screen the
+   * PIP overlay does not follow window resizes (r5 bench rounds and
+   * zz9000-drivers#83 hardware testing), and small custom-sized modes
+   * render top-left on the card's minimum raster. */
   if (find(s, "placement = zzplay_geometry_fit(") < 0L) {
-    rc = 25;
+    rc = 19;
     goto done;
   }
+  if (find(s, "p96OpenScreenTags") >= 0L) { rc = 20; goto done; }
   if (find(s, "memset(&placement, 0, sizeof(placement));") >= 0L) {
-    rc = 26;
+    rc = 21;
     goto done;
   }
-  /* The dedicated screen's dimensions are authoritative while it is open,
-   * or the placement fits against the wrong (Workbench) screen. */
-  if (find(s, "if (runtime->screen) {") < 0L) { rc = 27; goto done; }
   /* The fitted rectangle must be enforced after open on every path --
    * scaled fullscreen included -- not only on windowed reopens. */
   if (find(s, "if (!runtime->screen) {\n    zzplay_force_geometry") >= 0L) {
-    rc = 28;
+    rc = 22;
     goto done;
   }
-  /* The PIP takes a pen for its colour key; a screen with none to give
-   * fails with PIPERR_OUTOFPENS (4). */
-  if (find(s, "P96SA_SharePens") < 0L) { rc = 25; goto done; }
 
   /* Fullscreen must not paint a title bar it does not have. */
   if (find(s, "runtime->fullscreen) {\n    runtime->title_dirty = 0U;") < 0L) {

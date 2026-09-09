@@ -97,22 +97,18 @@ stealing it, and `AUTO` falls back and says so.
 
 ### Fullscreen
 
-Fullscreen opens a **dedicated screen** at the closest display mode and
-scales the picture to fill it, aspect preserved and centred -- the same
-scaling route a window resize takes, so 4:3 content on a 4:3 screen
-fills it completely, and everything else letterboxes or pillarboxes.
-Small dedicated modes render top-left on the card's minimum raster, so
-exact-size 1:1 screens are not used for presentation.
+Fullscreen is a **borderless window filling the Workbench screen**, with
+the video scaled to fit, aspect preserved and centred: 4:3 content on a
+4:3 screen fills it completely, anything else letterboxes or pillarboxes
+-- the picture is never stretched. No display mode switch happens, so
+toggling with F is instant.
 
-Scaling is aspect-preserving -- the picture is never stretched -- and no
-part of Workbench is visible, so it suits a program showing a video
-sequence.
+A dedicated screen is deliberately not used: on a custom screen the PIP
+overlay does not follow window resizes on this driver, and small custom
+sized modes render top-left on the card's minimum raster.
 
-Pressing F again closes that screen and returns to the exact window position
-and size you had before.
-
-If no display mode matches the video, ZZPlay says so and stays windowed
-rather than pretending the request succeeded.
+Pressing F again returns to the exact window position and size you had
+before.
 
 **Starting fullscreen.** `--fullscreen`, or the `FULLSCREEN` ToolType, starts
 that way with no window ever appearing on the desktop — which is what you
