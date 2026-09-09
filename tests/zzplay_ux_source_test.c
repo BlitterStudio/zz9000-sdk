@@ -152,11 +152,15 @@ static int check_player(const char *path)
     rc = 24;
     goto done;
   }
-  /* Fullscreen video must be centred on the actual dedicated screen: the
-   * P96 best-mode search can return a larger mode, and pinning the 1:1
-   * window to the origin left the picture in the screen's top-left
-   * corner (zz9000-drivers#83). */
-  if (find(s, "zzplay_geometry_center(") < 0L) { rc = 25; goto done; }
+  /* Fullscreen scales the video to fill the actual dedicated screen,
+   * aspect-preserved and centred through zzplay_geometry_fit: a 1:1
+   * window on a dedicated screen rendered top-left on the card's
+   * minimum raster was the "fullscreen but not centred" report
+   * (zz9000-drivers#83). */
+  if (find(s, "placement = zzplay_geometry_fit(") < 0L) {
+    rc = 25;
+    goto done;
+  }
   if (find(s, "memset(&placement, 0, sizeof(placement));") >= 0L) {
     rc = 26;
     goto done;
@@ -164,6 +168,12 @@ static int check_player(const char *path)
   /* The dedicated screen's dimensions are authoritative while it is open,
    * or the placement fits against the wrong (Workbench) screen. */
   if (find(s, "if (runtime->screen) {") < 0L) { rc = 27; goto done; }
+  /* The fitted rectangle must be enforced after open on every path --
+   * scaled fullscreen included -- not only on windowed reopens. */
+  if (find(s, "if (!runtime->screen) {\n    zzplay_force_geometry") >= 0L) {
+    rc = 28;
+    goto done;
+  }
   /* The PIP takes a pen for its colour key; a screen with none to give
    * fails with PIPERR_OUTOFPENS (4). */
   if (find(s, "P96SA_SharePens") < 0L) { rc = 25; goto done; }

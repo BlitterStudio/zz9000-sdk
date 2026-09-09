@@ -759,8 +759,8 @@ static void zzplay_close_video_screen(struct ZZPlayRuntime *runtime)
       zzplay_release_resource, runtime);
 }
 
-/* Where the windowed window should sit (fullscreen placement is
- * zzplay_geometry_center on the dedicated screen's real dimensions). */
+/* Where the windowed window should sit (fullscreen placement is a
+ * zzplay_geometry_fit against the dedicated screen's real dimensions). */
 static ZZPlayRect zzplay_pip_placement(struct ZZPlayRuntime *runtime,
                                        int fullscreen)
 {
@@ -790,6 +790,7 @@ static int zzplay_open_pip_mode(struct ZZPlayRuntime *runtime,
                                 int fullscreen)
 {
   ZZPlayRect placement;
+  ZZPlayRect open_rect;
 
   if (fullscreen && !zzplay_open_video_screen(runtime)) {
     /* Say so rather than silently presenting a windowed player as though
@@ -798,17 +799,32 @@ static int zzplay_open_pip_mode(struct ZZPlayRuntime *runtime,
     fullscreen = 0;
   }
   if (fullscreen) {
-    /* The P96 best-mode search can hand back a screen larger than the
-     * video (there is no 512x384 mode, so 512x384 content opens on a
-     * 640x480-class screen). Keep the 1:1 no-scaling fast path but
-     * centre it on the actual screen instead of pinning the video to
-     * the origin (zz9000-drivers#83: fullscreen launches but is not
-     * centred). */
+    /* Scale to fill the dedicated screen, aspect preserved and centred
+     * (zz9000-drivers#83). A 1:1 window on an exact-size dedicated screen
+     * is not reliable either: small modes render top-left on the card's
+     * minimum raster, which is what "fullscreen but not centred" was.
+     * The window opens at the 1:1 source size (P96 does not reliably
+     * adopt a larger opening size) and is then forced to the fitted
+     * rectangle through the already-proven resize route below. */
     zzplay_cache_screen(runtime);
-    placement = zzplay_geometry_center(
+    placement = zzplay_geometry_fit(
         (uint16_t)runtime->video_info.width,
         (uint16_t)runtime->video_info.height,
-        runtime->screen_w, runtime->screen_h);
+        runtime->screen_w ? runtime->screen_w
+                          : (uint16_t)runtime->video_info.width,
+        runtime->screen_h ? runtime->screen_h
+                          : (uint16_t)runtime->video_info.height);
+    if (placement.width == 0U || placement.height == 0U) {
+      /* Degenerate screen information: fall back to 1:1 at the origin
+       * rather than refusing to present at all. */
+      placement.x = 0;
+      placement.y = 0;
+      placement.width = (uint16_t)runtime->video_info.width;
+      placement.height = (uint16_t)runtime->video_info.height;
+    }
+    open_rect = placement;
+    open_rect.width = (uint16_t)runtime->video_info.width;
+    open_rect.height = (uint16_t)runtime->video_info.height;
   } else {
     placement = zzplay_pip_placement(runtime, 0);
     zzplay_close_video_screen(runtime);
@@ -816,11 +832,12 @@ static int zzplay_open_pip_mode(struct ZZPlayRuntime *runtime,
      * the windowed reopen's limits match the Workbench, not the
      * (smaller) fullscreen screen. */
     zzplay_cache_screen(runtime);
+    open_rect = placement;
   }
 
   runtime->pip_error = 0;
   runtime->window = zzplay_open_pip(
-      &runtime->video_info, &placement, fullscreen, runtime->screen,
+      &runtime->video_info, &open_rect, fullscreen, runtime->screen,
       runtime->screen_w, runtime->screen_h, runtime->title,
       &runtime->bitmap, &runtime->pip_error);
   if (!runtime->window) {
@@ -844,9 +861,10 @@ static int zzplay_open_pip_mode(struct ZZPlayRuntime *runtime,
    * takes, and that path was already proven to scale correctly, so the
    * requested geometry is enforced here rather than trusted at open. */
   runtime->fullscreen = fullscreen ? 1U : 0U;
-  if (!runtime->screen) {
-    zzplay_force_geometry(runtime, &placement);
-  }
+  /* Windowed reopens and scaled fullscreen both enforce the requested
+   * geometry through the proven resize route; a 1:1 fullscreen (screen
+   * exactly the video size) is already there. */
+  zzplay_force_geometry(runtime, &placement);
   runtime->present_recheck = 1U;
   runtime->title_dirty = 1U;
   (void)zzplay_resource_acquire(

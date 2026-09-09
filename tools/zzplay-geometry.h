@@ -31,13 +31,6 @@ typedef struct ZZPlayWindowGeometry {
 ZZPlayRect zzplay_geometry_fit(uint16_t src_w, uint16_t src_h,
                                uint16_t avail_w, uint16_t avail_h);
 
-/* Place the video 1:1 (no scaling) centred on a dedicated screen. The
- * P96 best-mode search can return a screen larger than the video, so
- * fullscreen must centre rather than pin to the origin; a screen at or
- * below the video size places at the origin. Degenerate inputs produce
- * an empty rect. */
-ZZPlayRect zzplay_geometry_center(uint16_t src_w, uint16_t src_h,
-                                 uint16_t screen_w, uint16_t screen_h);
 
 /* True when the fit is exactly 1:1, i.e. the native fast path is reachable
  * at this size. */
