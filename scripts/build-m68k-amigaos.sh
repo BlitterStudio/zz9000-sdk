@@ -3,12 +3,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 set -e
 
-IMAGE="${IMAGE:-sacredbanana/amiga-compiler:m68k-amigaos}"
+IMAGE="${IMAGE:-amigadev/crosstools:m68k-amigaos-gcc10}"
 REPO_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 
-# Run as root inside the container: the toolchain NDK headers under
-# /opt/m68k-amigaos are not world-readable, so a non-root --user cannot
-# compile. Pass the invoking host user/group ids so the container can hand the
+# Run as root inside the container: the toolchain's NDK headers are not
+# guaranteed world-readable, so a non-root --user cannot always compile.
+# Pass the invoking host user/group ids so the container can hand the
 # build outputs back at the end (below) — otherwise the root-owned build/ tree
 # blocks the host-side packaging step from writing build/package on Linux/CI.
 docker run --rm -v "$REPO_ROOT:/work" -w /work \

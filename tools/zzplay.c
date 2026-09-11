@@ -33,6 +33,7 @@
 #include <intuition/intuition.h>
 #include <libraries/Picasso96.h>
 #include <proto/exec.h>
+#include <dos/dos.h>
 #include <proto/intuition.h>
 #include <proto/Picasso96.h>
 #include <proto/timer.h>

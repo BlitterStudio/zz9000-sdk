@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 param(
-  [string]$Image = "sacredbanana/amiga-compiler:m68k-amigaos"
+  [string]$Image = "amigadev/crosstools:m68k-amigaos-gcc10"
 )
 
 $ErrorActionPreference = "Stop"
