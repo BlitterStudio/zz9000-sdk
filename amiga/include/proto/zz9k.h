@@ -26,7 +26,7 @@ extern struct Library *ZZ9KBase;
     __asm volatile("jsr " #offset "(a6)" \
                    : "=r"(zz9k_d0) \
                    : "r"(zz9k_a6) \
-                   : ZZ9K_INLINE_CLOBBERS); \
+                   : "cc", "memory", "d1", "a0", "a1"); \
   } while (0)
 
 #define ZZ9K_INLINE_CALL1(offset, in0) \
@@ -36,10 +36,9 @@ extern struct Library *ZZ9KBase;
     __asm volatile("jsr " #offset "(a6)" \
                    : "=r"(zz9k_d0) \
                    : "r"(zz9k_a6), "r"(zz9k_a0) \
-                   : ZZ9K_INLINE_CLOBBERS); \
+                   : "cc", "memory", "d1", "a1"); \
   } while (0)
 
-#define ZZ9K_INLINE_CLOBBERS "cc", "memory", "d1", "a0", "a1"
 
 static __inline int __ZZ9KQueryCapsInline(ZZ9KCaps *caps)
 {
@@ -58,7 +57,7 @@ static __inline int __ZZ9KQueryServiceInline(uint32_t service_id,
   __asm volatile("jsr -36(a6)"
                  : "+r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_a0)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1", "a1");
   return (int)zz9k_d0;
 }
 #define ZZ9KQueryService(service_id, service) \
@@ -78,7 +77,7 @@ static __inline int __ZZ9KPingInline(const uint8_t *payload,
                  : "+r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_a0), "r"(zz9k_a1),
                    "r"(zz9k_a2)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1");
   return (int)zz9k_d0;
 }
 #define ZZ9KPing(payload, payload_len, reply_payload, reply_len) \
@@ -95,7 +94,7 @@ static __inline int __ZZ9KCallInline(ZZ9KRequest *request,
   __asm volatile("jsr -48(a6)"
                  : "+r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_a0), "r"(zz9k_a1)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1");
   return (int)zz9k_d0;
 }
 #define ZZ9KCall(request, reply, timeout_ticks) \
@@ -116,7 +115,7 @@ static __inline int __ZZ9KCallAsyncInline(ZZ9KAsyncRequest *async,
                  : "=r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_a0), "r"(zz9k_a1),
                    "r"(zz9k_a2), "r"(zz9k_a3)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1");
   return zz9k_d0;
 }
 #define ZZ9KCallAsync(async, request, callback, user_data) \
@@ -140,7 +139,7 @@ static __inline int __ZZ9KCallAsyncBatchInline(ZZ9KAsyncRequest *asyncs,
                  : "+r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_a0), "r"(zz9k_a1),
                    "r"(zz9k_a2), "r"(zz9k_a3), "r"(zz9k_a4)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1");
   return (int)zz9k_d0;
 }
 #define ZZ9KCallAsyncBatch(asyncs, requests, count, callback, user_data, \
@@ -157,7 +156,7 @@ static __inline int __ZZ9KPollInline(uint32_t max_completions,
   __asm volatile("jsr -66(a6)"
                  : "+r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_a0)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1", "a1");
   return (int)zz9k_d0;
 }
 #define ZZ9KPoll(max_completions, completed) \
@@ -177,7 +176,7 @@ static __inline int __ZZ9KAllocSharedInline(uint32_t length,
                  : "+r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_d1), "r"(zz9k_d2),
                    "r"(zz9k_a0)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "a1");
   return (int)zz9k_d0;
 }
 #define ZZ9KAllocShared(length, alignment, flags, buffer) \
@@ -190,7 +189,7 @@ static __inline int __ZZ9KFreeSharedInline(uint32_t handle)
   __asm volatile("jsr -78(a6)"
                  : "+r"(zz9k_d0)
                  : "r"(zz9k_a6)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1", "a0", "a1");
   return (int)zz9k_d0;
 }
 #define ZZ9KFreeShared(handle) __ZZ9KFreeSharedInline((handle))
@@ -207,7 +206,7 @@ static __inline int __ZZ9KMemFillInline(uint32_t handle, uint32_t offset,
                  : "+r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_d1), "r"(zz9k_d2),
                    "r"(zz9k_d3)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "a0", "a1");
   return (int)zz9k_d0;
 }
 #define ZZ9KMemFill(handle, offset, length, value) \
@@ -229,7 +228,7 @@ static __inline int __ZZ9KMemCopyInline(uint32_t dst_handle,
                  : "+r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_d1), "r"(zz9k_d2),
                    "r"(zz9k_d3), "r"(zz9k_d4)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "a0", "a1");
   return (int)zz9k_d0;
 }
 #define ZZ9KMemCopy(dst_handle, dst_offset, src_handle, src_offset, length) \
@@ -250,7 +249,7 @@ static __inline int __ZZ9KAllocSurfaceInline(uint32_t width, uint32_t height,
                  : "+r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_d1), "r"(zz9k_d2),
                    "r"(zz9k_d3), "r"(zz9k_a0)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "a1");
   return (int)zz9k_d0;
 }
 #define ZZ9KAllocSurface(width, height, format, flags, surface) \
@@ -274,7 +273,7 @@ static __inline int __ZZ9KAllocSurfaceExInline(uint32_t width,
                  : "+r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_d1), "r"(zz9k_d2),
                    "r"(zz9k_d3), "r"(zz9k_d4), "r"(zz9k_a0)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "a1");
   return (int)zz9k_d0;
 }
 #define ZZ9KAllocSurfaceEx(width, height, format, flags, pitch, surface) \
@@ -288,7 +287,7 @@ static __inline int __ZZ9KFreeSurfaceInline(uint32_t handle)
   __asm volatile("jsr -108(a6)"
                  : "+r"(zz9k_d0)
                  : "r"(zz9k_a6)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1", "a0", "a1");
   return (int)zz9k_d0;
 }
 #define ZZ9KFreeSurface(handle) __ZZ9KFreeSurfaceInline((handle))
@@ -331,7 +330,7 @@ static __inline int __ZZ9KCallAsyncMsgInline(ZZ9KAsyncRequest *async,
                  : "=r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_a0), "r"(zz9k_a1),
                    "r"(zz9k_a2)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1");
   return zz9k_d0;
 }
 #define ZZ9KCallAsyncMsg(async, request, reply_port) \
@@ -353,7 +352,7 @@ static __inline int __ZZ9KCallAsyncBatchMsgInline(ZZ9KAsyncRequest *asyncs,
                  : "+r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_a0), "r"(zz9k_a1),
                    "r"(zz9k_a2), "r"(zz9k_a3)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1");
   return (int)zz9k_d0;
 }
 #define ZZ9KCallAsyncBatchMsg(asyncs, requests, count, reply_port, queued) \
@@ -368,7 +367,7 @@ static __inline int __ZZ9KCancelAsyncInline(ZZ9KAsyncRequest *async)
   __asm volatile("jsr -144(a6)"
                  : "=r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_a0)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1", "a1");
   return zz9k_d0;
 }
 #define ZZ9KCancelAsync(async) __ZZ9KCancelAsyncInline((async))
@@ -384,7 +383,7 @@ static __inline int __ZZ9KWaitAsyncInline(ZZ9KAsyncRequest *async,
   __asm volatile("jsr -150(a6)"
                  : "+r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_a0), "r"(zz9k_a1)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1");
   return (int)zz9k_d0;
 }
 #define ZZ9KWaitAsync(async, timeout_polls, polls_run) \
@@ -406,7 +405,7 @@ static __inline int __ZZ9KWaitAsyncBatchInline(ZZ9KAsyncRequest *asyncs,
                  : "+r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_d1), "r"(zz9k_a0),
                    "r"(zz9k_a1), "r"(zz9k_a2)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory");
   return (int)zz9k_d0;
 }
 #define ZZ9KWaitAsyncBatch(asyncs, count, timeout_polls, completed, \
@@ -425,7 +424,7 @@ static __inline int __ZZ9KDecodeImageInline(uint32_t opcode,
   __asm volatile("jsr -162(a6)"
                  : "+r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_a0), "r"(zz9k_a1)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1");
   return (int)zz9k_d0;
 }
 #define ZZ9KDecodeImage(opcode, desc, result) \
@@ -441,7 +440,7 @@ static __inline int __ZZ9KCryptoHashInline(const ZZ9KCryptoHashDesc *desc,
   __asm volatile("jsr -168(a6)"
                  : "=r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_a0), "r"(zz9k_a1)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1");
   return zz9k_d0;
 }
 #define ZZ9KCryptoHash(desc, result) \
@@ -464,7 +463,7 @@ static __inline int __ZZ9KCryptoHashBatchInline(
                  : "+r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_d1), "r"(zz9k_d2),
                    "r"(zz9k_a0), "r"(zz9k_a1)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory");
   return (int)zz9k_d0;
 }
 #define ZZ9KCryptoHashBatch(descs, results, count, max_in_flight, \
@@ -483,7 +482,7 @@ static __inline int __ZZ9KCryptoStreamInline(
   __asm volatile("jsr -180(a6)"
                  : "=r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_a0), "r"(zz9k_a1)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1");
   return zz9k_d0;
 }
 #define ZZ9KCryptoStream(desc, result) \
@@ -506,7 +505,7 @@ static __inline int __ZZ9KCryptoStreamBatchInline(
                  : "+r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_d1), "r"(zz9k_d2),
                    "r"(zz9k_a0), "r"(zz9k_a1)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory");
   return (int)zz9k_d0;
 }
 #define ZZ9KCryptoStreamBatch(descs, results, count, max_in_flight, \
@@ -525,7 +524,7 @@ static __inline int __ZZ9KCryptoAeadInline(
   __asm volatile("jsr -192(a6)"
                  : "=r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_a0), "r"(zz9k_a1)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1");
   return zz9k_d0;
 }
 #define ZZ9KCryptoAead(desc, result) \
@@ -548,7 +547,7 @@ static __inline int __ZZ9KCryptoAeadBatchInline(
                  : "+r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_d1), "r"(zz9k_d2),
                    "r"(zz9k_a0), "r"(zz9k_a1)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory");
   return (int)zz9k_d0;
 }
 #define ZZ9KCryptoAeadBatch(descs, results, count, max_in_flight, \
@@ -565,7 +564,7 @@ static __inline int __ZZ9KFillSurfaceInline(
   __asm volatile("jsr -204(a6)"
                  : "=r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_a0)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1", "a1");
   return zz9k_d0;
 }
 #define ZZ9KFillSurface(desc) \
@@ -580,7 +579,7 @@ static __inline int __ZZ9KCopySurfaceInline(
   __asm volatile("jsr -210(a6)"
                  : "=r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_a0)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1", "a1");
   return zz9k_d0;
 }
 #define ZZ9KCopySurface(desc) \
@@ -597,7 +596,7 @@ static __inline int __ZZ9KImageSessionBeginInline(
   __asm volatile("jsr -216(a6)"
                  : "=r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_a0), "r"(zz9k_a1)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1");
   return zz9k_d0;
 }
 #define ZZ9KImageSessionBegin(desc, result) \
@@ -614,7 +613,7 @@ static __inline int __ZZ9KImageSessionFeedInline(
   __asm volatile("jsr -222(a6)"
                  : "=r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_a0), "r"(zz9k_a1)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1");
   return zz9k_d0;
 }
 #define ZZ9KImageSessionFeed(desc, result) \
@@ -629,7 +628,7 @@ static __inline int __ZZ9KImageSessionCloseInline(uint32_t session,
   __asm volatile("jsr -228(a6)"
                  : "+r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_d1)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "a0", "a1");
   return (int)zz9k_d0;
 }
 #define ZZ9KImageSessionClose(session, flags) \
@@ -644,7 +643,7 @@ static __inline int __ZZ9KScaleImageClippedInline(
   __asm volatile("jsr -234(a6)"
                  : "=r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_a0)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1", "a1");
   return zz9k_d0;
 }
 #define ZZ9KScaleImageClipped(desc) \
@@ -661,7 +660,7 @@ static __inline int __ZZ9KDecodeJpegInline(
   __asm volatile("jsr -240(a6)"
                  : "=r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_a0), "r"(zz9k_a1)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1");
   return zz9k_d0;
 }
 #define ZZ9KDecodeJpeg(desc, result) \
@@ -678,7 +677,7 @@ static __inline int __ZZ9KDecodePngInline(
   __asm volatile("jsr -246(a6)"
                  : "=r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_a0), "r"(zz9k_a1)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1");
   return zz9k_d0;
 }
 #define ZZ9KDecodePng(desc, result) \
@@ -695,7 +694,7 @@ static __inline int __ZZ9KDecodeGifInline(
   __asm volatile("jsr -252(a6)"
                  : "=r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_a0), "r"(zz9k_a1)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1");
   return zz9k_d0;
 }
 #define ZZ9KDecodeGif(desc, result) \
@@ -712,7 +711,7 @@ static __inline int __ZZ9KDecodeMp3Inline(
   __asm volatile("jsr -258(a6)"
                  : "=r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_a0), "r"(zz9k_a1)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1");
   return zz9k_d0;
 }
 #define ZZ9KDecodeMp3(desc, result) \
@@ -729,7 +728,7 @@ static __inline int __ZZ9KAudioStreamBeginInline(
   __asm volatile("jsr -264(a6)"
                  : "=r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_a0), "r"(zz9k_a1)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1");
   return zz9k_d0;
 }
 #define ZZ9KAudioStreamBegin(desc, result) \
@@ -746,7 +745,7 @@ static __inline int __ZZ9KAudioStreamFeedInline(
   __asm volatile("jsr -270(a6)"
                  : "=r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_a0), "r"(zz9k_a1)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1");
   return zz9k_d0;
 }
 #define ZZ9KAudioStreamFeed(desc, result) \
@@ -767,7 +766,7 @@ static __inline int __ZZ9KAudioStreamReadInline(
                  : "+r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_d1), "r"(zz9k_d2),
                    "r"(zz9k_a0)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "a1");
   return (int)zz9k_d0;
 }
 #define ZZ9KAudioStreamRead(session, pcm_read, flags, result) \
@@ -785,7 +784,7 @@ static __inline int __ZZ9KAudioStreamCloseInline(
   __asm volatile("jsr -282(a6)"
                  : "+r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_d1), "r"(zz9k_a0)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "a1");
   return (int)zz9k_d0;
 }
 #define ZZ9KAudioStreamClose(session, flags, result) \
@@ -802,7 +801,7 @@ static __inline int __ZZ9KCryptoKeyExchangeInline(
   __asm volatile("jsr -288(a6)"
                  : "=r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_a0), "r"(zz9k_a1)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1");
   return zz9k_d0;
 }
 #define ZZ9KCryptoKeyExchange(desc, result) \
@@ -819,7 +818,7 @@ static __inline int __ZZ9KCryptoVerifyInline(
   __asm volatile("jsr -294(a6)"
                  : "=r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_a0), "r"(zz9k_a1)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1");
   return zz9k_d0;
 }
 #define ZZ9KCryptoVerify(desc, valid) \
@@ -837,7 +836,7 @@ static __inline int __ZZ9KAudioStreamPlayInline(
   __asm volatile("jsr -300(a6)"
                  : "+r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_d1), "r"(zz9k_a0)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "a1");
   return (int)zz9k_d0;
 }
 #define ZZ9KAudioStreamPlay(session, flags, result) \
@@ -855,7 +854,7 @@ static __inline int __ZZ9KAudioStreamStopInline(
   __asm volatile("jsr -306(a6)"
                  : "+r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_d1), "r"(zz9k_a0)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "a1");
   return (int)zz9k_d0;
 }
 #define ZZ9KAudioStreamStop(session, flags, result) \
@@ -870,7 +869,7 @@ static __inline int __ZZ9KQueryPaletteInline(
   __asm volatile("jsr -312(a6)"
                  : "=r"(zz9k_d0)
                  : "r"(zz9k_a6), "r"(zz9k_a0)
-                 : ZZ9K_INLINE_CLOBBERS);
+                 : "cc", "memory", "d1", "a1");
   return (int)zz9k_d0;
 }
 #define ZZ9KQueryPalette(desc) __ZZ9KQueryPaletteInline((desc))

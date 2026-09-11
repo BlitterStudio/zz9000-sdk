@@ -8,6 +8,7 @@
 #include "zz9k/event_wait.h"
 #include "zz9k/sdk.h"
 #include <proto/exec.h>
+#include <dos/dos.h>
 #include <stdio.h>
 #include <string.h>
 

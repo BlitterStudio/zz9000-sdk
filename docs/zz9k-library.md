@@ -1819,10 +1819,12 @@ if (ZZ9KBase->lib_Revision < ZZ9K_LIBRARY_MIN_REVISION_CANCEL_ASYNC) {
 ```
 
 ## Register Clobbers
-
 The inline caller header treats `d1`, `a0`, and `a1` as scratch registers across
-every LVO call. Do not rely on local variables staying in those registers after
-a `ZZ9K*()` call. This is already handled by `amiga/include/proto/zz9k.h`.
+every LVO call: each statement binds the registers it passes as operands and
+clobbers the rest (GCC 14+ rejects an operand register that also appears in
+the clobber list). Do not rely on local variables staying in those registers
+after a `ZZ9K*()` call. This is already handled by
+`amiga/include/proto/zz9k.h`.
 
 ## Example
 
