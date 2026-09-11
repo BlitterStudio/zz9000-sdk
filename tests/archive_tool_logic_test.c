@@ -6412,6 +6412,32 @@ static int test_alloc_shrink_retry_statuses(void)
   return 0;
 }
 
+/* The feed pair retries as one unit only above the minimum chunk: a
+ * contended host window must degrade to a balanced smaller pair rather
+ * than failing after the input already consumed the free space (PR #35
+ * review finding). */
+static int test_pair_shrink_retry_gates_on_minimum(void)
+{
+  if (!zz9k_archive_pair_shrink_retry(ZZ9K_STATUS_NO_MEMORY, 8192U)) {
+    return 1;
+  }
+  if (!zz9k_archive_pair_shrink_retry(ZZ9K_STATUS_BAD_REQUEST, 4096U +
+                                                        1U)) {
+    return 2;
+  }
+  if (zz9k_archive_pair_shrink_retry(ZZ9K_STATUS_NO_MEMORY,
+                                     ZZ9K_ARCHIVE_STREAM_MIN_CHUNK)) {
+    return 3;
+  }
+  if (zz9k_archive_pair_shrink_retry(ZZ9K_STATUS_UNSUPPORTED, 8192U)) {
+    return 4;
+  }
+  if (zz9k_archive_pair_shrink_retry(ZZ9K_STATUS_INTERNAL_ERROR, 8192U)) {
+    return 5;
+  }
+  return 0;
+}
+
 int main(void)
 {
   int rc;
@@ -6958,6 +6984,11 @@ int main(void)
   if (rc) {
     printf("test_alloc_shrink_retry_statuses failed: %d\n", rc);
     return 460 + rc;
+  }
+  rc = test_pair_shrink_retry_gates_on_minimum();
+  if (rc) {
+    printf("test_pair_shrink_retry_gates_on_minimum failed: %d\n", rc);
+    return 470 + rc;
   }
   return 0;
 }

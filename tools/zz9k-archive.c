@@ -138,6 +138,66 @@ static int zz9k_archive_alloc_shrink_retry(int status)
          status == ZZ9K_STATUS_BAD_REQUEST;
 }
 
+/* Pair-retry decision for the second feed buffer: shrink the whole pair
+ * only for the retryable statuses above the minimum chunk size. */
+static int zz9k_archive_pair_shrink_retry(int status, uint32_t capacity)
+{
+  return zz9k_archive_alloc_shrink_retry(status) &&
+         capacity > ZZ9K_ARCHIVE_STREAM_MIN_CHUNK;
+}
+
+/* Allocates the CPU-visible stream feed pair as one retry unit. The input
+ * always comes from the negotiated host window; the output uses
+ * `output_flags` (HOST_WINDOW when the caller consumes it, CARD_ONLY for
+ * verify-only streams). When the output cannot allocate at the current
+ * size, the held input is freed and the whole pair retries at half the
+ * size: a contended window (e.g. resident AmiSSL scratch on a 16 KiB
+ * Zorro II heap) then degrades to a balanced smaller pair instead of
+ * failing the member after the input already consumed the free space.
+ * Returns ZZ9K_STATUS_OK with both buffers held and the pair size in
+ * *capacity_out; on failure returns the terminal status with nothing
+ * held and the failed size in *failed_out. */
+static int zz9k_archive_alloc_stream_pair(ZZ9KContext *ctx,
+                                          uint32_t output_flags,
+                                          ZZ9KSharedBuffer *input,
+                                          ZZ9KSharedBuffer *decoded,
+                                          uint32_t *capacity_out,
+                                          uint32_t *failed_out)
+{
+  uint32_t capacity = zz9k_archive_stream_chunk;
+  int status;
+
+  memset(input, 0, sizeof(*input));
+  memset(decoded, 0, sizeof(*decoded));
+  *failed_out = capacity;
+
+  while (capacity >= ZZ9K_ARCHIVE_STREAM_MIN_CHUNK) {
+    *failed_out = capacity;
+    status = zz9k_alloc_shared(ctx, capacity, 16U,
+                               ZZ9K_ALLOC_HOST_WINDOW, input);
+    if (status != ZZ9K_STATUS_OK) {
+      if (!zz9k_archive_pair_shrink_retry(status, capacity)) {
+        return status;
+      }
+      capacity /= 2U;
+      continue;
+    }
+    status = zz9k_alloc_shared(ctx, capacity, 16U, output_flags, decoded);
+    if (status == ZZ9K_STATUS_OK) {
+      *capacity_out = capacity;
+      return ZZ9K_STATUS_OK;
+    }
+    (void)zz9k_free_shared(ctx, input->handle);
+    memset(input, 0, sizeof(*input));
+    memset(decoded, 0, sizeof(*decoded));
+    if (!zz9k_archive_pair_shrink_retry(status, capacity)) {
+      return status;
+    }
+    capacity /= 2U;
+  }
+  return ZZ9K_STATUS_NO_MEMORY;
+}
+
 typedef enum ZZ9KArchiveFormat {
   ZZ9K_ARCHIVE_FORMAT_UNKNOWN = 0,
   ZZ9K_ARCHIVE_FORMAT_GZIP,
@@ -5921,8 +5981,8 @@ static int zz9k_archive_decompress_feed_stream_parts_to_file(
   ZZ9KDecompressStreamResult stream_result;
   FILE *file = 0;
   uint8_t *chunk = 0;
-  uint32_t input_capacity = zz9k_archive_stream_chunk;
-  uint32_t output_capacity = zz9k_archive_stream_chunk;
+  uint32_t pair_capacity = 0U;
+  uint32_t failed_capacity = 0U;
   uint32_t input_offset = 0U;
   uint32_t total_input;
   uint32_t total_written = 0U;
@@ -5952,44 +6012,20 @@ static int zz9k_archive_decompress_feed_stream_parts_to_file(
     return 0;
   }
 
-  while (input_capacity >= ZZ9K_ARCHIVE_STREAM_MIN_CHUNK) {
-    status = zz9k_alloc_shared(ctx, input_capacity, 16U,
-                               ZZ9K_ALLOC_HOST_WINDOW, &input);
-    if (status == ZZ9K_STATUS_OK) {
-      break;
-    }
-    if (!zz9k_archive_alloc_shrink_retry(status) ||
-        input_capacity == ZZ9K_ARCHIVE_STREAM_MIN_CHUNK) {
-      printf("alloc stream input failed: %s (%d), requested=%lu bytes\n",
-             zz9k_status_name(status), status,
-             (unsigned long)input_capacity);
-      zz9k_archive_print_window_overflow(input_capacity, status);
-      zz9k_archive_print_shared_diag(ctx, "stream input",
-                                     input_capacity);
-      goto out;
-    }
-    input_capacity /= 2U;
-  }
-  while (output_capacity >= ZZ9K_ARCHIVE_STREAM_MIN_CHUNK) {
-    status = zz9k_alloc_shared(ctx, output_capacity, 16U,
-                               ZZ9K_ALLOC_HOST_WINDOW, &decoded);
-    if (status == ZZ9K_STATUS_OK) {
-      break;
-    }
-    if (!zz9k_archive_alloc_shrink_retry(status) ||
-        output_capacity == ZZ9K_ARCHIVE_STREAM_MIN_CHUNK) {
-      printf("alloc stream output failed: %s (%d), requested=%lu bytes\n",
-             zz9k_status_name(status), status,
-             (unsigned long)output_capacity);
-      zz9k_archive_print_window_overflow(output_capacity, status);
-      zz9k_archive_print_shared_diag(ctx, "stream output",
-                                     output_capacity);
-      goto out;
-    }
-    output_capacity /= 2U;
+  status = zz9k_archive_alloc_stream_pair(ctx, ZZ9K_ALLOC_HOST_WINDOW,
+                                          &input, &decoded,
+                                          &pair_capacity, &failed_capacity);
+  if (status != ZZ9K_STATUS_OK) {
+    printf("alloc stream buffer pair failed: %s (%d), requested=%lu bytes\n",
+           zz9k_status_name(status), status,
+           (unsigned long)failed_capacity);
+    zz9k_archive_print_window_overflow(failed_capacity, status);
+    zz9k_archive_print_shared_diag(ctx, "stream buffer pair",
+                                   failed_capacity);
+    goto out;
   }
 
-  chunk = (uint8_t *)malloc((size_t)output_capacity);
+  chunk = (uint8_t *)malloc((size_t)pair_capacity);
   if (!chunk) {
     printf("stream chunk allocation failed\n");
     goto out;
@@ -6186,8 +6222,8 @@ static int zz9k_archive_decompress_feed_file_parts_core(
   FILE *input_file = 0;
   FILE *file = 0;
   uint8_t *chunk = 0;
-  uint32_t input_capacity = zz9k_archive_stream_chunk;
-  uint32_t output_capacity = zz9k_archive_stream_chunk;
+  uint32_t pair_capacity = 0U;
+  uint32_t failed_capacity = 0U;
   uint32_t input_offset = 0U;
   uint32_t total_input;
   uint32_t total_written = 0U;
@@ -6238,54 +6274,27 @@ static int zz9k_archive_decompress_feed_file_parts_core(
     goto out;
   }
 
-  while (input_capacity >= ZZ9K_ARCHIVE_STREAM_MIN_CHUNK) {
-    status = zz9k_alloc_shared(ctx, input_capacity, 16U,
-                               ZZ9K_ALLOC_HOST_WINDOW, &input);
-    if (status == ZZ9K_STATUS_OK) {
-      break;
+  status = zz9k_archive_alloc_stream_pair(
+      ctx,
+      (write_output || on_chunk) ? ZZ9K_ALLOC_HOST_WINDOW
+                                 : ZZ9K_ALLOC_CARD_ONLY,
+      &input, &decoded, &pair_capacity, &failed_capacity);
+  if (status != ZZ9K_STATUS_OK) {
+    if (failure_status) {
+      *failure_status = status;
     }
-    if (!zz9k_archive_alloc_shrink_retry(status) ||
-        input_capacity == ZZ9K_ARCHIVE_STREAM_MIN_CHUNK) {
-      if (failure_status) {
-        *failure_status = status;
-      }
-      printf("alloc file stream input failed: %s (%d), requested=%lu bytes\n",
-             zz9k_status_name(status), status,
-             (unsigned long)input_capacity);
-      zz9k_archive_print_window_overflow(input_capacity, status);
-      zz9k_archive_print_shared_diag(ctx, "file stream input",
-                                     input_capacity);
-      goto out;
-    }
-    input_capacity /= 2U;
-  }
-  while (output_capacity >= ZZ9K_ARCHIVE_STREAM_MIN_CHUNK) {
-    status = zz9k_alloc_shared(
-        ctx, output_capacity, 16U,
-        (write_output || on_chunk) ? ZZ9K_ALLOC_HOST_WINDOW
-                                   : ZZ9K_ALLOC_CARD_ONLY,
-        &decoded);
-    if (status == ZZ9K_STATUS_OK) {
-      break;
-    }
-    if (!zz9k_archive_alloc_shrink_retry(status) ||
-        output_capacity == ZZ9K_ARCHIVE_STREAM_MIN_CHUNK) {
-      if (failure_status) {
-        *failure_status = status;
-      }
-      printf("alloc file stream output failed: %s (%d), requested=%lu bytes\n",
-             zz9k_status_name(status), status,
-             (unsigned long)output_capacity);
-      zz9k_archive_print_window_overflow(output_capacity, status);
-      zz9k_archive_print_shared_diag(ctx, "file stream output",
-                                     output_capacity);
-      goto out;
-    }
-    output_capacity /= 2U;
+    printf("alloc file stream buffer pair failed: %s (%d), "
+           "requested=%lu bytes\n",
+           zz9k_status_name(status), status,
+           (unsigned long)failed_capacity);
+    zz9k_archive_print_window_overflow(failed_capacity, status);
+    zz9k_archive_print_shared_diag(ctx, "file stream buffer pair",
+                                   failed_capacity);
+    goto out;
   }
 
   if (write_output || on_chunk) {
-    chunk = (uint8_t *)malloc((size_t)output_capacity);
+    chunk = (uint8_t *)malloc((size_t)pair_capacity);
     if (!chunk) {
       printf("file stream chunk allocation failed\n");
       goto out;
