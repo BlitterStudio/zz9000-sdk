@@ -1069,6 +1069,11 @@ int zz9k_completion_irq_supported(ZZ9KContext *ctx)
   return ctx && (ctx->capability_bits & ZZ9K_CAP_IRQ_COMPLETION) != 0U;
 }
 
+int zz9k_shared_heap_board_visible(const ZZ9KContext *ctx)
+{
+	return ctx && ctx->board.zorro_version != 2U;
+}
+
 int zz9k_interrupt_status(ZZ9KContext *ctx, uint16_t *status)
 {
   if (!ctx || !status) {

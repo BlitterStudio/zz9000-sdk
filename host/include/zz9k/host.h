@@ -157,6 +157,13 @@ uint32_t zz9k_idle_backoff_limit(uint32_t ticks);
 int zz9k_query_caps(ZZ9KContext *ctx, ZZ9KCaps *caps);
 int zz9k_query_aperture_layout(ZZ9KContext *ctx,
                                ZZ9KApertureLayout *layout);
+/* True when zz9k_alloc_shared() without ZZ9K_ALLOC_HOST_WINDOW or
+ * ZZ9K_ALLOC_CARD_ONLY can return CPU-visible memory on this board. On
+ * Zorro II the default shared heap lies outside the aperture, so such
+ * allocations always fail with ZZ9K_STATUS_INTERNAL_ERROR after being
+ * freed; diagnostic tools call this to explain the failure instead of
+ * printing a bare status (see docs/zz9k-zorro2-services.md). */
+int zz9k_shared_heap_board_visible(const ZZ9KContext *ctx);
 
 /* True when [offset, offset+length) lies inside the layout's
  * aperture and intersects none of the five reported regions -- the
