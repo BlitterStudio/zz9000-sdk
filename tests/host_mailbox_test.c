@@ -437,6 +437,35 @@ static int test_completion_irq_supported_tracks_capability(void)
   return 0;
 }
 
+static int test_shared_heap_board_visible_tracks_zorro_version(void)
+{
+  struct TestMailbox mailbox;
+  ZZ9KContext *ctx;
+  ZZ9KBoard board;
+
+  if (zz9k_shared_heap_board_visible(0)) return 1;
+
+  init_mailbox(&mailbox);
+  memset(&board, 0, sizeof(board));
+  board.zorro_version = 2U;
+  if (zz9k_attach_mailbox(&ctx, &board, &mailbox.descriptor, 0, 0) !=
+      ZZ9K_STATUS_OK) {
+    return 2;
+  }
+  if (zz9k_shared_heap_board_visible(ctx)) return 3;
+  zz9k_close(ctx);
+
+  board.zorro_version = 3U;
+  if (zz9k_attach_mailbox(&ctx, &board, &mailbox.descriptor, 0, 0) !=
+      ZZ9K_STATUS_OK) {
+    return 4;
+  }
+  if (!zz9k_shared_heap_board_visible(ctx)) return 5;
+
+  zz9k_close(ctx);
+  return 0;
+}
+
 static int test_query_caps_roundtrips_through_core_service(void)
 {
   struct TestMailbox mailbox;
@@ -2929,6 +2958,9 @@ int main(void)
 
   result = test_completion_irq_supported_tracks_capability();
   if (result) return 45 + result;
+
+  result = test_shared_heap_board_visible_tracks_zorro_version();
+  if (result) return 47 + result;
 
   result = test_query_caps_roundtrips_through_core_service();
   if (result) return 50 + result;

@@ -48,7 +48,7 @@ free, largest-block, and invalid allocation counters.
 | Accelerated `amissl.library` | Yes | Yes | X25519, P-256 ECDHE, P-256 ECDSA verify, RSA-2048 PKCS#1/SHA-256 verify, AES-GCM, and ChaCha20-Poly1305 use persistent exact-size host-window scratch. Provider open allocates a 32-byte probe to gate advertisement; if it fails, AmiSSL stays on its software provider. Other 16-byte-aligned slots grow lazily. A later allocation miss follows the operation's failure semantics: P-256 keygen/derive, ECDSA-P256 verify, RSA-2048 verify, and record crypto (AES-GCM and ChaCha20-Poly1305) fall back to software; X25519 is offload-or-fail and returns failure once advertised. |
 | `zz9k-view` streaming JPEG/PNG | Yes | Yes | Uses compact host-window staging. Image size is not limited to the heap because compressed data is streamed. |
 | `zz9k-picture.datatype` | Yes | Yes | Uses at most 24 KiB of compressed-input staging plus geometry-derived output tiles capped at 32 KiB. A row that cannot fit the tile cap rejects the accelerated DataType path without overrunning the window; fallback then depends on the caller's installed DataType selection. |
-| `zz9k-archive` streamed decode/test/extract | Yes | Yes | CPU-visible feed buffers are capped at 48 KiB combined. Large LHA batch arenas are bypassed and retain the per-member/software fallback chain. |
+| `zz9k-archive` streamed decode/test/extract | Yes | Yes | CPU-visible feed buffers are sized from the acknowledged host window: the combined cap is `min(48 KiB, host heap)`, split evenly between the input and output chunks, so a generation-2 profile (16 KiB heap) streams with 8 KiB chunks. The two chunks are allocated as one retry unit that shrinks in halves down to 4 KiB, so a window contended by another resident client degrades to a balanced smaller pair instead of failing the member; a terminal allocation failure names the window size alongside the shared-heap and host-window free/largest-block counters. Large LHA batch arenas are bypassed and retain the per-member/software fallback chain. |
 | ZZPlay MPEG-1 Program Stream video/PIP | No | Limited | Requires the 4 MiB profile and one full aligned YUY2 frame to fit the 224 KiB pool. 352x288 fits; 640x360 does not. P96 owns one fixed source allocation at a time. |
 | Arbitrary P96 offscreen bitmaps | No | No | The fixed pool is exposed only for the bounded PIP allocation; general offscreen allocation remains disabled. |
 | Zorro III Fast RAM or a Z3-sized shared heap | No | No | Neither facility can be reproduced usefully inside the Zorro II aperture. |
@@ -59,11 +59,15 @@ Zorro II host window. This includes `zz9k-smoke`, `zz9k-inflate`, `zz9k-mp3`,
 `zz9k-hash`, `zz9k-chacha`, `zz9k-aead`, and `zz9k-cryptobench`. Plain
 file-output `zz9k-jpeg <file>` belongs in the same diagnostic category: its
 streaming input uses `HOST_WINDOW`, but its non-framebuffer tile output uses
-the legacy default allocation. Their failure on Zorro II does not mean the
-adapted production client for the same service is broken. For example, qualify
-TLS with the accelerated AmiSSL provider, archive decoding with
-`zz9k-archive`, and MP3 with `mpega.library`, MHI, or ZZPlay rather than those
-generic allocation diagnostics.
+the legacy default allocation. On Zorro II, `zz9k-smoke`, `zz9k-inflate`,
+`zz9k-hash`, `zz9k-chacha`, `zz9k-aead`, and `zz9k-cryptobench` print an
+explanatory note at startup, before their accelerated sections fail;
+`zz9k-mp3` explains at the failing step and falls back to streaming decode,
+and `zz9k-jpeg` reports allocator diagnostics at the failure. Their failure on
+Zorro II does not mean the adapted production client for the same service is
+broken. For example, qualify TLS with the accelerated AmiSSL provider, archive
+decoding with `zz9k-archive`, and MP3 with `mpega.library`, MHI, or ZZPlay
+rather than those generic allocation diagnostics.
 
 ## Qualification status
 

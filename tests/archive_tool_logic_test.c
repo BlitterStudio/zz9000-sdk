@@ -6347,6 +6347,97 @@ static int test_lha_method_to_compression_mapper(void)
   return 0;
 }
 
+/* Zorro II generation-2 regression (zz9000-drivers issue #88): the stream
+ * budget must shrink to the acknowledged host-window heap instead of
+ * requesting the fixed 48 KiB-era chunks that firmware rejects with
+ * BAD_REQUEST on a 16 KiB window. */
+static int test_stream_budget_follows_host_window(void)
+{
+  if (zz9k_archive_stream_budget(0U) != ZZ9K_ARCHIVE_STREAM_HOST_BUDGET) {
+    return 1;
+  }
+  if (zz9k_archive_stream_budget(64U * 1024U) !=
+      ZZ9K_ARCHIVE_STREAM_HOST_BUDGET) {
+    return 2;
+  }
+  if (zz9k_archive_stream_budget(16384U) != 16384U) {
+    return 3;
+  }
+  if (zz9k_archive_stream_budget(8192U) != 8192U) {
+    return 4;
+  }
+  return 0;
+}
+
+static int test_stream_budget_chunk_floors_at_minimum(void)
+{
+  if (zz9k_archive_stream_budget_chunk(ZZ9K_ARCHIVE_STREAM_HOST_BUDGET) !=
+      ZZ9K_ARCHIVE_STREAM_CHUNK) {
+    return 1;
+  }
+  if (zz9k_archive_stream_budget_chunk(16384U) != 8192U) {
+    return 2;
+  }
+  if (zz9k_archive_stream_budget_chunk(8192U) !=
+      ZZ9K_ARCHIVE_STREAM_MIN_CHUNK) {
+    return 3;
+  }
+  if (zz9k_archive_stream_budget_chunk(4096U) !=
+      ZZ9K_ARCHIVE_STREAM_MIN_CHUNK) {
+    return 4;
+  }
+  return 0;
+}
+
+/* BAD_REQUEST from firmware means the request exceeds the negotiated host
+ * window, so the shrink loops must retry with half the request instead of
+ * failing the member outright (the issue-88 symptom). */
+static int test_alloc_shrink_retry_statuses(void)
+{
+  if (!zz9k_archive_alloc_shrink_retry(ZZ9K_STATUS_NO_MEMORY)) {
+    return 1;
+  }
+  if (!zz9k_archive_alloc_shrink_retry(ZZ9K_STATUS_BAD_REQUEST)) {
+    return 2;
+  }
+  if (zz9k_archive_alloc_shrink_retry(ZZ9K_STATUS_UNSUPPORTED)) {
+    return 3;
+  }
+  if (zz9k_archive_alloc_shrink_retry(ZZ9K_STATUS_INTERNAL_ERROR)) {
+    return 4;
+  }
+  if (zz9k_archive_alloc_shrink_retry(ZZ9K_STATUS_TIMEOUT)) {
+    return 5;
+  }
+  return 0;
+}
+
+/* The feed pair retries as one unit only above the minimum chunk: a
+ * contended host window must degrade to a balanced smaller pair rather
+ * than failing after the input already consumed the free space (PR #35
+ * review finding). */
+static int test_pair_shrink_retry_gates_on_minimum(void)
+{
+  if (!zz9k_archive_pair_shrink_retry(ZZ9K_STATUS_NO_MEMORY, 8192U)) {
+    return 1;
+  }
+  if (!zz9k_archive_pair_shrink_retry(ZZ9K_STATUS_BAD_REQUEST, 4096U +
+                                                        1U)) {
+    return 2;
+  }
+  if (zz9k_archive_pair_shrink_retry(ZZ9K_STATUS_NO_MEMORY,
+                                     ZZ9K_ARCHIVE_STREAM_MIN_CHUNK)) {
+    return 3;
+  }
+  if (zz9k_archive_pair_shrink_retry(ZZ9K_STATUS_UNSUPPORTED, 8192U)) {
+    return 4;
+  }
+  if (zz9k_archive_pair_shrink_retry(ZZ9K_STATUS_INTERNAL_ERROR, 8192U)) {
+    return 5;
+  }
+  return 0;
+}
+
 int main(void)
 {
   int rc;
@@ -6878,6 +6969,26 @@ int main(void)
   if (rc) {
     printf("test_lha_method_to_compression_mapper failed: %d\n", rc);
     return 430 + rc;
+  }
+  rc = test_stream_budget_follows_host_window();
+  if (rc) {
+    printf("test_stream_budget_follows_host_window failed: %d\n", rc);
+    return 440 + rc;
+  }
+  rc = test_stream_budget_chunk_floors_at_minimum();
+  if (rc) {
+    printf("test_stream_budget_chunk_floors_at_minimum failed: %d\n", rc);
+    return 450 + rc;
+  }
+  rc = test_alloc_shrink_retry_statuses();
+  if (rc) {
+    printf("test_alloc_shrink_retry_statuses failed: %d\n", rc);
+    return 460 + rc;
+  }
+  rc = test_pair_shrink_retry_gates_on_minimum();
+  if (rc) {
+    printf("test_pair_shrink_retry_gates_on_minimum failed: %d\n", rc);
+    return 470 + rc;
   }
   return 0;
 }

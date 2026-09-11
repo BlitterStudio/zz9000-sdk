@@ -93,9 +93,22 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "zz9k_decompress_stream_close");
   ok &= expect_contains(source,
                         "#define ZZ9K_ARCHIVE_STREAM_HOST_BUDGET (48U * 1024U)");
-  ok &= expect_contains(source, "ZZ9K_ALLOC_HOST_WINDOW, &input");
-  ok &= expect_contains(source, "ZZ9K_ALLOC_HOST_WINDOW, &decoded");
   ok &= expect_contains(source, ": ZZ9K_ALLOC_CARD_ONLY");
+  ok &= expect_contains(source, "zz9k_archive_alloc_stream_pair(ctx, ZZ9K_ALLOC_HOST_WINDOW,");
+  ok &= expect_contains(source, "ZZ9K_ALLOC_HOST_WINDOW, input");
+  ok &= expect_contains(source, "zz9k_archive_stream_budget");
+  ok &= expect_contains(source, "zz9k_archive_stream_budget_chunk");
+  ok &= expect_contains(source, "zz9k_archive_alloc_shrink_retry");
+  ok &= expect_contains(source, "caps.host_window_heap_size");
+  ok &= expect_contains(source, "zz9k_archive_print_window_overflow");
+  ok &= expect_contains(source, "exceeds the negotiated Zorro II host window");
+  ok &= expect_contains(source, "zz9k_archive_alloc_stream_pair");
+  ok &= expect_contains(source, "zz9k_archive_pair_shrink_retry");
+  ok &= expect_contains(source,
+                        "alloc stream buffer pair failed");
+  ok &= expect_contains(source,
+                        "alloc file stream buffer pair failed");
+  ok &= expect_contains(source, "Host window total");
   ok &= expect_contains(source, "zz9k_archive_decompress_stream_to_file");
   ok &= expect_contains(source, "zz9k_archive_decompress_feed_stream_to_file");
   ok &= expect_contains(source,

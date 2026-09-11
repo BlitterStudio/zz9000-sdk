@@ -1227,6 +1227,23 @@ int main(int argc, char **argv)
     offload_kib[i] = 0U;
   }
 
+  /* Open and probe the board before the software sweep: the sweep can run
+   * for a minute or more, and the Zorro II limitation note must be the
+   * first thing the user sees, not a post-mortem. A failed open (plain
+   * host run) keeps the tool on its software-only path below. */
+  status = zz9k_open(&ctx);
+  if (status == ZZ9K_STATUS_OK) {
+    status = zz9k_query_caps(ctx, &caps);
+  }
+  if (status == ZZ9K_STATUS_OK &&
+      (caps.capability_bits & ZZ9K_CAP_CRYPTO) != 0U &&
+      !zz9k_shared_heap_board_visible(ctx)) {
+    printf("note: this diagnostic stages its offload buffers in the default\n"
+           "shared heap, which is not CPU-visible on Zorro II. The offload\n"
+           "sections cannot run here; qualify crypto offload with the\n"
+           "accelerated AmiSSL provider instead (docs/zz9k-zorro2-services.md).\n");
+  }
+
   printf("ChaCha20-Poly1305 break-even sweep (%lu iterations/size)\n",
          (unsigned long)iterations);
   printf("%6s  %10s  %10s\n", "bytes", "soft KiB/s", "off KiB/s");
@@ -1236,10 +1253,6 @@ int main(int argc, char **argv)
         &timer, sizes[i], iterations, plaintext, ciphertext);
   }
 
-  status = zz9k_open(&ctx);
-  if (status == ZZ9K_STATUS_OK) {
-    status = zz9k_query_caps(ctx, &caps);
-  }
   if (status == ZZ9K_STATUS_OK &&
       (caps.capability_bits & ZZ9K_CAP_CRYPTO) != 0U) {
     if (zz9k_cryptobench_run_offload_sweep(ctx, &timer, iterations, sizes,

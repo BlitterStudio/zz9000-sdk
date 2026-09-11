@@ -93,6 +93,11 @@ int main(void)
     exit_code = 3;
     goto cleanup;
   }
+  if (!zz9k_shared_heap_board_visible(ctx)) {
+    printf("note: this diagnostic stages its buffers in the default shared\n"
+           "heap, which is not CPU-visible on Zorro II; its accelerated\n"
+           "sections cannot run here (docs/zz9k-zorro2-services.md)\n");
+  }
 
   status = zz9k_query_service(ctx, ZZ9K_SERVICE_CRYPTO, &service);
   if (status != ZZ9K_STATUS_OK) {

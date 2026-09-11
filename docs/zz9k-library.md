@@ -964,10 +964,13 @@ heap. Current firmware supports `ZZ9K_COMPRESSION_LZMA_ALONE` for LZMA-alone
 files and simple `.7z` LZMA entries, plus `ZZ9K_COMPRESSION_LZMA2` for simple
 `.7z` LZMA2 entries.
 
-`zz9k-archive` caps its two CPU-visible feed buffers to a combined 48 KiB and
-uses a card-only output buffer for verify-only streams. Large LHA batch arenas
-are bypassed on Zorro 2; those jobs retain the existing per-member/software
-fallback chain.
+`zz9k-archive` sizes its two CPU-visible feed buffers from the acknowledged
+host window: their combined budget is `min(48 KiB, host heap)`, split evenly
+between input and output, so a generation-2 Zorro II layout (16 KiB heap)
+streams with 8 KiB chunks. Requests that do not fit shrink in halves down to
+4 KiB. Verify-only streams use a card-only output buffer. Large LHA batch
+arenas are bypassed on Zorro 2; those jobs retain the existing
+per-member/software fallback chain.
 
 Firmware that also advertises `ZZ9K_SERVICE_FLAG_CODEC_DECOMPRESS_FEED` adds
 `ZZ9K_OP_DECOMPRESS_STREAM_FEED` and `zz9k_decompress_stream_feed()`. A caller
