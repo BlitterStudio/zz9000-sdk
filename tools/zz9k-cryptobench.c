@@ -1242,6 +1242,12 @@ int main(int argc, char **argv)
   }
   if (status == ZZ9K_STATUS_OK &&
       (caps.capability_bits & ZZ9K_CAP_CRYPTO) != 0U) {
+    if (!zz9k_shared_heap_board_visible(ctx)) {
+      printf("note: this diagnostic stages its offload buffers in the default\n"
+             "shared heap, which is not CPU-visible on Zorro II. The offload\n"
+             "sections cannot run here; qualify crypto offload with the\n"
+             "accelerated AmiSSL provider instead (docs/zz9k-zorro2-services.md).\n");
+    }
     if (zz9k_cryptobench_run_offload_sweep(ctx, &timer, iterations, sizes,
                                            software_kib, offload_kib) != 0) {
       zz9k_close(ctx);
