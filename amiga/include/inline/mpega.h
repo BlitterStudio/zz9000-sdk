@@ -22,8 +22,8 @@ static __inline MPEGA_STREAM *__MPEGAOpenInline(char *stream_name,
   register char *mpega_a0 __asm("a0") = stream_name;
   register MPEGA_CTRL *mpega_a1 __asm("a1") = ctrl;
   __asm volatile("jsr -30(a6)"
-                 : "=r"(mpega_d0)
-                 : "r"(mpega_a6), "r"(mpega_a0), "r"(mpega_a1)
+                 : "=r"(mpega_d0), "+r"(mpega_a0), "+r"(mpega_a1)
+                 : "r"(mpega_a6)
                  : "cc", "memory", "d1");
   return mpega_d0;
 }
@@ -34,8 +34,8 @@ static __inline void __MPEGACloseInline(MPEGA_STREAM *mpds)
   register struct Library *mpega_a6 __asm("a6") = MPEGABase;
   register MPEGA_STREAM *mpega_a0 __asm("a0") = mpds;
   __asm volatile("jsr -36(a6)"
-                 :
-                 : "r"(mpega_a6), "r"(mpega_a0)
+                 : "+r"(mpega_a0)
+                 : "r"(mpega_a6)
                  : "cc", "memory", "d1", "a1");
 }
 #define MPEGA_close(mpds) __MPEGACloseInline((mpds))
@@ -48,8 +48,8 @@ static __inline LONG __MPEGADecodeFrameInline(
   register MPEGA_STREAM *mpega_a0 __asm("a0") = mpds;
   register WORD **mpega_a1 __asm("a1") = pcm;
   __asm volatile("jsr -42(a6)"
-                 : "=r"(mpega_d0)
-                 : "r"(mpega_a6), "r"(mpega_a0), "r"(mpega_a1)
+                 : "=r"(mpega_d0), "+r"(mpega_a0), "+r"(mpega_a1)
+                 : "r"(mpega_a6)
                  : "cc", "memory", "d1");
   return mpega_d0;
 }
@@ -63,8 +63,8 @@ static __inline LONG __MPEGASeekInline(MPEGA_STREAM *mpds,
   register struct Library *mpega_a6 __asm("a6") = MPEGABase;
   register MPEGA_STREAM *mpega_a0 __asm("a0") = mpds;
   __asm volatile("jsr -48(a6)"
-                 : "+r"(mpega_d0)
-                 : "r"(mpega_a6), "r"(mpega_a0)
+                 : "+r"(mpega_d0), "+r"(mpega_a0)
+                 : "r"(mpega_a6)
                  : "cc", "memory", "d1", "a1");
   return (LONG)mpega_d0;
 }
@@ -79,8 +79,8 @@ static __inline LONG __MPEGATimeInline(MPEGA_STREAM *mpds,
   register MPEGA_STREAM *mpega_a0 __asm("a0") = mpds;
   register ULONG *mpega_a1 __asm("a1") = ms_time_position;
   __asm volatile("jsr -54(a6)"
-                 : "=r"(mpega_d0)
-                 : "r"(mpega_a6), "r"(mpega_a0), "r"(mpega_a1)
+                 : "=r"(mpega_d0), "+r"(mpega_a0), "+r"(mpega_a1)
+                 : "r"(mpega_a6)
                  : "cc", "memory", "d1");
   return mpega_d0;
 }
@@ -93,8 +93,8 @@ static __inline LONG __MPEGAFindSyncInline(BYTE *buffer, LONG buffer_size)
   register struct Library *mpega_a6 __asm("a6") = MPEGABase;
   register BYTE *mpega_a0 __asm("a0") = buffer;
   __asm volatile("jsr -60(a6)"
-                 : "+r"(mpega_d0)
-                 : "r"(mpega_a6), "r"(mpega_a0)
+                 : "+r"(mpega_d0), "+r"(mpega_a0)
+                 : "r"(mpega_a6)
                  : "cc", "memory", "d1", "a1");
   return mpega_d0;
 }
@@ -108,8 +108,8 @@ static __inline LONG __MPEGAScaleInline(MPEGA_STREAM *mpds,
   register struct Library *mpega_a6 __asm("a6") = MPEGABase;
   register MPEGA_STREAM *mpega_a0 __asm("a0") = mpds;
   __asm volatile("jsr -66(a6)"
-                 : "+r"(mpega_d0)
-                 : "r"(mpega_a6), "r"(mpega_a0)
+                 : "+r"(mpega_d0), "+r"(mpega_a0)
+                 : "r"(mpega_a6)
                  : "cc", "memory", "d1", "a1");
   return mpega_d0;
 }

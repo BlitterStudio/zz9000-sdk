@@ -1,5 +1,5 @@
 /*
- * Source guard for Amiga inline LVO calls. Two invariants:
+ * Source guard for Amiga inline LVO calls. Three invariants:
  *
  * 1. GCC 14+ makes it a hard error for a register-asm operand to also
  *    appear in the clobber list of the same asm statement, so every
@@ -8,6 +8,12 @@
  *    so each asm statement must account for every scratch register
  *    either by binding it as an operand or by clobbering it — callers
  *    must never find a stale value left in one.
+ * 3. A scratch register that is bound as an operand must be bound
+ *    read-write ("+r"): an input-only binding tells GCC the asm
+ *    preserves the register, so GCC may keep using its pre-call value
+ *    after the jsr — which the library call has just trashed. (Verified
+ *    as a real miscompile with GCC 16.2.0b -O2 -mlra.) Registers the
+ *    library ABI preserves (d2-d7, a2-a5, a6) stay input-only.
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -57,10 +63,12 @@ static char *read_file(const char *path)
 }
 
 /* Collect the registers bound as operands in the statement text, from
- * constraint references like "r"(zz9k_a0). Register variables are named
+ * constraint references like "r"(zz9k_a0) or "+r"(zz9k_a0), recording
+ * whether each binding is read-write. Register variables are named
  * <prefix>_<reg>; bare parenthesised text like (a6) inside the asm
  * template has no underscore and is ignored. */
-static void collect_operand_regs(const char *text, int bound[16])
+static void collect_operand_regs(const char *text, int bound_rw[16],
+                                 int bound_ro[16])
 {
   const char *p = text;
 
@@ -68,6 +76,18 @@ static void collect_operand_regs(const char *text, int bound[16])
     char varname[64];
     size_t len = 0;
     const char *q;
+    int rw = 0;
+
+    /* the constraint string ends immediately before the operand paren:
+     * ..."r"(name)... / ..."+r"(name)... — for "+r" the '+' sits three
+     * characters before the paren (past 'r' and the closing quote) */
+    q = p;
+    while (q > text && (q[-1] == ' ' || q[-1] == '\t')) {
+      q--;
+    }
+    if (q > text + 2 && q[-1] == '"' && q[-3] == '+') {
+      rw = 1;
+    }
 
     p++;
     q = p;
@@ -80,7 +100,11 @@ static void collect_operand_regs(const char *text, int bound[16])
       char reg = q[1];
       int num = q[2] - '0';
       if ((reg == 'a' || reg == 'd') && num >= 0 && num <= 7) {
-        bound[num * 2 + (reg == 'd')] = 1;
+        if (rw) {
+          bound_rw[num * 2 + (reg == 'd')] = 1;
+        } else {
+          bound_ro[num * 2 + (reg == 'd')] = 1;
+        }
       }
     }
   }
@@ -126,16 +150,28 @@ static int is_clobber_line(const char *line)
   return is_constraint_line(line) && strchr(s, '(') == 0;
 }
 
+static const char *reg_name(int idx)
+{
+  static const char *names[16] = {
+    "a0", "d0", "a1", "d1", "a2", "d2", "a3", "d3",
+    "a4", "d4", "a5", "d5", "a6", "d6", "a7", "d7"
+  };
+  return names[idx];
+}
+
 int main(int argc, char **argv)
 {
   static const int scratch_d1 = 1 * 2 + 1;
   static const int scratch_a0 = 0 * 2 + 0;
   static const int scratch_a1 = 1 * 2 + 0;
+  static const int scratch[3] = {0, 0, 0}; /* unused size marker */
+  const int scratch_idx[3] = {scratch_a0, scratch_a1, scratch_d1};
   char *source;
   char *line;
   int ok = 1;
   int checked = 0;
 
+  (void)scratch;
   if (argc != 2) {
     printf("usage: %s <proto/zz9k.h>\n", argv[0]);
     return 2;
@@ -151,8 +187,10 @@ int main(int argc, char **argv)
   while (line != 0) {
     char *stmt[256];
     int n = 0;
-    int bound[16] = {0};
+    int bound_rw[16] = {0};
+    int bound_ro[16] = {0};
     int clobbered[16] = {0};
+    int i;
 
     if (strstr(line, "__asm volatile(") == 0) {
       line = strtok(0, "\n");
@@ -175,12 +213,11 @@ int main(int argc, char **argv)
     {
       char *joined;
       size_t len = 0;
-      int i;
 
       for (i = 0; i < n - 1; i++) {
         len += strlen(stmt[i]) + 1U;
       }
-      joined = (char *)malloc(len);
+      joined = (char *)malloc(len + 1U);
       if (!joined) {
         printf("out of memory\n");
         ok = 0;
@@ -191,29 +228,32 @@ int main(int argc, char **argv)
         strcat(joined, stmt[i]);
         strcat(joined, "\n");
       }
-      collect_operand_regs(joined, bound);
+      collect_operand_regs(joined, bound_rw, bound_ro);
       free(joined);
     }
     collect_clobber_regs(stmt[n - 1], clobbered);
 
-    if (bound[scratch_d1] && clobbered[scratch_d1]) {
-      printf("d1 bound as operand AND clobbered in one asm\n");
-      ok = 0;
-    }
-    if (bound[scratch_a0] && clobbered[scratch_a0]) {
-      printf("a0 bound as operand AND clobbered in one asm\n");
-      ok = 0;
-    }
-    if (bound[scratch_a1] && clobbered[scratch_a1]) {
-      printf("a1 bound as operand AND clobbered in one asm\n");
-      ok = 0;
-    }
-    if (!(bound[scratch_d1] || clobbered[scratch_d1]) ||
-        !(bound[scratch_a0] || clobbered[scratch_a0]) ||
-        !(bound[scratch_a1] || clobbered[scratch_a1])) {
-      printf("asm statement leaves a scratch register (d1/a0/a1) "
-             "neither bound nor clobbered\n");
-      ok = 0;
+    for (i = 0; i < 3; i++) {
+      int idx = scratch_idx[i];
+      int bound = bound_rw[idx] || bound_ro[idx];
+
+      if (bound && clobbered[idx]) {
+        printf("%s bound as operand AND clobbered in one asm\n",
+               reg_name(idx));
+        ok = 0;
+      }
+      if (bound_ro[idx] && !bound_rw[idx]) {
+        printf("%s bound input-only: the library call trashes it, but GCC "
+               "would treat it as preserved — bind it \"+r\"\n",
+               reg_name(idx));
+        ok = 0;
+      }
+      if (!(bound || clobbered[idx])) {
+        printf("asm statement leaves scratch register %s "
+               "neither bound nor clobbered\n",
+               reg_name(idx));
+        ok = 0;
+      }
     }
     checked++;
   }
