@@ -124,7 +124,8 @@ Useful public helper headers for narrow includes:
 ## Requirements
 
 For AmigaOS 3 tools, the supported local path is Docker with the
-`sacredbanana/amiga-compiler:m68k-amigaos` image, driven by the scripts above.
+`amigadev/crosstools:m68k-amigaos-gcc10` image (Bebbo GCC 16.2.0b), driven by
+the scripts above.
 
 ## Third-Party Code
 
