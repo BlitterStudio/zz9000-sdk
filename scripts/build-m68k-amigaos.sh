@@ -14,13 +14,8 @@ REPO_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 docker run --rm -v "$REPO_ROOT:/work" -w /work \
   -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" "$IMAGE" sh -c '
 set -e
-# LRA (-mlra) exists on Bebbo GCC 10+ only; the older 6.5.0b rejects it.
-LRA=
-if m68k-amigaos-gcc -mlra -x c -fsyntax-only /dev/null 2>/dev/null; then
-  LRA=-mlra
-fi
 mkdir -p build/m68k
-CFLAGS="-noixemul -Os $LRA -s -Iinclude -Ihost/include"
+CFLAGS="-noixemul -Os -s -Iinclude -Ihost/include"
 LIBCFLAGS="$CFLAGS -Iamiga/include"
 
 m68k-amigaos-gcc $CFLAGS -c host/src/zz9k_host.c -o build/m68k/zz9k_host.o
@@ -43,17 +38,17 @@ done
 LHA_OBJS="build/m68k/lha-bitio.o build/m68k/lha-crcio.o build/m68k/lha-dhuf.o build/m68k/lha-extract.o build/m68k/lha-huf.o build/m68k/lha-larc.o build/m68k/lha-maketbl.o build/m68k/lha-maketree.o build/m68k/lha-shuf.o build/m68k/lha-slide.o build/m68k/lha-zz9k_lha_unix.o build/m68k/lha-zz9k_lha_unix_support.o"
 ZZPLAY_SOURCES="tools/zzplay-ahi.c tools/zzplay-audio.c tools/zzplay-audio-clock.c tools/zzplay-ax.c tools/zzplay-core.c tools/zzplay-geometry.c tools/zzplay-launch.c tools/zzplay-media.c tools/zzplay-mhi.c tools/zzplay-mp3.c tools/zzplay-mp3-transport.c tools/zzplay-options.c tools/zzplay-path.c tools/zzplay-probe.c tools/zzplay-stats.c tools/zzplay-statuswin.c tools/zzplay-stream.c tools/zzplay-sync.c tools/zzplay-video.c tools/zzplay.c"
 
-m68k-amigaos-gcc -noixemul -nostartfiles -Os $LRA -s -Iinclude -Ihost/include -Iamiga/include \
+m68k-amigaos-gcc -noixemul -nostartfiles -Os -s -Iinclude -Ihost/include -Iamiga/include \
   build/m68k/zz9k_library_resident.o build/m68k/zz9k_library.o \
   build/m68k/zz9k_host.o -o build/zz9k.library
-m68k-amigaos-gcc -noixemul -nostartfiles -Os $LRA -s -Iinclude -Ihost/include -Iamiga/include \
+m68k-amigaos-gcc -noixemul -nostartfiles -Os -s -Iinclude -Ihost/include -Iamiga/include \
   amiga/mpega/mpega_resident.c -o build/mpega.library.zz9k
 # Drop-in runtime variant: override the library name. Use backslash-escaped
 # double-quotes here, never surrounding single-quotes: a single quote would
 # close the outer sh -c wrapper around this whole script body, the inner
 # double-quotes would be stripped, and gcc would get a bare token instead of a
 # string literal.
-m68k-amigaos-gcc -noixemul -nostartfiles -Os $LRA -s -Iinclude -Ihost/include -Iamiga/include \
+m68k-amigaos-gcc -noixemul -nostartfiles -Os -s -Iinclude -Ihost/include -Iamiga/include \
   -DMPEGA_LIBRARY_NAME=\"mpega.library\" \
   amiga/mpega/mpega_resident.c -o build/mpega.library
 
@@ -99,7 +94,7 @@ m68k-amigaos-gcc $CFLAGS -Itools build/m68k/zz9k_host.o build/m68k/zz9k-fb-commo
 m68k-amigaos-gcc $CFLAGS -Itools build/m68k/zz9k_host.o build/m68k/zz9k-fb-common.o build/m68k/zz9k-image-window.o build/m68k/zz9k-picture-viewer.o tools/zz9k-png.c -o build/zz9k-png
 m68k-amigaos-gcc $CFLAGS -Itools build/m68k/zz9k_host.o build/m68k/zz9k-fb-common.o build/m68k/zz9k-image-window.o build/m68k/zz9k-picture-viewer.o build/m68k/zz9k-jpeg-view.o build/m68k/zz9k-png-view.o tools/zz9k-view.c -o build/zz9k-view
 m68k-amigaos-gcc $LIBCFLAGS tools/zz9k-dtprobe.c -o build/zz9k-dtprobe
-m68k-amigaos-gcc -noixemul -nostartfiles -Os $LRA -s -Iinclude -Ihost/include -Iamiga/include -Itools \
+m68k-amigaos-gcc -noixemul -nostartfiles -Os -s -Iinclude -Ihost/include -Iamiga/include -Itools \
   build/m68k/zz9k_host.o build/m68k/zz9k-fb-common.o \
   build/m68k/zz9k-image-window-resident.o \
   amiga/datatypes/zz9k_picture_datatype.c -o build/zz9k-picture.datatype
