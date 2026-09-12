@@ -1,10 +1,9 @@
 /*
  * mpega.library compatibility resident.
  *
- * The resident can be built either as the side-by-side diagnostic
- * mpega.library.zz9k or as an exact-name mpega.library drop-in. The
- * installer ships the drop-in, and it implements the full public MPEGA
- * API: Open, Close, DecodeFrame, Seek, Time, FindSync and Scale.
+ * This is the ZZ9000-accelerated drop-in for the exact-name mpega.library.
+ * It implements the full public MPEGA API: Open, Close, DecodeFrame, Seek,
+ * Time, FindSync and Scale.
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -27,9 +26,7 @@
 #include "zz9k/shared.h"
 #include <proto/zz9k.h>
 
-#ifndef MPEGA_LIBRARY_NAME
-#define MPEGA_LIBRARY_NAME "mpega.library.zz9k"
-#endif /* MPEGA_LIBRARY_NAME */
+#define MPEGA_LIBRARY_NAME "mpega.library"
 
 #define MPEGA_LIBRARY_VERSION 2
 #define MPEGA_LIBRARY_REVISION 125

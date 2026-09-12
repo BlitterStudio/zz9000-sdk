@@ -95,7 +95,6 @@ decode_base64_file() {
 }
 
 copy_one "build/zz9k.library" "Libs/zz9k.library"
-copy_one "build/mpega.library.zz9k" "Libs/mpega.library.zz9k"
 copy_one "build/mpega.library" "Libs/mpega.library"
 
 copy_one "build/zz9k-info" "C/zz9k-info"

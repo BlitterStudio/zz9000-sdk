@@ -85,9 +85,9 @@ int main(int argc, char **argv)
   }
 
   ok = 1;
-  ok &= expect_contains(source, "#ifndef MPEGA_LIBRARY_NAME");
-  ok &= expect_contains(source, "#define MPEGA_LIBRARY_NAME \"mpega.library.zz9k\"");
-  ok &= expect_contains(source, "#endif /* MPEGA_LIBRARY_NAME */");
+  ok &= expect_contains(source,
+                        "#define MPEGA_LIBRARY_NAME \"mpega.library\"");
+  ok &= expect_not_contains(source, "mpega.library.zz9k");
   ok &= expect_contains(source, "\"$VER: \" MPEGA_LIBRARY_NAME");
   /* The identity must be derived from the version macros, never repeated as
    * a literal: lib_Revision and the $VER: string are the same identity read

@@ -61,6 +61,17 @@ static int expect_contains(const char *script, const char *script_name,
   return 0;
 }
 
+static int expect_not_contains(const char *script, const char *script_name,
+                               const char *needle)
+{
+  if (!strstr(script, needle)) {
+    return 1;
+  }
+
+  printf("%s: unexpected %s\n", script_name, needle);
+  return 0;
+}
+
 static int check_script(const char *path, const char *name)
 {
   char *script;
@@ -116,7 +127,7 @@ static int check_script(const char *path, const char *name)
                           "copy_one \"build/mpega.library\" "
                           "\"Libs/mpega.library\"");
   }
-  ok &= expect_contains(script, name, "build/mpega.library.zz9k");
+  ok &= expect_not_contains(script, name, "mpega.library.zz9k");
   ok &= expect_contains(script, name, "build/zz9k-jpeg");
   ok &= expect_contains(script, name, "build/zz9k-png");
   ok &= expect_contains(script, name, "build/zz9k-view");

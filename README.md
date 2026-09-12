@@ -73,8 +73,7 @@ or from a POSIX shell:
 The package is written to `build/package/amigaos3`. It contains:
 
 - `Libs/zz9k.library`
-- `Libs/mpega.library` as the runtime drop-in candidate, plus
-  `Libs/mpega.library.zz9k` for side-by-side diagnostics
+- `Libs/mpega.library` as the accelerated exact-name drop-in
 - CLI tools such as `zz9k-info`, `zz9k-services`, `zz9k-bench`,
   `zz9k-surfaceops`, `zz9k-mp3`, `zz9k-mpega-smoke`, `zz9k-jpeg`, `zz9k-png`,
   `zz9k-view`, `zzplay`, `zz9k-hash`, `zz9k-chacha`, `zz9k-aead`, and

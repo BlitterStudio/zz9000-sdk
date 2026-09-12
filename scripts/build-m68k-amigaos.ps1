@@ -39,9 +39,6 @@ m68k-amigaos-gcc -noixemul -nostartfiles -Os -s -Iinclude -Ihost/include -Iamiga
   build/m68k/zz9k_library_resident.o build/m68k/zz9k_library.o \
   build/m68k/zz9k_host.o -o build/zz9k.library
 m68k-amigaos-gcc -noixemul -nostartfiles -Os -s -Iinclude -Ihost/include -Iamiga/include \
-  amiga/mpega/mpega_resident.c -o build/mpega.library.zz9k
-m68k-amigaos-gcc -noixemul -nostartfiles -Os -s -Iinclude -Ihost/include -Iamiga/include \
-  -DMPEGA_LIBRARY_NAME='"mpega.library"' \
   amiga/mpega/mpega_resident.c -o build/mpega.library
 
 m68k-amigaos-gcc $LIBCFLAGS tools/zz9k-libtest.c -o build/zz9k-libtest

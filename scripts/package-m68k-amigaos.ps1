@@ -80,7 +80,6 @@ function Decode-Base64File {
 }
 
 Copy-One "build/zz9k.library" "Libs/zz9k.library"
-Copy-One "build/mpega.library.zz9k" "Libs/mpega.library.zz9k"
 Copy-One "build/mpega.library" "Libs/mpega.library"
 
 Copy-One "build/zz9k-info" "C/zz9k-info"
