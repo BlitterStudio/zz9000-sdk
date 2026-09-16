@@ -2302,8 +2302,9 @@ int zz9k_jpeg_decode_viewer_image(ZZ9KContext *ctx,
 		       (unsigned long)result.output_format);
 		goto cleanup;
 	}
-	if (result.tile_width != decode_width ||
-	    result.tile_height != decode_height) {
+	if (result.tile_width == 0U || result.tile_height == 0U ||
+	    result.tile_width > decoded_surface.width ||
+	    result.tile_height > decoded_surface.height) {
 		printf("zz9k-view: unexpected JPEG surface output %lu x %lu "
 		       "for surface %lu x %lu\n",
 		       (unsigned long)result.tile_width,
@@ -2314,7 +2315,7 @@ int zz9k_jpeg_decode_viewer_image(ZZ9KContext *ctx,
 	}
 	output_width = result.tile_width;
 	output_height = result.tile_height;
-	if (!zz9k_surface_layout(decode_width, decode_height, output_format,
+	if (!zz9k_surface_layout(output_width, output_height, output_format,
 	                         &expected_output_pitch,
 	                         &expected_output_bytes)) {
 		printf("zz9k-view: JPEG decoded output is too large\n");
