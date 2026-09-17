@@ -198,6 +198,7 @@ typedef struct ZZ9KPictureInstance {
   uint8_t png_alpha_known;
   uint8_t png_has_alpha;
   uint8_t flatten_png_alpha;
+  uint8_t png_interlaced;
   ZZ9KPicturePngPalette png_palette;
 } ZZ9KPictureInstance;
 
@@ -974,6 +975,7 @@ static int zz9k_picture_read_png_metadata(ZZ9KPictureSource *source,
                                           uint32_t *out_width,
                                           uint32_t *out_height,
                                           int *has_alpha,
+                                          uint8_t *out_interlace,
                                           ZZ9KPicturePngPalette *palette)
 {
   static const uint8_t signature[8] = {
@@ -1014,6 +1016,9 @@ static int zz9k_picture_read_png_metadata(ZZ9KPictureSource *source,
   }
 
   color_type = header[25];
+  if (out_interlace) {
+    *out_interlace = header[28] != 0U ? 1U : 0U;
+  }
   *has_alpha = (color_type & 4U) != 0U;
   if (*has_alpha) {
     return 1;
@@ -1077,7 +1082,8 @@ static int zz9k_picture_read_png_dimensions(ZZ9KPictureSource *source,
                                             uint32_t *out_width,
                                             uint32_t *out_height)
 {
-  return zz9k_picture_read_png_metadata(source, out_width, out_height, 0, 0);
+  return zz9k_picture_read_png_metadata(source, out_width, out_height,
+                                        0, 0, 0);
 }
 
 static int zz9k_picture_read_png_metadata_with_alpha(
@@ -1085,10 +1091,11 @@ static int zz9k_picture_read_png_metadata_with_alpha(
     uint32_t *out_width,
     uint32_t *out_height,
     int *has_alpha,
+    uint8_t *out_interlace,
     ZZ9KPicturePngPalette *palette)
 {
   return zz9k_picture_read_png_metadata(source, out_width, out_height,
-                                        has_alpha, palette);
+                                        has_alpha, out_interlace, palette);
 }
 
 static int zz9k_picture_seek_begin(ZZ9KPictureSource *source);
@@ -1107,7 +1114,7 @@ static int zz9k_picture_read_png_alpha_flag(ZZ9KPictureSource *source,
   width = 0U;
   height = 0U;
   return zz9k_picture_read_png_metadata_with_alpha(
-      source, &width, &height, has_alpha, 0);
+      source, &width, &height, has_alpha, 0, 0);
 }
 
 static int zz9k_picture_png_has_alpha(ZZ9KPictureSource *source,
@@ -1152,6 +1159,7 @@ static int zz9k_picture_read_dimensions(ZZ9KPictureSource *source,
                                         uint32_t *width,
                                         uint32_t *height,
                                         int *png_has_alpha,
+                                        uint8_t *png_interlace,
                                         ZZ9KPicturePngPalette *palette)
 {
   LONG original_pos;
@@ -1178,7 +1186,7 @@ static int zz9k_picture_read_dimensions(ZZ9KPictureSource *source,
     return 0;
   }
   if (zz9k_picture_read_png_metadata_with_alpha(
-          source, width, height, png_has_alpha, palette)) {
+          source, width, height, png_has_alpha, png_interlace, palette)) {
     zz9k_picture_restore_pos(source, original_pos);
     *codec = ZZ9K_PICTURE_CODEC_PNG;
     return 1;
@@ -6868,7 +6876,21 @@ static int zz9k_picture_decode_to_datatype_pixels(
   target.output_bpp = tile_bpp;
   zz9k_picture_trace("decode: datatype before tile layout");
   if (instance->codec == ZZ9K_PICTURE_CODEC_PNG) {
-    if (!zz9k_picture_choose_png_full_datatype_tile_layout(
+    if (!instance->png_interlaced) {
+      /* Non-interlaced rows stream strictly in order, so a JPEG-style
+       * partial-height tile works and the decode stays bounded by the
+       * tile size instead of the whole image (the shared heap cannot
+       * hold a full-height tile for large sources). Interlaced Adam7
+       * passes revisit rows out of order and still need a full-height
+       * tile on the firmware side. */
+      if (!zz9k_picture_choose_datatype_tile_layout(
+              instance->width, tile_format, tile_bpp,
+              &tile_max_rows, &tile_target_bytes,
+              &tile_rows, &tile_pitch, &tile_bytes)) {
+        failure = "decode: datatype png tile layout failed";
+        goto cleanup;
+      }
+    } else if (!zz9k_picture_choose_png_full_datatype_tile_layout(
             instance->width, instance->height, tile_bpp,
             &tile_max_rows, &tile_target_bytes,
             &tile_rows, &tile_pitch, &tile_bytes)) {
@@ -7351,7 +7373,7 @@ static int zz9k_picture_load_metadata(Class *cl,
   uint32_t height;
   ZZ9KPictureRenderMode render_mode;
   int png_has_alpha;
-
+  uint8_t png_interlace;
   zz9k_picture_source_reset(&source);
   codec = ZZ9K_PICTURE_CODEC_UNKNOWN;
   memset(&palette, 0, sizeof(palette));
@@ -7359,7 +7381,7 @@ static int zz9k_picture_load_metadata(Class *cl,
   width = 0U;
   height = 0U;
   render_mode = ZZ9K_PICTURE_RENDER_MODE_DATATYPE;
-  png_has_alpha = 0;
+  png_interlace = 0U;
 
   zz9k_picture_trace_reset();
   if (!object || !instance || !zz9k_picture_get_source(object, &source)) {
@@ -7369,7 +7391,8 @@ static int zz9k_picture_load_metadata(Class *cl,
   zz9k_picture_capture_object_name(object, instance);
 
   if (!zz9k_picture_read_dimensions(
-          &source, &codec, &width, &height, &png_has_alpha, &palette)) {
+          &source, &codec, &width, &height, &png_has_alpha,
+          &png_interlace, &palette)) {
     zz9k_picture_trace("metadata: dimension read failed");
     SetIoErr(DTERROR_INVALID_DATA);
     return 0;
@@ -7399,6 +7422,8 @@ static int zz9k_picture_load_metadata(Class *cl,
   instance->png_alpha_known =
       codec == ZZ9K_PICTURE_CODEC_PNG ? 1U : 0U;
   instance->png_has_alpha = png_has_alpha ? 1U : 0U;
+  instance->png_interlaced =
+      codec == ZZ9K_PICTURE_CODEC_PNG ? png_interlace : 0U;
   memset(&instance->png_palette, 0, sizeof(instance->png_palette));
   if (codec == ZZ9K_PICTURE_CODEC_PNG && palette.present) {
     instance->png_palette = palette;
