@@ -28,21 +28,26 @@
 #include <sys/types.h>
 #endif
 
-/* Ctrl-C checkpoint (Amiga): checks AND consumes SIGBREAKF_CTRL_C, the
-   standard Workbench break signal. Long-running phases call this between
-   work units so an interrupt stops the tool cleanly at a member or chunk
-   boundary instead of aborting a board decode mid-flight (whose
-   CANCELLED status the decode paths must never treat as a cue to fall
-   back and continue). Non-Amiga hosts have no equivalent and never
-   cancel. */
+/* Ctrl-C checkpoint (Amiga): observes AND consumes SIGBREAKF_CTRL_C, the
+   standard Workbench break signal, and LATCHES it -- CheckSignal is
+   one-shot, so without a latch the first checkpoint to see the break
+   (say, the board-decode abort guard) would consume it and the walk
+   would keep extracting. Long-running phases call this between work
+   units; once latched, every checkpoint reports cancelled until the run
+   unwinds. zz9k_archive_run clears the latch for each invocation. */
+static int zz9k_archive_cancel_latched;
+
 static int zz9k_archive_cancelled(void)
 {
 #if defined(__amigaos__)
-  return CheckSignal(SIGBREAKF_CTRL_C) != 0L;
-#else
-  return 0;
+  if (!zz9k_archive_cancel_latched &&
+      CheckSignal(SIGBREAKF_CTRL_C) != 0L) {
+    zz9k_archive_cancel_latched = 1;
+  }
 #endif
+  return zz9k_archive_cancel_latched;
 }
+
 
 #define ZZ9K_ARCHIVE_MAX_NAME 256U
 #define ZZ9K_ARCHIVE_MAX_PAX_DATA 65536U
@@ -11307,6 +11312,7 @@ static int zz9k_archive_run(const char *command, const char *archive_path,
   int status;
   int ok = 0;
 
+  zz9k_archive_cancel_latched = 0;
   memset(&service, 0, sizeof(service));
   if (!zz9k_archive_probe_file(archive_path, probe, sizeof(probe),
                                &probe_length, &file_length)) {
