@@ -5612,6 +5612,84 @@ static void grow_stream_cb(const ZZ9KArchiveEntry *entry, void *user)
   }
   ctx->count++;
 }
+/*
+ * A member whose basename is near the filesystem component limit must
+ * still extract through the staged-write path: the staging suffix is
+ * appended to a TRIMMED component, never to the full near-limit name
+ * (which would make every probe ENAMETOOLONG and the open fail).
+ */
+static int test_staged_extract_handles_long_basename(void)
+{
+  char name[120];
+  char out_path[256];
+  const char *path = "archive_tool_longname.tmp";
+  const char *out_dir = "archive_tool_longname_out";
+  ZZ9KServiceInfo service;
+  ZZ9KContext *ctx = 0;
+  uint8_t lha[512];
+  uint8_t actual[5];
+  FILE *file = 0;
+  uint32_t lha_len;
+  int attempted = 0;
+  int codec_ready = 0;
+  int rc = 0;
+  uint32_t i;
+
+  memset(name, 'L', 100U); /* > the 96-byte staging trim */
+  name[100] = '\0';
+  if (!make_lha_lh0_named(name, "data", lha, &lha_len)) return 1;
+  if (!write_test_file(path, lha, lha_len)) return 2;
+
+  memset(&service, 0, sizeof(service));
+  sprintf(out_path, "%s/%s", out_dir, name);
+  remove(out_path);
+  remove(out_dir);
+  if (!zz9k_archive_handle_lha_file(&ctx, &service, &codec_ready, path,
+                                    lha_len, "x", out_dir, &attempted) ||
+      !attempted) {
+    rc = 3;
+    goto out;
+  }
+  file = fopen(out_path, "rb");
+  if (!file) {
+    rc = 4;
+    goto out;
+  }
+  if (fread(actual, 1U, 4U, file) != 4U || memcmp(actual, "data", 4U) != 0) {
+    fclose(file);
+    file = 0;
+    rc = 5;
+    goto out;
+  }
+  fclose(file);
+  file = 0;
+
+  /* no staging leftovers beside the destination */
+  for (i = 0U; i < 32U; i++) {
+    char leftover[320];
+
+    if (i == 0U) {
+      sprintf(leftover, "%s/%.96s.zz9k-tmp", out_dir, name);
+    } else {
+      sprintf(leftover, "%s/%.96s.zz9k-t%u", out_dir, name,
+              (unsigned int)i);
+    }
+    file = fopen(leftover, "rb");
+    if (file) {
+      fclose(file);
+      file = 0;
+      rc = 6 + (int)i;
+      goto out;
+    }
+  }
+
+out:
+  if (file) fclose(file);
+  remove(out_path);
+  remove(out_dir);
+  remove(path);
+  return rc;
+}
 
 static int test_lha_list_file_grows_and_streams(void)
 {
@@ -8255,6 +8333,11 @@ int main(void)
   if (rc) {
     printf("test_lha_list_file_grows_and_streams failed: %d\n", rc);
     return 530 + rc;
+  }
+  rc = test_staged_extract_handles_long_basename();
+  if (rc) {
+    printf("test_staged_extract_handles_long_basename failed: %d\n", rc);
+    return 580 + rc;
   }
   rc = test_zip_backslash_names_are_normalized();
   if (rc) {

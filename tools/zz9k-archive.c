@@ -5195,16 +5195,34 @@ static int zz9k_archive_probe_sibling(char *dst,
                                       const char *base,
                                       const char *tag)
 {
+  size_t path_len = strlen(path);
+  size_t comp_start = path_len;
   uint32_t seed = zz9k_archive_probe_seed() % 32U;
   uint32_t attempt;
 
+  /* Staging names are transient (renamed onto the destination or
+     removed), so only legality and uniqueness matter -- not identity.
+     Trim the final component so the longest suffix still fits common
+     filesystem component limits (Amiga FFS: 107 bytes; POSIX: 255):
+     an untrimmed near-limit basename would make every probe an
+     ENAMETOOLONG "free" name that fopen then rejects. 96 + ".zz9k-t31"
+     (9) + NUL fits the tightest of them. */
+  while (comp_start > 0U && path[comp_start - 1U] != '/' &&
+         path[comp_start - 1U] != ':' &&
+         path[comp_start - 1U] != '\\') {
+    comp_start--;
+  }
+  if (path_len - comp_start > 96U) {
+    path_len = comp_start + 96U;
+  }
   for (attempt = 0U; attempt < 32U; attempt++) {
     uint32_t slot = (seed + attempt) % 32U;
 
     if (slot == 0U) {
-      sprintf(dst, "%s%s", path, base);
+      sprintf(dst, "%.*s%s", (int)path_len, path, base);
     } else {
-      sprintf(dst, "%s%s%u", path, tag, (unsigned int)slot);
+      sprintf(dst, "%.*s%s%u", (int)path_len, path, tag,
+              (unsigned int)slot);
     }
     if (!zz9k_archive_path_exists(dst)) {
       return 1;
@@ -11526,7 +11544,7 @@ static int zz9k_archive_run(const char *command, const char *archive_path,
     return 0;
   }
   format = zz9k_archive_detect_format(probe, probe_length);
-  printf("zz9k-archive build 9e79b9e+round4 2026-09-19g\n");
+  printf("zz9k-archive build 12bb19e+round5 2026-09-19h\n");
   printf("archive: %s (%s)\n", archive_path, zz9k_archive_format_name(format));
 
   if (format == ZZ9K_ARCHIVE_FORMAT_LZMA_ALONE &&
