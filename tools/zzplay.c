@@ -32,6 +32,7 @@
 #include <graphics/gfx.h>
 #include <intuition/intuition.h>
 #include <libraries/Picasso96.h>
+#include <proto/dos.h>
 #include <proto/exec.h>
 #include <proto/intuition.h>
 #include <proto/Picasso96.h>
@@ -109,8 +110,12 @@ struct ZZPlayRuntime {
   uint32_t completed_loops;
   uint64_t audio_origin_pts;
   uint64_t final_audio_frames;
-  /* Per-frame playback trace (diagnostics; --trace). */
-  FILE *trace;
+  /* Per-frame playback trace (diagnostics; --trace). dos.library
+   * BPTR with one unbuffered Write() per line: diagnostics must not
+   * take the player down with them, and partial data has to survive
+   * a crash (the first stdio-file-write build gurud the machine with
+   * the trace file created but empty). */
+  BPTR trace;
   TimeVal_Type trace_started;
   TimeVal_Type trace_last_frame;
   uint64_t trace_video_pts;
@@ -1350,17 +1355,27 @@ static uint32_t zzplay_trace_ms(struct ZZPlayRuntime *runtime)
 static void zzplay_trace_event(struct ZZPlayRuntime *runtime,
                                const char *format, ...)
 {
+  char line[512];
   va_list args;
+  int len;
 
   if (!runtime->trace) {
     return;
   }
-  fprintf(runtime->trace, "S %lu ",
-          (unsigned long)zzplay_trace_ms(runtime));
+  len = snprintf(line, sizeof(line), "S %lu ",
+                 (unsigned long)zzplay_trace_ms(runtime));
+  if (len <= 0 || (size_t)len >= sizeof(line)) {
+    return;
+  }
   va_start(args, format);
-  vfprintf(runtime->trace, format, args);
+  vsnprintf(line + len, sizeof(line) - len, format, args);
   va_end(args);
-  fputc('\n', runtime->trace);
+  len = (int)strlen(line);
+  if ((size_t)len + 1U < sizeof(line)) {
+    line[len] = '\n';
+    line[len + 1] = '\0';
+    (void)Write(runtime->trace, line, (LONG)(len + 1));
+  }
 }
 
 /* One line per presented or discarded frame. The counters (acc, ni, wb,
@@ -1375,6 +1390,9 @@ static void zzplay_trace_frame(struct ZZPlayRuntime *runtime,
   uint64_t master_pts = ZZ9K_MEDIA_NO_PTS;
   uint64_t gap_us;
 
+  char line[512];
+  int len;
+
   if (!runtime->trace) {
     return;
   }
@@ -1384,7 +1402,7 @@ static void zzplay_trace_frame(struct ZZPlayRuntime *runtime,
   if (runtime->audio_started) {
     master_pts = zzplay_audio_master_pts(runtime);
   }
-  fprintf(runtime->trace,
+  len = snprintf(line, sizeof(line),
           "F %lu t=%lu v=%ld m=%ld dr=%ld d=%c dec=%lu gap=%lu "
           "acc=%lu ni=%lu wb=%lu db=%lu rd=%lu rmax=%lu q=%lu "
           "und=%lu\n",
@@ -1408,6 +1426,8 @@ static void zzplay_trace_frame(struct ZZPlayRuntime *runtime,
           (unsigned long)runtime->trace_read_max_us,
           (unsigned long)zzplay_audio_queued_frames(runtime),
           (unsigned long)runtime->trace_underruns);
+  if (len > 0 && (size_t)len < sizeof(line))
+    (void)Write(runtime->trace, line, (LONG)len);
   runtime->trace_accepted = 0U;
   runtime->trace_need_input = 0U;
   runtime->trace_write_busy = 0U;
@@ -2279,16 +2299,20 @@ int main(int argc, char **argv)
   zzplay_set_quiet(runtime.options.quiet);
 
   if (runtime.options.trace_path) {
-    runtime.trace = fopen(runtime.options.trace_path, "w");
+    runtime.trace = Open((CONST_STRPTR)runtime.options.trace_path,
+                         MODE_NEWFILE);
     if (runtime.trace) {
-      GetSysTime(&runtime.trace_started);
-      runtime.trace_last_frame = runtime.trace_started;
-      fprintf(runtime.trace,
+      static const char header[] =
               "# zzplay trace v1: F frame t=ms v=videoMs m=masterMs "
               "dr=driftMs d=decision(P/H/D/N) dec=decodeUs gap=us "
               "acc=inputBytesSinceLastF ni=needInputPolls "
               "wb=writeBusy db=decodeBusy rd=fileReads "
-              "rmax=maxReadUs q=audioQueuedFrames und=underruns\n");
+              "rmax=maxReadUs q=audioQueuedFrames und=underruns\n";
+
+      GetSysTime(&runtime.trace_started);
+      runtime.trace_last_frame = runtime.trace_started;
+      (void)Write(runtime.trace, (APTR)header,
+                  (LONG)(sizeof(header) - 1U));
     } else {
       zzplay_info("zzplay: cannot open trace file %s\n",
                   runtime.options.trace_path);
@@ -2837,7 +2861,7 @@ playback_failed:
 
 cleanup:
   if (runtime.trace) {
-    fclose(runtime.trace);
+    Close(runtime.trace);
     runtime.trace = 0;
   }
   if (runtime.options.show_fps) {
