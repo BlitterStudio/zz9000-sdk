@@ -16,6 +16,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+
 
 #if defined(_WIN32)
 #include <direct.h>
@@ -27,6 +29,41 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #endif
+
+/* Ctrl-C checkpoint (Amiga): observes AND consumes SIGBREAKF_CTRL_C, the
+   standard Workbench break signal, and LATCHES it -- CheckSignal is
+   one-shot, so without a latch the first checkpoint to see the break
+   (say, the board-decode abort guard) would consume it and the walk
+   would keep extracting. Long-running phases call this between work
+   units; once latched, every checkpoint reports cancelled until the run
+   unwinds. zz9k_archive_run clears the latch for each invocation. */
+static int zz9k_archive_cancel_latched;
+
+static int zz9k_archive_cancelled(void)
+{
+#if defined(__amigaos__)
+  if (!zz9k_archive_cancel_latched &&
+      CheckSignal(SIGBREAKF_CTRL_C) != 0L) {
+    printf("\ninterrupted\n");
+    zz9k_archive_cancel_latched = 1;
+  }
+#endif
+  return zz9k_archive_cancel_latched;
+}
+
+/* Every armed mailbox round trip (alloc, free, query, decode) can wake
+   on Ctrl-C and return CANCELLED -- and Wait() has already consumed the
+   break signal, so CheckSignal-based checkpoints never see those
+   presses. Any status observation that sees CANCELLED latches the run's
+   cancellation here. */
+static void zz9k_archive_note_status(int status)
+{
+  if (status == ZZ9K_STATUS_CANCELLED) {
+    printf("\ninterrupted\n");
+    zz9k_archive_cancel_latched = 1;
+  }
+}
+
 
 #define ZZ9K_ARCHIVE_MAX_NAME 256U
 #define ZZ9K_ARCHIVE_MAX_PAX_DATA 65536U
@@ -274,6 +311,7 @@ typedef int (*ZZ9KArchiveDecodedChunkFn)(void *user,
 typedef struct ZZ9KArchiveTarStream {
   const char *command;
   const char *output_dir;
+  const char *archive_path; /* input file for the alias guard, or 0 */
   uint8_t header[ZZ9K_ARCHIVE_TAR_BLOCK];
   ZZ9KArchiveEntry entry;
   FILE *file;
@@ -288,6 +326,9 @@ typedef struct ZZ9KArchiveTarStream {
   uint32_t count;
   int pending_size_valid;
   int pending_name_skip;
+  int pending_name_overflow;
+  char *final_path;  /* staged output: destination of tmp_path */
+  char *tmp_path;    /* staged output: temp written until complete */
   int ok;
   int done;
 } ZZ9KArchiveTarStream;
@@ -305,6 +346,12 @@ static int zz9k_archive_tar_header_empty(const uint8_t *header);
 static int zz9k_archive_open_output_entry(const char *output_dir,
                                           const ZZ9KArchiveEntry *entry,
                                           FILE **file);
+static int zz9k_archive_paths_same_file(const char *a, const char *b);
+static int zz9k_archive_open_output_staged(const char *output_dir,
+                                          const ZZ9KArchiveEntry *entry,
+                                          FILE **file,
+                                          char **final_path_out,
+                                          char **tmp_path_out);
 
 static uint16_t zz9k_archive_get_le16(const uint8_t *p)
 {
@@ -1476,8 +1523,17 @@ static int zz9k_archive_lha_parse_header(const uint8_t *hdr,
   char ext_name[ZZ9K_ARCHIVE_MAX_NAME];
   ZZ9KArchiveEntry entry;
 
-  if (!hdr || !entry_out || !header_bytes || window_len < 24U) {
+  if (!hdr || !entry_out || !header_bytes) {
     return ZZ9K_ARCHIVE_LHA_PARSE_INVALID;
+  }
+  if (window_len < 24U) {
+    /* Fewer bytes than a minimal header (24 = 2 size/checksum bytes + a
+       22-byte level-0 base): the window is too short to judge anything.
+       Ask for more window -- declaring this INVALID made the single-pass
+       walker reject a perfectly good member whose header happened to
+       start within the last 23 bytes of a 32 KiB chunk (real-world
+       casualty: member 165 of LightwaveRTGv1.1.lha at offset 3002313). */
+    return ZZ9K_ARCHIVE_LHA_PARSE_NEEDS_WINDOW;
   }
   header_size = hdr[0];
   if (header_size == 0U) {
@@ -1718,32 +1774,49 @@ static int zz9k_archive_lha_list(const uint8_t *data,
   return 1;
 }
 
-/* Initial header window for the file walker. Real LHA headers (base plus
-   extensions) are a few hundred bytes; 4 KiB reads one in a single go, and
-   the window grows only for pathological headers. The logical window RESETS
-   to this size for every member (the underlying buffer is kept, never
-   shrunk), so one oversized header cannot tax every later member with
-   grown-window reads. Member bodies never enter the window: the parse
-   checks them against the archive length, not the window, so even a huge
-   member costs only its header's bytes. The walk accepts exactly the
-   archives the in-memory walk accepts. */
-#define ZZ9K_ARCHIVE_LHA_HEADER_WINDOW (4096U)
+/* Read granularity for the single-pass file walk. One refill is one
+   seekable-read round trip; a refill happens for essentially every
+   member because consecutive headers are separated by that member's
+   DATA (often far more than any chunk), so a large chunk mostly reads
+   bytes the walk never looks at. 4 KiB covers every realistic header
+   (base + extensions) while transferring ~8x less than a 32 KiB chunk
+   over a bandwidth-starved network mount; pathological headers larger
+   than it grow the window as before. Member bodies are never parsed --
+   the next member's header is reached by seeking, not by reading
+   through the data. */
+#define ZZ9K_ARCHIVE_LHA_WALK_CHUNK (4U * 1024U)
+#define ZZ9K_ARCHIVE_LHA_WALK_INITIAL_ENTRIES 1024U
 
+typedef void (*ZZ9KArchiveLhaEntryFn)(const ZZ9KArchiveEntry *entry,
+                                      void *user);
+
+/* Walks a seekable LHA archive in ONE pass, growing the entry table on
+   demand (caller frees *entries_out) and optionally handing each member
+   to on_entry the moment it is parsed -- a listing over a slow network
+   mount streams output instead of going quiet for minutes. Verdicts
+   match the in-memory walk: same terminator and trailing-junk tolerance,
+   same tri-state window handling. */
 static int zz9k_archive_lha_list_file(FILE *file,
                                       uint32_t length,
-                                      ZZ9KArchiveEntry *entries,
-                                      uint32_t max_entries,
-                                      uint32_t *count)
+                                      ZZ9KArchiveEntry **entries_out,
+                                      uint32_t *count,
+                                      ZZ9KArchiveLhaEntryFn on_entry,
+                                      void *on_entry_user)
 {
   uint32_t pos = 0U;
   uint32_t entries_used = 0U;
-  uint32_t window_allocated = ZZ9K_ARCHIVE_LHA_HEADER_WINDOW;
+  uint32_t capacity = 0U;
+  uint32_t window_allocated = ZZ9K_ARCHIVE_LHA_WALK_CHUNK;
+  uint32_t window_base = 0U;  /* file offset of window[0] */
+  uint32_t window_valid = 0U; /* readable bytes currently in the window */
+  ZZ9KArchiveEntry *entries = 0;
   uint8_t *window = 0;
   int ok = 0;
 
-  if (!file || !count) {
+  if (!file || !entries_out || !count) {
     return 0;
   }
+  *entries_out = 0;
   *count = 0U;
   window = (uint8_t *)malloc(window_allocated);
   if (!window) {
@@ -1753,16 +1826,22 @@ static int zz9k_archive_lha_list_file(FILE *file,
   while (pos < length) {
     ZZ9KArchiveEntry entry;
     uint32_t avail = length - pos;
-    uint32_t window_capacity = ZZ9K_ARCHIVE_LHA_HEADER_WINDOW;
-    uint32_t window_len;
     uint32_t header_bytes;
 
-    if (fseek(file, (long)pos, SEEK_SET) != 0 ||
-        fread(window, 1U, 1U, file) != 1U) {
-      printf("lha header read failed at offset %lu\n", (unsigned long)pos);
-      goto out;
+    if (zz9k_archive_cancelled()) {
+
+      goto out; /* terminal: never a cue to fall back or continue */
     }
-    if (window[0] == 0U) {
+    if (pos < window_base || pos >= window_base + window_valid) {
+      window_base = pos;
+      window_valid = avail < window_allocated ? avail : window_allocated;
+      if (fseek(file, (long)pos, SEEK_SET) != 0 ||
+          fread(window, 1U, window_valid, file) != window_valid) {
+        printf("lha header read failed at offset %lu\n", (unsigned long)pos);
+        goto out;
+      }
+    }
+    if (window[pos - window_base] == 0U) {
       /* end-of-archive terminator byte */
       ok = 1;
       goto done;
@@ -1774,44 +1853,83 @@ static int zz9k_archive_lha_list_file(FILE *file,
       goto done;
     }
     for (;;) {
-      int parse_rc;
+      uint32_t offset = pos - window_base;
+      uint32_t window_len = window_valid - offset;
+      int parse_rc = zz9k_archive_lha_parse_header(
+          window + offset, window_len, avail, &entry, &header_bytes);
 
-      window_len = avail < window_capacity ? avail : window_capacity;
-      if (fseek(file, (long)pos, SEEK_SET) != 0 ||
-          fread(window, 1U, window_len, file) != window_len) {
-        printf("lha header read failed at offset %lu\n", (unsigned long)pos);
-        goto out;
-      }
-      parse_rc = zz9k_archive_lha_parse_header(window, window_len, avail,
-                                               &entry, &header_bytes);
       if (parse_rc == ZZ9K_ARCHIVE_LHA_PARSE_OK) {
         break;
       }
-      if (parse_rc == ZZ9K_ARCHIVE_LHA_PARSE_INVALID ||
-          window_len >= avail) {
-        /* A definitive error never grows the window (bounded failure:
-           one 4 KiB read even inside a multi-hundred-MB archive), and a
-           NEEDS_WINDOW at full view is the in-memory walk's failure. */
+      if (parse_rc == ZZ9K_ARCHIVE_LHA_PARSE_INVALID) {
+        /* A definitive error never re-reads (bounded failure: one
+           chunk of I/O even inside a multi-hundred-MB archive). Name
+           the member position: the caller treats this as terminal, so
+           the diagnostic is all the user gets. */
+        printf("lha parse failed at offset %lu (member %lu)\n",
+               (unsigned long)pos, (unsigned long)entries_used);
         goto out;
       }
-      window_capacity *= 4U;
-      if (window_capacity > avail) {
-        window_capacity = avail; /* never read past the archive end */
-      }
-      if (window_capacity > window_allocated) {
-        uint8_t *grown = (uint8_t *)realloc(window, window_capacity);
-
-        if (!grown) {
-          printf("lha header window allocation failed\n");
+      if (offset != 0U) {
+        /* NEEDS_WINDOW with the header not at the window start: it
+           crosses the chunk edge. Re-center the window on this member
+           and retry before considering growth. */
+        window_base = pos;
+        window_valid = avail < window_allocated ? avail : window_allocated;
+        if (fseek(file, (long)pos, SEEK_SET) != 0 ||
+            fread(window, 1U, window_valid, file) != window_valid) {
+          printf("lha header read failed at offset %lu\n", (unsigned long)pos);
           goto out;
         }
-        window = grown;
-        window_allocated = window_capacity;
+        continue;
+      }
+      if (window_valid >= avail) {
+        goto out; /* full view already: the in-memory walk's failure */
+      }
+      /* The header is larger than the whole chunk: grow (x4, clamped to
+         the archive remainder) and refill. */
+      {
+        uint32_t grown_capacity = window_allocated * 4U;
+
+        if (grown_capacity > avail) {
+          grown_capacity = avail;
+        }
+        if (grown_capacity > window_allocated) {
+          uint8_t *grown = (uint8_t *)realloc(window, grown_capacity);
+
+          if (!grown) {
+            printf("lha header window allocation failed\n");
+            goto out;
+          }
+          window = grown;
+          window_allocated = grown_capacity;
+        }
+        window_base = pos;
+        window_valid = avail < window_allocated ? avail : window_allocated;
+        if (fseek(file, (long)pos, SEEK_SET) != 0 ||
+            fread(window, 1U, window_valid, file) != window_valid) {
+          printf("lha header read failed at offset %lu\n", (unsigned long)pos);
+          goto out;
+        }
       }
     }
     entry.data_offset = pos + entry.data_offset;
-    if (entries && entries_used < max_entries) {
-      entries[entries_used] = entry;
+    if (entries_used == capacity) {
+      uint32_t grown_capacity = capacity != 0U ? capacity * 2U :
+          ZZ9K_ARCHIVE_LHA_WALK_INITIAL_ENTRIES;
+      ZZ9KArchiveEntry *grown = (ZZ9KArchiveEntry *)realloc(
+          entries, (size_t)grown_capacity * sizeof(*grown));
+
+      if (!grown) {
+        printf("lha entry allocation failed\n");
+        goto out;
+      }
+      entries = grown;
+      capacity = grown_capacity;
+    }
+    entries[entries_used] = entry;
+    if (on_entry) {
+      on_entry(&entries[entries_used], on_entry_user);
     }
     entries_used++;
     pos = entry.data_offset + entry.compressed_size;
@@ -1820,10 +1938,13 @@ static int zz9k_archive_lha_list_file(FILE *file,
 
 done:
   if (ok) {
+    *entries_out = entries;
     *count = entries_used;
+    entries = 0;
   }
 out:
   free(window);
+  free(entries);
   return ok;
 }
 
@@ -3747,7 +3868,7 @@ static int zz9k_archive_zip_list(const uint8_t *data, uint32_t length,
       return 0;
     }
     candidate.method = method;
-    candidate.flags = flags;
+    candidate.flags = flags | ZZ9K_ARCHIVE_ENTRY_FLAG_CRC32;
     candidate.crc32 = zz9k_archive_get_le32(data + pos + 16U);
     candidate.data_offset = data_offset;
     candidate.compressed_size = compressed_size;
@@ -4042,7 +4163,7 @@ static int zz9k_archive_zip_list_from_directory(
       return 0;
     }
     candidate.method = method;
-    candidate.flags = flags;
+    candidate.flags = flags | ZZ9K_ARCHIVE_ENTRY_FLAG_CRC32;
     candidate.crc32 = zz9k_archive_get_le32(directory + pos + 16U);
     candidate.data_offset = data_offset;
     candidate.compressed_size = compressed_size;
@@ -4753,6 +4874,7 @@ static int zz9k_archive_decompress_to_memory_ex(ZZ9KContext *ctx,
 
   status = zz9k_alloc_shared(ctx, compressed_length, 16U, 0U, &input);
   if (status != ZZ9K_STATUS_OK) {
+    zz9k_archive_note_status(status);
     printf("alloc compressed failed: %s (%d), requested=%lu bytes\n",
            zz9k_status_name(status), status,
            (unsigned long)compressed_length);
@@ -4762,6 +4884,7 @@ static int zz9k_archive_decompress_to_memory_ex(ZZ9KContext *ctx,
   }
   status = zz9k_alloc_shared(ctx, output_capacity, 16U, 0U, &decoded);
   if (status != ZZ9K_STATUS_OK) {
+    zz9k_archive_note_status(status);
     printf("alloc decoded failed: %s (%d), requested=%lu bytes\n",
            zz9k_status_name(status), status,
            (unsigned long)output_capacity);
@@ -4783,6 +4906,26 @@ static int zz9k_archive_decompress_to_memory_ex(ZZ9KContext *ctx,
   memset(result, 0, sizeof(*result));
   status = zz9k_decompress(ctx, &desc, result);
   if (status != ZZ9K_STATUS_OK) {
+    if (status == ZZ9K_STATUS_CANCELLED) {
+      /* The armed wait consumed SIGBREAKF_CTRL_C (Wait clears the bit),
+         so CheckSignal-based checkpoints cannot see this press. Latch
+         the cancellation here so every checkpoint stops the run. */
+      zz9k_archive_cancel_latched = 1;
+      /* The library's drain now owns late_irq_expected: retired drains
+         clear it, timed-out drains set it. Marking here unconditionally
+         made even cleanly retired cancellations spin disarm's watcher
+         for its full window. */
+      /* Never free the board buffers: a timed-out drain means the ARM
+         may still be decoding into them. Board-heap slots freed now get
+         reused by the next allocation (this or a later process) while
+         the firmware is still writing -- the delayed crash after a
+         Ctrl-C stop. Leaking on an interrupted run is a few hundred KB
+         of board RAM and entirely safe. */
+      printf("%s decompress interrupted: board buffers abandoned\n",
+             zz9k_compression_algorithm_text(algorithm));
+      free(bytes);
+      return 0;
+    }
     printf("%s decompress failed: %s (%d), input=%lu output=%lu\n",
            zz9k_compression_algorithm_text(algorithm),
            zz9k_status_name(status), status,
@@ -5024,16 +5167,141 @@ static int zz9k_archive_write_entry(const char *output_dir,
   return ok;
 }
 
+/* Picks a sibling path not currently in use: "<path><base>", or when
+   that sibling exists, "<path><tag>N" for N in 1..31. The probe STARTS
+   from a per-process unique offset (vblank/tick entropy ^ a counter),
+   so two concurrent extractions racing between this check and their
+   "wb" open pick different names in practice. The caller allocates
+   strlen(path) + 16 bytes. Never opens or truncates anything, so an
+   unrelated user file -- or another archive member named like the
+   suffix -- is never clobbered. Returns 0 when every candidate
+   exists. */
+static uint32_t zz9k_archive_probe_entropy(void)
+{
+#if defined(__amigaos__)
+  return *(volatile uint32_t *)0x422UL; /* vertical-blank counter */
+#else
+  return (uint32_t)time(0);
+#endif
+}
+
+static uint32_t zz9k_archive_probe_seed(void)
+{
+  static uint32_t counter;
+
+  counter += 1U;
+  return zz9k_archive_probe_entropy() ^ (counter * 2654435761U);
+}
+
+static int zz9k_archive_probe_sibling(char *dst,
+                                      const char *path,
+                                      const char *base,
+                                      const char *tag)
+{
+  size_t path_len = strlen(path);
+  size_t comp_start = path_len;
+  uint32_t seed = zz9k_archive_probe_seed() % 32U;
+  uint32_t attempt;
+
+  /* Staging names are transient (renamed onto the destination or
+     removed), so only legality and uniqueness matter -- not identity.
+     Trim the final component so the longest suffix still fits common
+     filesystem component limits (Amiga FFS: 107 bytes; POSIX: 255):
+     an untrimmed near-limit basename would make every probe an
+     ENAMETOOLONG "free" name that fopen then rejects. 96 + ".zz9k-t31"
+     (9) + NUL fits the tightest of them. */
+  while (comp_start > 0U && path[comp_start - 1U] != '/' &&
+         path[comp_start - 1U] != ':' &&
+         path[comp_start - 1U] != '\\') {
+    comp_start--;
+  }
+  if (path_len - comp_start > 96U) {
+    path_len = comp_start + 96U;
+  }
+  for (attempt = 0U; attempt < 32U; attempt++) {
+    uint32_t slot = (seed + attempt) % 32U;
+
+    if (slot == 0U) {
+      sprintf(dst, "%.*s%s", (int)path_len, path, base);
+    } else {
+      sprintf(dst, "%.*s%s%u", (int)path_len, path, tag,
+              (unsigned int)slot);
+    }
+    if (!zz9k_archive_path_exists(dst)) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+/* Replaces `path` with the fully-written `tmp_path` without ever leaving
+   the destination destroyed: the old file moves to a collision-probed
+   backup first and is restored if the final rename fails. On failure the
+   temporary is removed and the destination is untouched (or restored);
+   on success the backup is removed. Returns 1 on success. */
+static int zz9k_archive_replace_with_staged(const char *tmp_path,
+                                            const char *path,
+                                            const char *name)
+{
+  char *backup = 0;
+
+  if (zz9k_archive_path_exists(path)) {
+    backup = (char *)malloc(strlen(path) + 16U);
+    if (!backup) {
+      remove(tmp_path);
+      printf("path allocation failed\n");
+      return 0;
+    }
+    if (!zz9k_archive_probe_sibling(backup, path, ".zz9k-old", ".zz9k-o")) {
+      free(backup);
+      remove(tmp_path);
+      printf("output backup name unavailable: %s\n", name);
+      return 0;
+    }
+    if (rename(path, backup) != 0) {
+      free(backup);
+      remove(tmp_path);
+      printf("output rename failed: %s\n", name);
+      return 0;
+    }
+  }
+  if (rename(tmp_path, path) != 0) {
+    remove(tmp_path);
+    if (backup) {
+      if (rename(backup, path) != 0) {
+        /* Both renames failed (a dropped network volume can do this):
+         the destination is gone and the user's original survives ONLY
+         at the backup path -- say so, or the file looks simply lost. */
+        printf("output restore failed: %s (original kept as %s)\n",
+               name, backup);
+      }
+      free(backup);
+    }
+    printf("output rename failed: %s\n", name);
+    return 0;
+  }
+  if (backup) {
+    if (remove(backup) != 0) {
+      printf("output backup removal failed: %s\n", backup);
+    }
+    free(backup);
+  }
+  return 1;
+}
+
 static int zz9k_archive_write_file_range_entry(
     const char *output_dir,
     const ZZ9KArchiveEntry *entry,
-    const char *input_path)
+    const char *input_path,
+    int verify_crc)
 {
   FILE *input = 0;
   FILE *output = 0;
   char *path = 0;
+  char *tmp_path = 0;
   ZZ9KArchiveEntry output_entry;
   uint8_t *chunk = 0;
+  uint32_t range_crc = 0U;
   uint32_t remaining;
   int ok = 0;
 
@@ -5058,6 +5326,21 @@ static int zz9k_archive_write_file_range_entry(
   }
   if (zz9k_archive_path_is_dir(path)) {
     printf("output path is a directory: %s\n", path);
+    goto out;
+  }
+  if (zz9k_archive_overwrite_outputs &&
+      !zz9k_archive_dry_run_outputs &&
+      !zz9k_archive_skip_existing_outputs &&
+      zz9k_archive_paths_same_file(input_path, path)) {
+    /* Same guard as the LHA and tar engines, at the one choke point all
+       file-backed range writes (ZIP store, 7z Copy, LHA LH0) share: a
+       member named like the archive would otherwise run the staged
+       backup-rename dance on the still-open source archive and replace
+       it with the member's own bytes. Only --overwrite can clobber:
+       the other modes refuse or skip existing outputs before any
+       rename. */
+    printf("output path is the archive itself, refusing: %s\n",
+           output_entry.name);
     goto out;
   }
   if (zz9k_archive_skip_existing_outputs && zz9k_archive_path_exists(path)) {
@@ -5089,7 +5372,24 @@ static int zz9k_archive_write_file_range_entry(
     printf("file range seek failed: %s\n", input_path);
     goto out;
   }
-  output = fopen(path, "wb");
+  /* ALL file-backed range writes stage to a collision-safe sibling
+     temporary and replace the destination only on success: a corrupt
+     member under --overwrite -- or a Ctrl-C between chunks -- must
+     never destroy the file that was already there. Verified callers
+     additionally gate the replacement on the inline CRC. */
+  {
+    tmp_path = (char *)malloc(strlen(path) + 16U);
+    if (!tmp_path) {
+      printf("path allocation failed\n");
+      goto out;
+    }
+    if (!zz9k_archive_probe_sibling(tmp_path, path, ".zz9k-tmp",
+                                    ".zz9k-t")) {
+      printf("output temporary name unavailable: %s\n", output_entry.name);
+      goto out;
+    }
+    output = fopen(tmp_path, "wb");
+  }
   if (!output) {
     printf("open output failed: %s\n", path);
     goto out;
@@ -5105,9 +5405,17 @@ static int zz9k_archive_write_file_range_entry(
     uint32_t part = remaining > ZZ9K_ARCHIVE_STREAM_CHUNK ?
         ZZ9K_ARCHIVE_STREAM_CHUNK : remaining;
 
+    if (zz9k_archive_cancelled()) {
+
+      goto out;
+    }
+
     if (fread(chunk, 1U, part, input) != part) {
       printf("file range read failed: %s\n", input_path);
       goto out;
+    }
+    if (verify_crc) {
+      range_crc = zz9k_archive_crc32(range_crc, chunk, part);
     }
     if (fwrite(chunk, 1U, part, output) != part) {
       printf("file range write failed: %s\n", output_entry.name);
@@ -5115,12 +5423,41 @@ static int zz9k_archive_write_file_range_entry(
     }
     remaining -= part;
   }
+  if (verify_crc && (entry->flags & ZZ9K_ARCHIVE_ENTRY_FLAG_CRC32) != 0U &&
+      range_crc != entry->crc32) {
+    /* Verification failed: the destination was never touched. */
+    fclose(output);
+    output = 0;
+    remove(tmp_path);
+    printf("stored entry crc mismatch: %s decoded=0x%08lx expected=0x%08lx\n",
+           output_entry.name, (unsigned long)range_crc,
+           (unsigned long)entry->crc32);
+    goto out;
+  }
+  if (tmp_path) {
+    /* Verified clean: swap the temporary in, preserving the old
+       destination until the replacement succeeds. */
+    if (fclose(output) != 0) {
+      output = 0;
+      remove(tmp_path);
+      printf("file range write failed: %s\n", output_entry.name);
+      goto out;
+    }
+    output = 0;
+    if (!zz9k_archive_replace_with_staged(tmp_path, path,
+                                         output_entry.name)) {
+      goto out;
+    }
+  }
 
   ok = 1;
 
 out:
   if (output && fclose(output) != 0) {
     ok = 0;
+  }
+  if (!ok && tmp_path) {
+    remove(tmp_path); /* never leave a stale temporary behind */
   }
   if (input) {
     fclose(input);
@@ -5130,6 +5467,7 @@ out:
     printf("x %s\n", output_entry.name);
   }
   free(chunk);
+  free(tmp_path);
   free(path);
   return ok;
 }
@@ -5423,6 +5761,15 @@ static int zz9k_archive_lha_decode_method_to_file(
 
       if (zz9k_lha_board_diag_valid == 0) {
         int status = zz9k_read_diag(ctx, &zz9k_lha_board_diag);
+
+        zz9k_archive_note_status(status);
+        if (status == ZZ9K_STATUS_CANCELLED) {
+          /* The wait consumed the break: with try_offload still true the
+             member would fully decode (and write) before the next walk
+             checkpoint sees the latch. Stop before starting another
+             codec operation. */
+          return 0;
+        }
         zz9k_lha_board_diag_valid = (status == ZZ9K_STATUS_OK) ? 1 : -1;
       }
       if (zz9k_lha_board_diag_valid == 1 &&
@@ -5480,7 +5827,13 @@ static int zz9k_archive_lha_decode_method_to_file(
               zz9k_lha_diag_sw_crc_miss++;
             }
           } else {
-            /* board alloc / codec error (the helper already printed why) */
+            /* board alloc / codec error (the helper already printed why).
+               A Ctrl-C that aborted the board decode must stop the run,
+               never fall back to a full software decode of the member. */
+            if (zz9k_archive_cancelled()) {
+
+              return 0;
+            }
             zz9k_lha_diag_sw_codec_fail++;
           }
         }
@@ -5502,9 +5855,15 @@ static int zz9k_archive_extract_lha_lh5(ZZ9KContext *ctx,
                                         const ZZ9KArchiveEntry *entry)
 {
   FILE *file = 0;
+  char *final_path = 0;
+  char *tmp_path = 0;
   int ok;
 
-  if (!zz9k_archive_open_output_entry(output_dir, entry, &file)) {
+  /* Staged like the ZIP/7z verified paths: a cancelled or failed decode
+     must leave the pre-existing destination untouched rather than
+     truncated or partially replaced. */
+  if (!zz9k_archive_open_output_staged(output_dir, entry, &file,
+                                       &final_path, &tmp_path)) {
     return 0;
   }
   ok = zz9k_archive_lha_decode_method_to_file(ctx, service, src,
@@ -5512,6 +5871,14 @@ static int zz9k_archive_extract_lha_lh5(ZZ9KContext *ctx,
   if (fclose(file) != 0) {
     ok = 0;
   }
+  if (ok && tmp_path) {
+    ok = zz9k_archive_replace_with_staged(tmp_path, final_path,
+                                          entry->name);
+  } else if (!ok && tmp_path) {
+    remove(tmp_path); /* failed decode: keep the old destination */
+  }
+  free(final_path);
+  free(tmp_path);
   if (ok && !zz9k_archive_last_output_skipped &&
       !zz9k_archive_last_output_dry_run) {
     printf("x %s\n", entry->name);
@@ -5519,23 +5886,33 @@ static int zz9k_archive_extract_lha_lh5(ZZ9KContext *ctx,
   return ok;
 }
 
-/* Extract one member via the software decoder only (no offload attempt),
-   preserving the skip/dry-run and "x <name>" semantics of the offload
-   extract path. */
 static int zz9k_archive_extract_lha_software(ZZ9KLhaSource *src,
                                              const char *output_dir,
                                              const ZZ9KArchiveEntry *entry)
 {
   FILE *file = 0;
+  char *final_path = 0;
+  char *tmp_path = 0;
   int ok;
 
-  if (!zz9k_archive_open_output_entry(output_dir, entry, &file)) {
+  /* Same staging as the offload path: a cancelled software decode keeps
+     the pre-existing destination intact. */
+  if (!zz9k_archive_open_output_staged(output_dir, entry, &file,
+                                       &final_path, &tmp_path)) {
     return 0;
   }
   ok = zz9k_archive_lha_software_decode_to_file(src, entry, file);
   if (fclose(file) != 0) {
     ok = 0;
   }
+  if (ok && tmp_path) {
+    ok = zz9k_archive_replace_with_staged(tmp_path, final_path,
+                                          entry->name);
+  } else if (!ok && tmp_path) {
+    remove(tmp_path); /* failed decode: keep the old destination */
+  }
+  free(final_path);
+  free(tmp_path);
   if (ok && !zz9k_archive_last_output_skipped &&
       !zz9k_archive_last_output_dry_run) {
     printf("x %s\n", entry->name);
@@ -5721,13 +6098,107 @@ static int zz9k_archive_open_output_entry(const char *output_dir,
   return 1;
 }
 
+/* Staged open for member extraction: identical checks to
+   zz9k_archive_open_output_entry, but payload bytes go to a
+   collision-probed temporary sibling; the caller replaces the
+   destination only after the member completes. On the discard/skip/dry
+   paths *tmp_path_out stays 0 (nothing staged, nothing to replace) and
+   the semantics match open_output_entry exactly. Callers free both
+   strings on completion. */
+static int zz9k_archive_open_output_staged(
+    const char *output_dir,
+    const ZZ9KArchiveEntry *entry,
+    FILE **file,
+    char **final_path_out,
+    char **tmp_path_out)
+{
+  char *path;
+  ZZ9KArchiveEntry output_entry;
+
+  *file = 0;
+  *final_path_out = 0;
+  *tmp_path_out = 0;
+  zz9k_archive_last_output_skipped = 0;
+  zz9k_archive_last_output_dry_run = 0;
+  if (!zz9k_archive_output_entry(entry, &output_entry)) {
+    *file = zz9k_archive_open_discard_file();
+    zz9k_archive_last_output_skipped = 1;
+    return *file != 0;
+  }
+  if (!zz9k_archive_path_is_safe(output_entry.name)) {
+    printf("unsafe path rejected: %s\n", entry->name);
+    return 0;
+  }
+  path = zz9k_archive_join_path(output_dir, output_entry.name);
+  if (!path) {
+    printf("path allocation failed\n");
+    return 0;
+  }
+  if (zz9k_archive_path_is_dir(path)) {
+    printf("output path is a directory: %s\n", path);
+    free(path);
+    return 0;
+  }
+  if (zz9k_archive_skip_existing_outputs && zz9k_archive_path_exists(path)) {
+    printf("s %s\n", path);
+    zz9k_archive_last_output_skipped = 1;
+    *file = zz9k_archive_open_discard_file();
+    free(path);
+    return *file != 0;
+  }
+  if (!zz9k_archive_overwrite_outputs && zz9k_archive_path_exists(path)) {
+    printf("output exists, use --overwrite: %s\n", path);
+    free(path);
+    return 0;
+  }
+  if (zz9k_archive_dry_run_outputs) {
+    printf("dry %s\n", output_entry.name);
+    zz9k_archive_last_output_dry_run = 1;
+    *file = zz9k_archive_open_discard_file();
+    free(path);
+    return *file != 0;
+  }
+  if (!zz9k_archive_ensure_parent_dirs(output_dir, output_entry.name)) {
+    printf("could not create parent directories for %s\n",
+           output_entry.name);
+    free(path);
+    return 0;
+  }
+  {
+    char *tmp = (char *)malloc(strlen(path) + 16U);
+
+    if (!tmp) {
+      printf("path allocation failed\n");
+      free(path);
+      return 0;
+    }
+    if (!zz9k_archive_probe_sibling(tmp, path, ".zz9k-tmp", ".zz9k-t")) {
+      printf("output temporary name unavailable: %s\n", output_entry.name);
+      free(tmp);
+      free(path);
+      return 0;
+    }
+    *file = fopen(tmp, "wb");
+    if (!*file) {
+      printf("open output failed: %s\n", path);
+      free(tmp);
+      free(path);
+      return 0;
+    }
+    *final_path_out = path;
+    *tmp_path_out = tmp;
+  }
+  return 1;
+}
 static void zz9k_archive_tar_stream_init(ZZ9KArchiveTarStream *stream,
                                          const char *command,
-                                         const char *output_dir)
+                                         const char *output_dir,
+                                         const char *archive_path)
 {
   memset(stream, 0, sizeof(*stream));
   stream->command = command;
   stream->output_dir = output_dir;
+  stream->archive_path = archive_path;
   stream->ok = 1;
 }
 
@@ -5736,8 +6207,18 @@ static void zz9k_archive_tar_stream_cleanup(ZZ9KArchiveTarStream *stream)
   if (stream && stream->file) {
     fclose(stream->file);
     stream->file = 0;
+    /* A file still open at cleanup means the archive ended mid-member:
+       the staged temporary is partial, so remove it -- the destination
+       was never touched. */
+    if (stream->tmp_path) {
+      remove(stream->tmp_path);
+    }
   }
   if (stream) {
+    free(stream->tmp_path);
+    free(stream->final_path);
+    stream->tmp_path = 0;
+    stream->final_path = 0;
     free(stream->pax_data);
     stream->pax_data = 0;
     stream->pax_capacity = 0U;
@@ -5774,14 +6255,121 @@ static int zz9k_archive_tar_stream_close_file(ZZ9KArchiveTarStream *stream)
   }
   if (fclose(stream->file) != 0) {
     stream->file = 0;
+    if (stream->tmp_path) {
+      remove(stream->tmp_path); /* incomplete write: keep the old file */
+    }
     stream->ok = 0;
     return 0;
   }
   stream->file = 0;
+  if (stream->tmp_path && stream->final_path) {
+    /* Member complete: swap the staged temporary in, preserving the old
+       destination until the replacement succeeds. */
+    if (!zz9k_archive_replace_with_staged(stream->tmp_path,
+                                          stream->final_path,
+                                          stream->entry.name)) {
+      free(stream->tmp_path);
+      free(stream->final_path);
+      stream->tmp_path = 0;
+      stream->final_path = 0;
+      stream->ok = 0;
+      return 0;
+    }
+  }
+  free(stream->tmp_path);
+  free(stream->final_path);
+  stream->tmp_path = 0;
+  stream->final_path = 0;
   if (!zz9k_archive_last_output_skipped &&
       !zz9k_archive_last_output_dry_run) {
     printf("x %s\n", stream->entry.name);
   }
+  return 1;
+}
+
+/* Staged output open for the tar stream: identical checks to
+   zz9k_archive_open_output_entry, but payload bytes go to a
+   collision-probed temporary sibling that replaces the destination only
+   when the member completes -- a truncated archive must never leave the
+   user's previous file replaced by partial data. */
+static int zz9k_archive_tar_stream_open_staged(ZZ9KArchiveTarStream *stream)
+{
+  char *path;
+  ZZ9KArchiveEntry output_entry;
+
+  stream->file = 0;
+  stream->tmp_path = 0;
+  stream->final_path = 0;
+  zz9k_archive_last_output_skipped = 0;
+  zz9k_archive_last_output_dry_run = 0;
+  if (!zz9k_archive_output_entry(&stream->entry, &output_entry)) {
+    stream->file = zz9k_archive_open_discard_file();
+    zz9k_archive_last_output_skipped = 1;
+    return stream->file != 0;
+  }
+  if (!zz9k_archive_path_is_safe(output_entry.name)) {
+    printf("unsafe path rejected: %s\n", stream->entry.name);
+    return 0;
+  }
+  path = zz9k_archive_join_path(stream->output_dir, output_entry.name);
+  if (!path) {
+    printf("path allocation failed\n");
+    return 0;
+  }
+  if (zz9k_archive_path_is_dir(path)) {
+    printf("output path is a directory: %s\n", path);
+    free(path);
+    return 0;
+  }
+  if (zz9k_archive_skip_existing_outputs && zz9k_archive_path_exists(path)) {
+    printf("s %s\n", path);
+    zz9k_archive_last_output_skipped = 1;
+    stream->file = zz9k_archive_open_discard_file();
+    free(path);
+    return stream->file != 0;
+  }
+  if (!zz9k_archive_overwrite_outputs && zz9k_archive_path_exists(path)) {
+    printf("output exists, use --overwrite: %s\n", path);
+    free(path);
+    return 0;
+  }
+  if (zz9k_archive_dry_run_outputs) {
+    printf("dry %s\n", output_entry.name);
+    zz9k_archive_last_output_dry_run = 1;
+    stream->file = zz9k_archive_open_discard_file();
+    free(path);
+    return stream->file != 0;
+  }
+  if (!zz9k_archive_ensure_parent_dirs(stream->output_dir,
+                                       output_entry.name)) {
+    printf("could not create parent directories for %s\n",
+           output_entry.name);
+    free(path);
+    return 0;
+  }
+  stream->tmp_path = (char *)malloc(strlen(path) + 16U);
+  if (!stream->tmp_path) {
+    printf("path allocation failed\n");
+    free(path);
+    return 0;
+  }
+  if (!zz9k_archive_probe_sibling(stream->tmp_path, path, ".zz9k-tmp",
+                                  ".zz9k-t")) {
+    printf("output temporary name unavailable: %s\n", output_entry.name);
+    free(stream->tmp_path);
+    stream->tmp_path = 0;
+    free(path);
+    return 0;
+  }
+  stream->file = fopen(stream->tmp_path, "wb");
+  if (!stream->file) {
+    printf("open output failed: %s\n", path);
+    free(stream->tmp_path);
+    stream->tmp_path = 0;
+    free(path);
+    return 0;
+  }
+  stream->final_path = path;
   return 1;
 }
 
@@ -5862,6 +6450,29 @@ static int zz9k_archive_tar_stream_start_entry(
     return 0;
   }
 
+  if (stream->archive_path && !stream->entry.is_dir &&
+      zz9k_archive_overwrite_outputs &&
+      !zz9k_archive_dry_run_outputs &&
+      !zz9k_archive_skip_existing_outputs) {
+    /* Same guard as the LHA file engine: a member whose output path IS
+       the (still-open) archive would truncate the source mid-read --
+       including via the zero-size write below. Refuse by file identity
+       before any output is opened. */
+    char *out_path = zz9k_archive_join_path(stream->output_dir,
+                                            stream->entry.name);
+
+    if (out_path) {
+      int alias = zz9k_archive_paths_same_file(stream->archive_path,
+                                               out_path);
+      free(out_path);
+      if (alias) {
+        printf("output path is the archive itself, refusing: %s\n",
+               stream->entry.name);
+        stream->ok = 0;
+        return 0;
+      }
+    }
+  }
   if (stream->entry.is_dir || size == 0U) {
     if (!zz9k_archive_write_entry(stream->output_dir, &stream->entry, 0)) {
       stream->ok = 0;
@@ -5869,8 +6480,7 @@ static int zz9k_archive_tar_stream_start_entry(
     }
     return 1;
   }
-  if (!zz9k_archive_open_output_entry(
-          stream->output_dir, &stream->entry, &stream->file)) {
+  if (!zz9k_archive_tar_stream_open_staged(stream)) {
     stream->ok = 0;
     return 0;
   }
@@ -5899,10 +6509,25 @@ static int zz9k_archive_tar_stream_consume(ZZ9KArchiveTarStream *stream,
       }
       if ((stream->entry.flags & ZZ9K_ARCHIVE_TAR_FLAG_GNU_LONG_NAME) != 0U) {
         uint32_t used = (uint32_t)strlen(stream->pending_name);
+        uint32_t space =
+            (uint32_t)sizeof(stream->pending_name) - 1U - used;
         uint32_t copy_len = part;
 
-        if (used + copy_len >= sizeof(stream->pending_name)) {
-          copy_len = (uint32_t)sizeof(stream->pending_name) - 1U - used;
+        if (copy_len > space) {
+          /* Overflow only when non-NUL name bytes exceed the buffer: a
+             record of exactly capacity bytes holding a 255-char name
+             plus its terminator FITS (the in-memory parser accepts it),
+             so judge by the first byte that would not fit -- a NUL
+             there means the name ended exactly at the limit. */
+          uint8_t boundary = space != 0U ? data[pos + space] : data[pos];
+
+          copy_len = space;
+          if (boundary != 0U) {
+            /* The in-memory walker rejects names this long outright; the
+               streaming path must not silently keep a truncated prefix
+               that could collide with another member's output path. */
+            stream->pending_name_overflow = 1;
+          }
         }
         if (copy_len != 0U) {
           memcpy(stream->pending_name + used, data + pos, copy_len);
@@ -5929,6 +6554,11 @@ static int zz9k_archive_tar_stream_consume(ZZ9KArchiveTarStream *stream,
           (stream->entry.flags & ZZ9K_ARCHIVE_TAR_FLAG_GNU_LONG_NAME) != 0U) {
         int skip = 0;
 
+        if (stream->pending_name_overflow) {
+          printf("tar long name too long: %s...\n", stream->pending_name);
+          stream->ok = 0;
+          return 0;
+        }
         if (!zz9k_archive_tar_normalize_name(
                 stream->pending_name, &skip)) {
           stream->ok = 0;
@@ -7439,15 +8069,17 @@ static int zz9k_archive_handle_zip_file(ZZ9KContext **ctx,
       ok = 0;
       continue;
     }
-    if (entry->method == ZZ9K_ARCHIVE_ZIP_METHOD_STORE &&
+    if (entry->method == ZZ9K_ARCHIVE_ZIP_METHOD_STORE && is_test &&
         !zz9k_archive_zip_stored_file_crc_matches(archive_path, entry)) {
       printf("stored zip entry crc mismatch: %s\n", entry->name);
       ok = 0;
       continue;
     }
     if (entry->method == ZZ9K_ARCHIVE_ZIP_METHOD_STORE && is_extract) {
+      /* One pass: the range copy verifies the CRC inline instead of a
+         separate read-first verification round over the network. */
       ok &= zz9k_archive_write_file_range_entry(
-          output_dir, entry, archive_path);
+          output_dir, entry, archive_path, 1);
     } else if (entry->method == ZZ9K_ARCHIVE_ZIP_METHOD_DEFLATE &&
                is_test) {
       if (!ctx || !*ctx || !service ||
@@ -8193,20 +8825,53 @@ static void zz9k_archive_lha_batch_run_src(ZZ9KContext *ctx,
     }
     blob = 0U;
     chunk_bytes_in = 0UL;
-    for (i = 0U; i < chunk.count; i++) {
-      const ZZ9KArchiveEntry *entry = &entries[members[chunk.first + i]];
-      const uint8_t *member = 0;
+    {
+      /* Network-friendly blob fill: when the chunk's members sit close
+         enough together in the archive (the common no-filter case --
+         they are consecutive, separated only by each other's headers),
+         read the whole span in ONE seek+read and slice the members out
+         of it, instead of one round trip per member. A sparse --match
+         filter makes the span large; those fall back to per-member
+         reads rather than dragging unrelated data over the wire. */
+      const ZZ9KArchiveEntry *first_entry =
+          &entries[members[chunk.first]];
+      const ZZ9KArchiveEntry *last_entry =
+          &entries[members[chunk.first + chunk.count - 1U]];
+      uint32_t span_start = first_entry->data_offset;
+      uint32_t span_end =
+          last_entry->data_offset + last_entry->compressed_size;
+      uint32_t span = span_end - span_start;
+      int spanned = 0;
+      uint8_t *span_buf = 0;
 
-      /* File mode reads the member's compressed range into the source
-         bounce buffer here; chunk planning bounds it by the blob budget,
-         so the bounce never exceeds one chunk's input. */
-      if (!zz9k_archive_lha_src_member(src, entry, &member) ||
-          !zz9k_shared_copy_to(&arena, layout.blob_offset + blob,
-                               member, entry->compressed_size)) {
-        goto out; /* read/Zorro copy failure -> per-member for the rest */
+      if (src->file && span >= chunk.blob_length &&
+          span - chunk.blob_length <= 256U * 1024U) {
+        span_buf = (uint8_t *)malloc(span);
+        if (span_buf &&
+            fseek(src->file, (long)span_start, SEEK_SET) == 0 &&
+            fread(span_buf, 1U, span, src->file) == span) {
+          spanned = 1;
+        }
       }
-      blob += entry->compressed_size;
-      chunk_bytes_in += (unsigned long)entry->compressed_size;
+      for (i = 0U; i < chunk.count; i++) {
+        const ZZ9KArchiveEntry *entry = &entries[members[chunk.first + i]];
+        const uint8_t *member = 0;
+
+        if (spanned) {
+          member = span_buf + (entry->data_offset - span_start);
+        } else if (!zz9k_archive_lha_src_member(src, entry, &member)) {
+          free(span_buf);
+          goto out; /* read failure -> per-member for the rest */
+        }
+        if (!zz9k_shared_copy_to(&arena, layout.blob_offset + blob,
+                                 member, entry->compressed_size)) {
+          free(span_buf);
+          goto out; /* Zorro copy failure -> per-member for the rest */
+        }
+        blob += entry->compressed_size;
+        chunk_bytes_in += (unsigned long)entry->compressed_size;
+      }
+      free(span_buf);
     }
 
     desc.arena_handle = arena.handle;
@@ -8220,6 +8885,13 @@ static void zz9k_archive_lha_batch_run_src(ZZ9KContext *ctx,
          per-member path. */
       printf("lha batch decode failed: %s (%d)\n", zz9k_status_name(status),
              status);
+      zz9k_archive_note_status(status);
+      if (zz9k_archive_cancelled()) {
+        /* The armed Wait consumed SIGBREAKF_CTRL_C: without latching it
+           here, the per-member fallback would happily keep decoding on
+           a working board to the end of the archive. */
+        return;
+      }
       break;
     }
     zz9k_lha_diag_chunks++;
@@ -8423,6 +9095,14 @@ static int zz9k_archive_lha_command_loop(ZZ9KContext *ctx,
              (unsigned long)entry->uncompressed_size, entry->name);
       continue;
     }
+
+    if (zz9k_archive_cancelled()) {
+      /* Same checkpoint as the file walker: once Ctrl-C is latched
+         (batch decode, an armed wait, or a direct press), the run stops
+         -- per-member work must never continue past it. */
+      ok = 0;
+      break;
+    }
     if (!zz9k_archive_path_is_safe(entry->name)) {
       printf("unsafe path rejected: %s\n", entry->name);
       ok = 0;
@@ -8478,7 +9158,7 @@ static int zz9k_archive_lha_command_loop(ZZ9KContext *ctx,
         /* Stored member: stream the range straight from the archive file,
            exactly like the file-backed ZIP store path. */
         ok &= zz9k_archive_write_file_range_entry(output_dir, entry,
-                                                  src->path);
+                                                  src->path, 0);
       } else {
         ok &= zz9k_archive_write_entry(
             output_dir, entry, src->data + entry->data_offset);
@@ -8530,6 +9210,93 @@ static int zz9k_archive_handle_lha(ZZ9KContext *ctx,
   free(entries);
   return ok;
 }
+/* Streaming list callback: prints each member as the single-pass file
+   walk parses it, honoring the match filter, so a listing over a slow
+   network mount shows progress immediately instead of after the walk. */
+static void zz9k_archive_lha_print_entry(const ZZ9KArchiveEntry *entry,
+                                         void *user)
+{
+  (void)user;
+  if (zz9k_archive_entry_matches_filter(entry)) {
+    printf("%c %10lu %s\n", entry->is_dir ? 'd' : '-',
+           (unsigned long)entry->uncompressed_size, entry->name);
+  }
+}
+
+/* Streaming extract/test callback: mirrors the per-member logic of
+   zz9k_archive_lha_command_loop's non-batch path, invoked the moment the
+   walk parses each header -- the first file appears after ONE header
+   read plus its own data, exactly like the classic lha tool, instead of
+   after a full-archive scan. */
+typedef struct ZZ9KLhaStreamWork {
+  ZZ9KContext *ctx;
+  const ZZ9KServiceInfo *service;
+  ZZ9KLhaSource *src;
+  const char *command;
+  const char *output_dir;
+  uint32_t done;
+  int ok;
+} ZZ9KLhaStreamWork;
+
+static void zz9k_archive_lha_work_entry(const ZZ9KArchiveEntry *entry,
+                                        void *user)
+{
+  ZZ9KLhaStreamWork *work = (ZZ9KLhaStreamWork *)user;
+  int is_test = strcmp(work->command, "t") == 0;
+
+  work->done++;
+  if (!zz9k_archive_entry_matches_filter(entry)) {
+    return;
+  }
+  if (!zz9k_archive_path_is_safe(entry->name)) {
+    printf("unsafe path rejected: %s\n", entry->name);
+    work->ok = 0;
+    return;
+  }
+  if (entry->is_dir) {
+    if (!is_test) {
+      work->ok &= zz9k_archive_write_entry(work->output_dir, entry, 0);
+    }
+    return;
+  }
+  if (zz9k_archive_overwrite_outputs &&
+      !zz9k_archive_dry_run_outputs &&
+      !zz9k_archive_skip_existing_outputs &&
+      zz9k_archive_lha_output_is_archive(work->src, work->output_dir,
+                                         entry)) {
+    /* Extracting this member onto the archive itself would truncate the
+       source mid-read: refuse it before any output is opened. */
+    printf("output path is the archive itself, refusing: %s\n", entry->name);
+    work->ok = 0;
+    return;
+  }
+  if (zz9k_archive_lha_method_supported(entry->method)) {
+    if (is_test) {
+      work->ok &= zz9k_archive_lha_decode_method_to_file(
+          work->ctx, work->service, work->src, entry, 0);
+    } else {
+      work->ok &= zz9k_archive_extract_lha_lh5(
+          work->ctx, work->service, work->src, work->output_dir, entry);
+    }
+    return;
+  }
+  if (entry->method != ZZ9K_ARCHIVE_LHA_METHOD_LH0) {
+    printf("lha method unsupported: %s\n", entry->name);
+    work->ok = 0;
+    return;
+  }
+  if (entry->compressed_size != entry->uncompressed_size ||
+      entry->data_offset > work->src->length ||
+      entry->uncompressed_size > work->src->length - entry->data_offset) {
+    printf("lha stored entry size mismatch: %s\n", entry->name);
+    work->ok = 0;
+    return;
+  }
+  if (!is_test) {
+    work->ok &= zz9k_archive_write_file_range_entry(
+        work->output_dir, entry, work->src->path, 0);
+  }
+}
 
 /* File-backed LHA engine: walks member headers with seeks and reads each
    member's compressed bytes on demand. A large archive never has to fit in
@@ -8537,9 +9304,12 @@ static int zz9k_archive_handle_lha(ZZ9KContext *ctx,
    point of this path (issue #104: a 180 MB archive used to cost a silent
    multi-minute full-file load before the first output line).
 
-   Returns *attempted = 0 only when the file cannot be opened or the header
-   walk fails, letting the caller fall back to the in-memory engine, which
-   reports those failures exactly as before this path existed. */
+   Returns *attempted = 0 only when the file cannot be opened (the caller
+   falls back and reports it) or the command is not l/t/x. Once the file
+   is open this engine owns the archive: a mid-walk failure is TERMINAL
+   with its own diagnostic, never a cue to load the whole archive into
+   RAM -- on the memory-constrained machines this path exists for, that
+   fallback just masked the real failure under an allocation error. */
 static int zz9k_archive_handle_lha_file(ZZ9KContext **ctx,
                                         ZZ9KServiceInfo *service,
                                         int *codec_ready,
@@ -8551,6 +9321,7 @@ static int zz9k_archive_handle_lha_file(ZZ9KContext **ctx,
 {
   ZZ9KArchiveEntry *entries = 0;
   ZZ9KLhaSource src;
+  ZZ9KLhaStreamWork work;
   uint32_t count = 0U;
   int is_list;
   int is_test;
@@ -8571,50 +9342,14 @@ static int zz9k_archive_handle_lha_file(ZZ9KContext **ctx,
                                          archive_length)) {
     return 0; /* the in-memory fallback reports the open failure */
   }
-  if (!zz9k_archive_lha_list_file(src.file, archive_length, 0, 0U,
-                                  &count)) {
-    zz9k_archive_lha_source_close(&src);
-    return 0; /* fall back: the in-memory parse reports "lha parse failed" */
-  }
-  /* Uncapped, unlike the ZIP/7z helper (which bounds directory sizes at
-     65,535): a whole-partition LHA backup can legitimately carry more
-     members than that, and capping here would push exactly the large
-     archives this engine exists for back onto the whole-file load. */
-  {
-    uint32_t capacity = count;
+  *attempted = 1; /* the file engine owns the archive from here on */
 
-    entries = (ZZ9KArchiveEntry *)calloc(capacity == 0U ? 1U : capacity,
-                                         sizeof(*entries));
-    if (!entries) {
-      printf("lha entry allocation failed\n");
-      zz9k_archive_lha_source_close(&src);
-      return 0;
-    }
-    if (!zz9k_archive_lha_list_file(src.file, archive_length, entries,
-                                    capacity, &count)) {
-      zz9k_archive_lha_source_close(&src);
-      free(entries);
-      return 0; /* fall back: the in-memory parse reports "lha parse failed" */
-    }
-    if (count > capacity) {
-      /* The file grew more members between the two walks: it is being
-         rewritten in place. Never iterate past the allocation -- hand
-         back to the in-memory engine, which reads one consistent
-         snapshot of the changed file. */
-      printf("lha archive changed during listing\n");
-      zz9k_archive_lha_source_close(&src);
-      free(entries);
-      return 0;
-    }
-  }
-
-
-  *attempted = 1;
   if ((is_test || is_extract) && !*codec_ready) {
     /* The board codec is optional for LHA: on any open or service failure
        decode in software, exactly like the in-memory engine's caller. */
     int status = zz9k_open(ctx);
 
+    zz9k_archive_note_status(status);
     if (status == ZZ9K_STATUS_OK) {
       if (zz9k_archive_require_codec_service(*ctx, service)) {
         *codec_ready = 1;
@@ -8626,19 +9361,62 @@ static int zz9k_archive_handle_lha_file(ZZ9KContext **ctx,
     } else {
       *ctx = 0;
     }
+    if (zz9k_archive_cancelled()) {
+      /* A Ctrl-C consumed by any codec-open round trip (the armed Wait
+         clears SIGBREAKF_CTRL_C, so checkpoints cannot see it) must stop
+         the run -- never silently demote the whole archive to a slow
+         full software decode the user asked to abort. */
+      zz9k_archive_lha_source_close(&src);
+      return 0;
+    }
   }
-  if (is_test || is_extract) {
-    printf("lha: %lu entries\n", (unsigned long)count);
-    fflush(stdout);
+
+  /* Streaming: one pass parses each header and -- for t/x -- decodes and
+     writes that member before moving on, exactly like the classic lha
+     tool. The first extracted file costs one header read plus its own
+     compressed bytes; no archive-wide scan ever precedes output. The
+     batch offload stays available to the in-memory engine, where the
+     whole archive is already resident and the scan is free. */
+  if (is_list) {
+    if (!zz9k_archive_lha_list_file(src.file, archive_length, &entries,
+                                    &count, zz9k_archive_lha_print_entry,
+                                    0)) {
+      zz9k_archive_lha_source_close(&src);
+      free(entries);
+      return 0;
+    }
+    zz9k_archive_lha_source_close(&src);
+    free(entries);
+    return 1;
   }
-  ok = zz9k_archive_lha_command_loop(*codec_ready ? *ctx : 0,
-                                     *codec_ready ? service : 0,
-                                     &src, entries, count, command,
-                                     output_dir);
+
+  memset(&work, 0, sizeof(work));
+  work.ctx = *codec_ready ? *ctx : 0;
+  work.service = *codec_ready ? service : 0;
+  work.src = &src;
+  work.command = command;
+  work.output_dir = output_dir;
+  work.ok = 1;
+  zz9k_lha_diag_reset();
+  if (!zz9k_archive_lha_list_file(src.file, archive_length, &entries,
+                                  &count, zz9k_archive_lha_work_entry,
+                                  &work)) {
+    /* Terminal: the walk has already printed its diagnostic. */
+    zz9k_archive_lha_source_close(&src);
+    free(entries);
+    return 0;
+  }
+  ok = work.ok;
+  if (is_test && ok) {
+    printf("lha test ok: %lu entries\n", (unsigned long)count);
+  }
+  zz9k_lha_diag_report();
   zz9k_archive_lha_source_close(&src);
   free(entries);
   return ok;
 }
+
+
 
 static int zz9k_archive_handle_gzip(ZZ9KContext *ctx,
                                     const ZZ9KServiceInfo *service,
@@ -8722,7 +9500,8 @@ static int zz9k_archive_handle_tar_gzip_feed(
     return 0;
   }
   output_limit = zz9k_archive_zip_test_output_limit(info->uncompressed_size);
-  zz9k_archive_tar_stream_init(&tar_stream, command, output_dir);
+  zz9k_archive_tar_stream_init(&tar_stream, command, output_dir,
+                               archive_path);
   if (!zz9k_archive_decompress_feed_file_to_callback(
           ctx, service, ZZ9K_COMPRESSION_GZIP, archive_path, file_length,
           output_limit, zz9k_archive_tar_stream_chunk, &tar_stream,
@@ -8765,6 +9544,85 @@ out:
   return ok;
 }
 
+#define ZZ9K_ARCHIVE_TAR_WALK_CHUNK (64U * 1024U)
+
+/* File-backed plain-tar engine: one sequential pass of chunked reads fed
+   through the same streaming parser tar.gz uses. No whole-archive RAM
+   load, listing and extraction stream as members complete, and the only
+   I/O pattern is a long sequential read -- the best a network mount can
+   offer. Attempted stays 0 only when the file cannot be opened, letting
+   the in-memory fallback report it exactly as before. */
+static int zz9k_archive_handle_tar_file(const char *archive_path,
+                                        uint32_t archive_length,
+                                        const char *command,
+                                        const char *output_dir,
+                                        int *attempted)
+{
+  ZZ9KArchiveTarStream stream;
+  uint8_t *chunk = 0;
+  FILE *file;
+  uint32_t remaining;
+  int ok = 0;
+
+  if (!attempted) {
+    return 0;
+  }
+  *attempted = 0;
+  if (!archive_path || !command ||
+      (strcmp(command, "l") != 0 && strcmp(command, "t") != 0 &&
+       strcmp(command, "x") != 0)) {
+    return 0;
+  }
+  file = fopen(archive_path, "rb");
+  if (!file) {
+    return 0; /* the in-memory fallback reports the open failure */
+  }
+  *attempted = 1;
+  /* Init before any allocation that can fail: the out path calls
+     tar_stream_cleanup, which must never see an uninitialized stream. */
+  zz9k_archive_tar_stream_init(&stream, command, output_dir,
+                               archive_path);
+  chunk = (uint8_t *)malloc(ZZ9K_ARCHIVE_TAR_WALK_CHUNK);
+  if (!chunk) {
+    printf("tar stream chunk allocation failed\n");
+    goto out;
+  }
+  remaining = archive_length;
+  while (remaining != 0U) {
+    uint32_t part = remaining > ZZ9K_ARCHIVE_TAR_WALK_CHUNK ?
+        ZZ9K_ARCHIVE_TAR_WALK_CHUNK : remaining;
+
+    if (zz9k_archive_cancelled()) {
+
+      goto out;
+    }
+    if (fread(chunk, 1U, part, file) != part) {
+      printf("read failed: %s\n", archive_path);
+      goto out;
+    }
+    remaining -= part;
+    if (!zz9k_archive_tar_stream_consume(&stream, chunk, part)) {
+      printf("tar parse failed\n");
+      goto out;
+    }
+  }
+  if (!zz9k_archive_tar_stream_finish(&stream)) {
+    printf("tar parse failed\n");
+    goto out;
+  }
+  if (strcmp(command, "t") == 0) {
+    printf("tar test ok: %lu entries\n", (unsigned long)stream.count);
+  }
+  ok = 1;
+
+out:
+  zz9k_archive_tar_stream_cleanup(&stream);
+  free(chunk);
+  if (file) {
+    fclose(file);
+  }
+  return ok;
+}
 static int zz9k_archive_handle_gzip_file(
     ZZ9KContext **ctx,
     ZZ9KServiceInfo *service,
@@ -10031,7 +10889,7 @@ static int zz9k_archive_handle_7z_file(ZZ9KContext **ctx,
     } else if (entries[i].method == ZZ9K_ARCHIVE_7Z_METHOD_COPY) {
       uint32_t actual_crc = 0U;
 
-      if (!zz9k_archive_7z_copy_file_crc_matches(
+      if (is_test && !zz9k_archive_7z_copy_file_crc_matches(
               archive_path, &entries[i], &actual_crc)) {
         printf("7z entry crc mismatch: %s decoded=0x%08lx expected=0x%08lx\n",
                entries[i].name,
@@ -10041,8 +10899,10 @@ static int zz9k_archive_handle_7z_file(ZZ9KContext **ctx,
         continue;
       }
       if (is_extract) {
+        /* One pass: the range copy verifies the CRC inline instead of a
+           separate read-first verification round over the network. */
         ok &= zz9k_archive_write_file_range_entry(
-            output_dir, &entries[i], archive_path);
+            output_dir, &entries[i], archive_path, 1);
       }
     } else if (entries[i].method == ZZ9K_ARCHIVE_7Z_METHOD_DEFLATE) {
       ZZ9KDecompressResult result;
@@ -10646,7 +11506,7 @@ static int zz9k_archive_handle_7z(ZZ9KContext **ctx,
         }
         if (zz9k_archive_service_supports_decompress_feed(
                 service, ZZ9K_COMPRESSION_LZMA2)) {
-          if (entries[i].method_props_size != 1U ||
+          if (
               !zz9k_archive_7z_lzma2_feed_output_limit(
                   &entries[i], &lzma2_output_limit) ||
               !zz9k_archive_decompress_feed_stream_parts_to_file(
@@ -10743,12 +11603,14 @@ static int zz9k_archive_run(const char *command, const char *archive_path,
   int status;
   int ok = 0;
 
+  zz9k_archive_cancel_latched = 0;
   memset(&service, 0, sizeof(service));
   if (!zz9k_archive_probe_file(archive_path, probe, sizeof(probe),
                                &probe_length, &file_length)) {
     return 0;
   }
   format = zz9k_archive_detect_format(probe, probe_length);
+  printf("zz9k-archive build f82a24e+review1 2026-09-19j\n");
   printf("archive: %s (%s)\n", archive_path, zz9k_archive_format_name(format));
 
   if (format == ZZ9K_ARCHIVE_FORMAT_LZMA_ALONE &&
@@ -10857,6 +11719,16 @@ static int zz9k_archive_run(const char *command, const char *archive_path,
     int file_ok = zz9k_archive_handle_lha_file(
         &ctx, &service, &codec_ready, archive_path, file_length,
         command, output_dir, &file_attempted);
+
+    if (file_attempted) {
+      ok = file_ok;
+      goto out;
+    }
+  }
+  if (format == ZZ9K_ARCHIVE_FORMAT_TAR) {
+    int file_attempted = 0;
+    int file_ok = zz9k_archive_handle_tar_file(
+        archive_path, file_length, command, output_dir, &file_attempted);
 
     if (file_attempted) {
       ok = file_ok;

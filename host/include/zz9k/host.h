@@ -439,6 +439,15 @@ int zz9k_arm_completion_irq(ZZ9KContext *ctx);
 /* Reverse of zz9k_arm_completion_irq. Safe on an unarmed context. */
 void zz9k_disarm_completion_irq(ZZ9KContext *ctx);
 
+/* Mark that a cancelled request is still running on the board and will
+ * post its completion (and assert the SDK IRQ) later. Disarm then keeps
+ * its handler-removal watcher running until that assert is observed and
+ * acked (or its bounded window expires) instead of exiting on a short
+ * quiet period -- an unobserved late assert with no handler installed
+ * crashes the machine until reboot.
+ */
+void zz9k_expect_late_completion_irq(ZZ9KContext *ctx);
+
 int zz9k_completion_irq_ack(ZZ9KContext *ctx);
 int zz9k_interrupt_status(ZZ9KContext *ctx, uint16_t *status);
 int zz9k_submit(ZZ9KContext *ctx, ZZ9KRequest *request,

@@ -115,6 +115,7 @@ struct ZZ9KContext {
   uint32_t offload_timeout_ms;
   uint32_t sync_wait_timeout_ms;   /* armed-wait ENV bound, read once; 0 = unread */
   unsigned char irq_armed;
+  unsigned char late_irq_expected; /* cancelled op still in flight */
   unsigned char aperture_layout_valid;
 #if ZZ9K_HOST_AMIGA
   struct Interrupt irq;
@@ -631,7 +632,57 @@ static int zz9k_await_completion_locked(ZZ9KContext *ctx, uint32_t request_id,
     }
     /* ring empty: sleep, then re-poll */
     if (zz9k_wait_block(ctx) != 0) {
+#if ZZ9K_HOST_AMIGA
+      /* Ctrl-C: the request is still IN FLIGHT on the board, and the
+         caller's failure path will free the buffers the ARM is decoding
+         into. Drain bounded (single-member decodes finish in well under
+         a second; the cap matches the sync wait default) so the
+         completion retires and the firmware is done with the buffers
+         before they are released. Never blocks on Wait again -- only
+         polls, so further Ctrl-C presses do not extend the drain. The
+         iteration cap is belt-and-braces alongside the timer deadline.
+         The drain itself owns late_irq_expected: a retired request
+         clears it (no assert will come), a timed-out one sets it. */
+      uint32_t drain_start = zz9k_now_ms(ctx);
+      uint32_t drain_polls = 0U;
+      int drain_expired = 0;
+
+      for (;;) {
+        status = zz9k_consume_next_completion_locked(ctx, reply);
+        if (status == ZZ9K_STATUS_OK &&
+            reply->request_id == request_id &&
+            reply->opcode == opcode &&
+            reply->user_cookie == sync_cookie) {
+          /* Retired cleanly: the completion is consumed and no further
+             assert will arrive -- clear any stale expectation so disarm
+             does not busy-wait the full window for an assert that is
+             never coming. */
+          ctx->late_irq_expected = 0;
+          return ZZ9K_STATUS_CANCELLED;
+        }
+        if (status != ZZ9K_STATUS_BUSY && status != ZZ9K_STATUS_OK) {
+          break; /* transport error: nothing more to drain, and nothing
+                     on a dead transport will ever assert -- leave
+                     late_irq_expected untouched rather than arming a
+                     15s disarm spin that can never be satisfied */
+        }
+        if ((uint32_t)(zz9k_now_ms(ctx) - drain_start) >= 2000U ||
+            ++drain_polls > 4000000U) {
+          drain_expired = 1;
+          break;
+        }
+        zz9k_idle_between_polls_backoff(28U);
+      }
+      /* Only a drain that timed out with the request still outstanding
+         leaves the ARM working after we return: it will post its
+         completion (and assert the IRQ) after the caller frees its
+         buffers -- disarm must watch for that. */
+      if (drain_expired) {
+        ctx->late_irq_expected = 1;
+      }
       return ZZ9K_STATUS_CANCELLED;
+#endif
+      return ZZ9K_STATUS_CANCELLED; /* host stub wake: no drain needed */
     }
     if (zz9k_now_ms(ctx) - start >= hard_timeout_ms) {
       return ZZ9K_STATUS_TIMEOUT;
@@ -1288,6 +1339,13 @@ int zz9k_arm_completion_irq(ZZ9KContext *ctx)
 #endif
 }
 
+void zz9k_expect_late_completion_irq(ZZ9KContext *ctx)
+{
+  if (ctx) {
+    ctx->late_irq_expected = 1;
+  }
+}
+
 void zz9k_disarm_completion_irq(ZZ9KContext *ctx)
 {
 #if ZZ9K_HOST_AMIGA
@@ -1299,6 +1357,42 @@ void zz9k_disarm_completion_irq(ZZ9KContext *ctx)
   Forbid();
   RemIntServer(ctx->irq_int_bit, &ctx->irq);
   Permit();
+  /* A completion posted between the disable above and the server removal
+     can leave the board asserting the line with no handler installed --
+     and a decode abandoned by a Ctrl-C may post its completion SECONDS
+     later, after any single ack. An asserted line with no handler crashes
+     the next interrupt-heavy operation (directory deletes, disk
+     activity). Watch the board's interrupt status for a grace window and
+     ack every late assert until the board has been quiet for half a
+     second: the ACK register write needs no handler, and by the time the
+     loop exits the abandoned work has actually finished posting. */
+  {
+    uint32_t quiet_start = zz9k_now_ms(ctx);
+    uint32_t deadline = quiet_start;
+    uint32_t spins = 0U;
+    int retired = !ctx->late_irq_expected;
+
+    for (;;) {
+      uint16_t status = 0;
+
+      if (zz9k_interrupt_status(ctx, &status) == ZZ9K_STATUS_OK &&
+          (status & ZZ9K_INTERRUPT_SDK) != 0U) {
+        (void)zz9k_completion_irq_ack(ctx);
+        quiet_start = zz9k_now_ms(ctx);
+        retired = 1; /* observed the abandoned op's completion assert */
+      }
+      if (retired &&
+          ((uint32_t)(zz9k_now_ms(ctx) - quiet_start) >= 500U ||
+           ++spins > 20000000U)) {
+        break;
+      }
+      if ((uint32_t)(zz9k_now_ms(ctx) - deadline) > 15000U) {
+        break; /* give up watching; the disable above is the backstop */
+      }
+    }
+    ctx->late_irq_expected = 0;
+  }
+  (void)zz9k_completion_irq_ack(ctx);
   zz9k_timer_close(ctx);
   if (ctx->irq_signal_bit >= 0) {
     FreeSignal(ctx->irq_signal_bit);
