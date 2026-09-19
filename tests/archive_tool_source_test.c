@@ -164,7 +164,13 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "zz9k_archive_lha_decode_method_to_file");
   ok &= expect_contains(source, "zz9k_archive_extract_lha_lh5");
   ok &= expect_contains(source, "zz9k_archive_lha_list");
-  ok &= expect_contains(source, "zz9k_archive_handle_lha");
+  ok &= expect_contains(source, "zz9k_archive_lha_list_file");
+  ok &= expect_contains(source, "zz9k_archive_lha_parse_header");
+  ok &= expect_contains(source, "zz9k_archive_handle_lha_file");
+  ok &= expect_contains(source, "ZZ9KLhaSource");
+  ok &= expect_contains(source, "zz9k_archive_lha_batch_run_src");
+  ok &= expect_contains(source, "zz9k_archive_lha_command_loop");
+  ok &= expect_contains(source, "reading %luMB into RAM");
   ok &= expect_contains(source, "board.zorro_version == 2U");
   ok &= expect_contains(source, "zz9k_archive_lha_join_dir_name");
   ok &= expect_contains(source, "ext_size");
