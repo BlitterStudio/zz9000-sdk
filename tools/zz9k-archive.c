@@ -5092,6 +5092,7 @@ static int zz9k_archive_write_file_range_entry(
   FILE *input = 0;
   FILE *output = 0;
   char *path = 0;
+  char *tmp_path = 0;
   ZZ9KArchiveEntry output_entry;
   uint8_t *chunk = 0;
   uint32_t range_crc = 0U;
@@ -5150,7 +5151,24 @@ static int zz9k_archive_write_file_range_entry(
     printf("file range seek failed: %s\n", input_path);
     goto out;
   }
-  output = fopen(path, "wb");
+  /* Verified writes go to a sibling temporary and replace the destination
+     only after the CRC passes: a corrupt member under --overwrite must
+     never destroy the file that was already there (the pre-inline
+     behavior verified before opening, at the cost of a second read). */
+  if (verify_crc) {
+    size_t path_len = strlen(path);
+
+    tmp_path = (char *)malloc(path_len + sizeof(".zz9k-tmp"));
+    if (!tmp_path) {
+      printf("path allocation failed\n");
+      goto out;
+    }
+    memcpy(tmp_path, path, path_len);
+    memcpy(tmp_path + path_len, ".zz9k-tmp", sizeof(".zz9k-tmp"));
+    output = fopen(tmp_path, "wb");
+  } else {
+    output = fopen(path, "wb");
+  }
   if (!output) {
     printf("open output failed: %s\n", path);
     goto out;
@@ -5181,16 +5199,31 @@ static int zz9k_archive_write_file_range_entry(
   }
   if (verify_crc && (entry->flags & ZZ9K_ARCHIVE_ENTRY_FLAG_CRC32) != 0U &&
       range_crc != entry->crc32) {
-    /* The bytes are already on disk; remove the bad output so a failed
-       verification leaves nothing behind, and report like the old
-       pre-write CRC pass did -- one network read instead of two. */
+    /* Verification failed: the destination was never touched. */
     fclose(output);
     output = 0;
-    remove(path);
+    remove(tmp_path);
     printf("stored entry crc mismatch: %s decoded=0x%08lx expected=0x%08lx\n",
            output_entry.name, (unsigned long)range_crc,
            (unsigned long)entry->crc32);
     goto out;
+  }
+  if (tmp_path) {
+    /* Verified clean: swap the temporary in, replacing any destination
+     left by --overwrite. */
+    if (fclose(output) != 0) {
+      output = 0;
+      remove(tmp_path);
+      printf("file range write failed: %s\n", output_entry.name);
+      goto out;
+    }
+    output = 0;
+    remove(path);
+    if (rename(tmp_path, path) != 0) {
+      remove(tmp_path);
+      printf("file range rename failed: %s\n", output_entry.name);
+      goto out;
+    }
   }
 
   ok = 1;
@@ -5198,6 +5231,9 @@ static int zz9k_archive_write_file_range_entry(
 out:
   if (output && fclose(output) != 0) {
     ok = 0;
+  }
+  if (!ok && tmp_path) {
+    remove(tmp_path); /* never leave a stale temporary behind */
   }
   if (input) {
     fclose(input);
@@ -5207,6 +5243,7 @@ out:
     printf("x %s\n", output_entry.name);
   }
   free(chunk);
+  free(tmp_path);
   free(path);
   return ok;
 }
@@ -8878,12 +8915,14 @@ static int zz9k_archive_handle_tar_file(const char *archive_path,
     return 0; /* the in-memory fallback reports the open failure */
   }
   *attempted = 1;
+  /* Init before any allocation that can fail: the out path calls
+     tar_stream_cleanup, which must never see an uninitialized stream. */
+  zz9k_archive_tar_stream_init(&stream, command, output_dir);
   chunk = (uint8_t *)malloc(ZZ9K_ARCHIVE_TAR_WALK_CHUNK);
   if (!chunk) {
     printf("tar stream chunk allocation failed\n");
     goto out;
   }
-  zz9k_archive_tar_stream_init(&stream, command, output_dir);
   remaining = archive_length;
   while (remaining != 0U) {
     uint32_t part = remaining > ZZ9K_ARCHIVE_TAR_WALK_CHUNK ?

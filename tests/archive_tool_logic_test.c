@@ -6173,10 +6173,32 @@ static int test_zip_file_store_extract_verifies_inline(void)
   remove(out_path);
   remove(out_dir);
 
-  /* Corrupt the stored data: extraction fails and removes the output. */
+  /* Corrupt the stored data: extraction fails, leaves no NEW output, and
+     --overwrite of a corrupt member PRESERVES the pre-existing file. */
   zip[39U] = (uint8_t)(zip[39U] ^ 0xffU);
   remove(path);
   if (!write_test_file(path, zip, zip_len)) return 5;
+  remove(out_path);
+  remove(out_dir);
+  if (!zz9k_archive_path_exists(out_dir) &&
+      !zz9k_archive_mkdir_one((char *)out_dir)) {
+    rc = 8;
+    goto out;
+  }
+  file = fopen(out_path, "wb");
+  if (!file) {
+    rc = 9;
+    goto out;
+  }
+  if (fwrite("HELLO", 1U, 5U, file) != 5U) {
+    fclose(file);
+    file = 0;
+    rc = 10;
+    goto out;
+  }
+  fclose(file);
+  file = 0;
+  zz9k_archive_overwrite_outputs = 1;
   if (zz9k_archive_handle_zip_file(&ctx, &service, &codec_ready, path,
                                    zip_len, "x", out_dir, &attempted) ||
       !attempted) {
@@ -6184,14 +6206,27 @@ static int test_zip_file_store_extract_verifies_inline(void)
     goto out;
   }
   file = fopen(out_path, "rb");
-  if (file) {
-    fclose(file);
-    file = 0;
-    rc = 7; /* failed verification must leave nothing behind */
+  if (!file) {
+    rc = 7; /* the pre-existing file must still be there */
     goto out;
   }
+  {
+    uint8_t preserved[8];
+
+    if (fread(preserved, 1U, 5U, file) != 5U ||
+        memcmp(preserved, "HELLO", 5U) != 0) {
+      fclose(file);
+      file = 0;
+      rc = 11; /* and intact: a corrupt member must not destroy it */
+      goto out;
+    }
+  }
+  fclose(file);
+  file = 0;
+  zz9k_archive_overwrite_outputs = 0;
 
 out:
+  zz9k_archive_overwrite_outputs = 0;
   if (file) fclose(file);
   remove(out_path);
   remove(out_dir);
