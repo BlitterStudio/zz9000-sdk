@@ -19,6 +19,7 @@
 
 #if defined(_WIN32)
 #include <direct.h>
+#include <windows.h>
 #include <sys/stat.h>
 #elif defined(__amigaos__)
 #include <proto/dos.h>
@@ -662,25 +663,38 @@ static int zz9k_archive_detect_lha(const uint8_t *data, uint32_t length)
   uint32_t header_size;
   uint8_t level;
 
-  if (!zz9k_archive_lha_header_checksum_valid(data, length)) {
+  if (!data || length < 24U) {
     return 0;
   }
-  header_size = data[20] == 2U ? zz9k_archive_get_le16(data) : data[0];
-  if (data[20] == 2U) {
+  level = data[20];
+  if (level > 2U) {
+    return 0;
+  }
+  if (level == 2U) {
+    /* A level-2 header's total size (u16) can far exceed a probe buffer,
+       and its "checksum" validation is only a bounds check, so detection
+       validates the readable base (method bytes, sane sizes) without
+       requiring the whole header to fit. Without this, a large level-2
+       archive is misdetected at probe time and falls back to the
+       whole-file load; the file walker grows its window and the parser
+       validates the full extent later. */
+    header_size = zz9k_archive_get_le16(data);
     if (header_size < 26U ||
         data[2] != '-' || data[6] != '-' ||
         data[3] != 'l' ||
         (data[4] != 'h' && data[4] != 'z')) {
       return 0;
     }
-  } else if (header_size < 22U ||
-             data[2] != '-' || data[6] != '-' ||
-             data[3] != 'l' ||
-             (data[4] != 'h' && data[4] != 'z')) {
+    return 1;
+  }
+  if (!zz9k_archive_lha_header_checksum_valid(data, length)) {
     return 0;
   }
-  level = data[20];
-  if (level > 2U) {
+  header_size = data[0];
+  if (header_size < 22U ||
+      data[2] != '-' || data[6] != '-' ||
+      data[3] != 'l' ||
+      (data[4] != 'h' && data[4] != 'z')) {
     return 0;
   }
   if (level == 0U && data[21] > header_size - 22U) {
@@ -8222,22 +8236,89 @@ out:
   }
 }
 
+/* True when two paths denote the same existing file. Amiga: SameLock on
+   shared locks. Windows: the volume serial and file index of read-only
+   handles (st_ino is meaningless there; read-only opens never truncate).
+   POSIX: stat device/inode pairs. Both paths exist whenever a collision
+   is possible (the output would overwrite an existing file), so the
+   probes never create anything. */
+static int zz9k_archive_paths_same_file(const char *a, const char *b)
+{
+  if (!a || !b) {
+    return 0;
+  }
+#if defined(__amigaos__)
+  {
+    BPTR lock_a = Lock(a, SHARED_LOCK);
+    BPTR lock_b = Lock(b, SHARED_LOCK);
+    int same = 0;
+
+    if (lock_a && lock_b) {
+      same = (SameLock(lock_a, lock_b) == LOCK_SAME);
+    }
+    if (lock_a) {
+      UnLock(lock_a);
+    }
+    if (lock_b) {
+      UnLock(lock_b);
+    }
+    return same;
+  }
+#elif defined(_WIN32)
+  {
+    HANDLE file_a = CreateFileA(a, GENERIC_READ,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE |
+                                    FILE_SHARE_DELETE,
+                                0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+    HANDLE file_b = CreateFileA(b, GENERIC_READ,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE |
+                                    FILE_SHARE_DELETE,
+                                0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+    int same = 0;
+
+    if (file_a != INVALID_HANDLE_VALUE && file_b != INVALID_HANDLE_VALUE) {
+      BY_HANDLE_FILE_INFORMATION info_a;
+      BY_HANDLE_FILE_INFORMATION info_b;
+
+      if (GetFileInformationByHandle(file_a, &info_a) &&
+          GetFileInformationByHandle(file_b, &info_b)) {
+        same = info_a.dwVolumeSerialNumber == info_b.dwVolumeSerialNumber &&
+               info_a.nFileIndexHigh == info_b.nFileIndexHigh &&
+               info_a.nFileIndexLow == info_b.nFileIndexLow;
+      }
+    }
+    if (file_a != INVALID_HANDLE_VALUE) {
+      CloseHandle(file_a);
+    }
+    if (file_b != INVALID_HANDLE_VALUE) {
+      CloseHandle(file_b);
+    }
+    return same;
+  }
+#else
+  {
+    struct stat stat_a;
+    struct stat stat_b;
+
+    return stat(a, &stat_a) == 0 && stat(b, &stat_b) == 0 &&
+           stat_a.st_dev == stat_b.st_dev && stat_a.st_ino == stat_b.st_ino;
+  }
+#endif
+}
+
 /* File-mode extraction safety: true when a member's output path denotes the
    archive file itself. Outputs are opened with "wb", which would truncate
    the archive before its member bytes are read through src->file -- the
    in-memory engine was immune because the source bytes were already in
-   RAM. The comparison is textual after stripping leading "./" segments,
-   case-insensitive (AmigaDOS and Windows are; on case-sensitive hosts a
-   benign case-variant is merely refused, never harmed). Exotic
-   same-file spellings (symlinks, different roots) are out of scope. */
+   RAM. Compared by file identity, not spelling: absolute, relative and
+   "./"-prefixed aliases of the archive must collide too. */
 static int zz9k_archive_lha_output_is_archive(const ZZ9KLhaSource *src,
                                               const char *output_dir,
                                               const ZZ9KArchiveEntry *entry)
 {
   ZZ9KArchiveEntry output_entry;
-  const char *archive;
-  const char *output;
   char *output_path;
+  int collision;
 
   if (!src || !src->file || !src->path || !entry || entry->is_dir) {
     return 0;
@@ -8249,29 +8330,9 @@ static int zz9k_archive_lha_output_is_archive(const ZZ9KLhaSource *src,
   if (!output_path) {
     return 0;
   }
-  archive = src->path;
-  while (archive[0] == '.' && archive[1] == '/') {
-    archive += 2;
-  }
-  output = output_path;
-  while (output[0] == '.' && output[1] == '/') {
-    output += 2;
-  }
-  {
-    size_t i;
-    size_t archive_len = strlen(archive);
-    size_t output_len = strlen(output);
-    int collision = archive_len == output_len;
-
-    for (i = 0U; collision && i < archive_len; i++) {
-      if (zz9k_archive_ascii_lower((int)(unsigned char)archive[i]) !=
-          zz9k_archive_ascii_lower((int)(unsigned char)output[i])) {
-        collision = 0;
-      }
-    }
-    free(output_path);
-    return collision;
-  }
+  collision = zz9k_archive_paths_same_file(src->path, output_path);
+  free(output_path);
+  return collision;
 }
 
 /* Shared LHA command engine: the batch offload pass (t/x) followed by the
@@ -8289,10 +8350,17 @@ static int zz9k_archive_lha_command_loop(ZZ9KContext *ctx,
   uint32_t i;
   int ok = 1;
 
-  if (src->file && strcmp(command, "x") == 0) {
+  if (src->file && strcmp(command, "x") == 0 &&
+      zz9k_archive_overwrite_outputs &&
+      !zz9k_archive_dry_run_outputs &&
+      !zz9k_archive_skip_existing_outputs) {
     /* Refuse before ANY output is opened (the batch drains members too):
        extracting a member onto the archive itself would truncate the
-       source mid-read and destroy it. */
+       source mid-read and destroy it. Only the --overwrite path can
+       truncate: --skip-existing returns before opening an existing
+       output, --dry-run never opens one, and without --overwrite an
+       existing output is refused per member without truncation. */
+
     for (i = 0U; i < count; i++) {
       if (!zz9k_archive_entry_matches_filter(&entries[i])) {
         continue;

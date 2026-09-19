@@ -493,6 +493,43 @@ static int make_lha_lh5_level2_ext_name(uint8_t *lha, uint32_t *length)
   return 1;
 }
 
+/* Single stored (-lh0-) level-1 member with a given name and data. */
+static int make_lha_lh0_named(const char *name,
+                              const char *data,
+                              uint8_t *lha,
+                              uint32_t *length)
+{
+  uint32_t name_len = (uint32_t)strlen(name);
+  uint32_t data_len = (uint32_t)strlen(data);
+  uint32_t header_size = 25U + name_len;
+  uint32_t pos = 0U;
+  uint32_t i;
+  uint8_t checksum = 0U;
+
+  memset(lha, 0, 256U);
+  lha[pos++] = (uint8_t)header_size;
+  lha[pos++] = 0U;
+  memcpy(lha + pos, "-lh0-", 5U); pos += 5U;
+  put_le32(lha + pos, data_len); pos += 4U;
+  put_le32(lha + pos, data_len); pos += 4U;
+  put_le32(lha + pos, 0U); pos += 4U;
+  lha[pos++] = 0x20U;
+  lha[pos++] = 1U;
+  lha[pos++] = (uint8_t)name_len;
+  memcpy(lha + pos, name, name_len); pos += name_len;
+  put_le16(lha + pos, 0U); pos += 2U;
+  lha[pos++] = 'A';
+  put_le16(lha + pos, 0U); pos += 2U;
+  for (i = 2U; i < 2U + header_size; i++) {
+    checksum = (uint8_t)(checksum + lha[i]);
+  }
+  lha[1] = checksum;
+  memcpy(lha + pos, data, data_len); pos += data_len;
+  lha[pos++] = 0U;
+  *length = pos;
+  return 1;
+}
+
 static const uint8_t lha_lh5_docker_fixture[] = {
   0x54U, 0x00U, 0x2dU, 0x6cU, 0x68U, 0x35U, 0x2dU, 0xb9U, 0x00U, 0x00U, 0x00U, 0x90U,
   0xe2U, 0x00U, 0x00U, 0x59U, 0xddU, 0x16U, 0x6aU, 0x20U, 0x02U, 0xe1U, 0x14U, 0x55U,
@@ -4919,46 +4956,20 @@ static int test_lha_file_extract_refuses_archive_collision(void)
   const char *name = "archive_tool_collide.lha";
   const char *path = "archive_tool_collide.lha";
   const char *control_path = "dir/hello.txt";
-  uint8_t lha[128];
+  uint8_t lha[256];
   uint8_t control[128];
-  uint8_t readback[128];
+  uint8_t readback[256];
   ZZ9KServiceInfo service;
   ZZ9KContext *ctx = 0;
   FILE *file = 0;
   uint32_t lha_len;
   uint32_t control_len;
-  uint32_t name_len = (uint32_t)strlen(name);
-  uint32_t data_len = 5U;
-  uint32_t header_size = 25U + name_len;
-  uint32_t pos = 0U;
-  uint32_t i;
-  uint8_t checksum = 0U;
   int attempted = 0;
   int codec_ready = 0;
   int rc = 0;
 
-  /* Self-named stored member: "-lh0-", name == archive filename. */
-  memset(lha, 0, sizeof(lha));
-  lha[pos++] = (uint8_t)header_size;
-  lha[pos++] = 0U;
-  memcpy(lha + pos, "-lh0-", 5U); pos += 5U;
-  put_le32(lha + pos, data_len); pos += 4U;
-  put_le32(lha + pos, data_len); pos += 4U;
-  put_le32(lha + pos, 0U); pos += 4U;
-  lha[pos++] = 0x20U;
-  lha[pos++] = 1U;
-  lha[pos++] = (uint8_t)name_len;
-  memcpy(lha + pos, name, name_len); pos += name_len;
-  put_le16(lha + pos, 0U); pos += 2U;
-  lha[pos++] = 'A';
-  put_le16(lha + pos, 0U); pos += 2U;
-  for (i = 2U; i < 2U + header_size; i++) {
-    checksum = (uint8_t)(checksum + lha[i]);
-  }
-  lha[1] = checksum;
-  memcpy(lha + pos, "hello", data_len); pos += data_len;
-  lha[pos++] = 0U;
-  lha_len = pos;
+  /* Self-named stored member: name == archive filename. */
+  if (!make_lha_lh0_named(name, "hello", lha, &lha_len)) return 1;
 
   if (!write_test_file(path, lha, lha_len)) return 1;
   memset(&service, 0, sizeof(service));
@@ -5027,6 +5038,220 @@ out:
   remove(path);
   return rc;
 }
+
+static int make_abs_test_path(const char *rel, char *dst, size_t cap)
+{
+#if defined(_WIN32)
+  return _fullpath(dst, rel, cap) != 0;
+#else
+  (void)cap;
+  return realpath(rel, dst) != 0;
+#endif
+}
+
+/*
+ * The collision guard must compare file identity, not spelling: an
+ * absolute archive path with a relative output spelling must still
+ * collide. And it must only refuse in modes that actually write:
+ * --skip-existing and --dry-run + --overwrite are safe (the output
+ * helpers return before any open), so unrelated members still extract.
+ */
+static int test_lha_file_collision_identity_and_modes(void)
+{
+  const char *rel = "archive_tool_alias.lha";
+  const char *other = "other.txt";
+  const char *path = "archive_tool_alias.lha";
+  char abs_path[1024];
+  uint8_t first[256];
+  uint8_t second[256];
+  uint8_t archive[512];
+  uint8_t readback[512];
+  ZZ9KServiceInfo service;
+  ZZ9KContext *ctx = 0;
+  FILE *file = 0;
+  uint32_t first_len;
+  uint32_t second_len;
+  uint32_t archive_len;
+  int attempted = 0;
+  int codec_ready = 0;
+  int rc = 0;
+
+  /* Two members: a self-named stored member plus other.txt. */
+  if (!make_lha_lh0_named(path, "hello", first, &first_len)) return 1;
+  if (!make_lha_lh0_named(other, "world", second, &second_len)) return 2;
+  if (first_len + second_len > sizeof(archive)) return 3;
+  memcpy(archive, first, first_len);
+  memcpy(archive + first_len - 1U, second, second_len);
+  archive_len = first_len - 1U + second_len;
+  if (!write_test_file(path, archive, archive_len)) return 4;
+  memset(&service, 0, sizeof(service));
+
+  /* Alias: archive handed over as an absolute path, output spelled
+     relatively -- the guard must still refuse under --overwrite. */
+  if (!make_abs_test_path(rel, abs_path, sizeof(abs_path))) return 5;
+  zz9k_archive_overwrite_outputs = 1;
+  if (zz9k_archive_handle_lha_file(&ctx, &service, &codec_ready, abs_path,
+                                   archive_len, "x", ".", &attempted) ||
+      !attempted) {
+    rc = 6;
+    goto out;
+  }
+  file = fopen(path, "rb");
+  if (!file) {
+    rc = 7;
+    goto out;
+  }
+  if (fread(readback, 1U, archive_len, file) != archive_len ||
+      memcmp(readback, archive, archive_len) != 0) {
+    fclose(file);
+    file = 0;
+    rc = 8; /* archive truncated despite the identity guard */
+    goto out;
+  }
+  fclose(file);
+  file = 0;
+
+  /* --skip-existing: the self-named member is skipped (it exists -- it
+     IS the archive), other.txt still extracts, archive stays intact. */
+  zz9k_archive_overwrite_outputs = 0;
+  zz9k_archive_skip_existing_outputs = 1;
+  if (!zz9k_archive_handle_lha_file(&ctx, &service, &codec_ready, path,
+                                    archive_len, "x", ".", &attempted) ||
+      !attempted) {
+    rc = 9;
+    goto out;
+  }
+  file = fopen(other, "rb");
+  if (!file) {
+    rc = 10;
+    goto out;
+  }
+  if (fread(readback, 1U, 5U, file) != 5U || memcmp(readback, "world", 5U)) {
+    fclose(file);
+    file = 0;
+    rc = 11;
+    goto out;
+  }
+  fclose(file);
+  file = 0;
+  file = fopen(path, "rb");
+  if (!file) {
+    rc = 12;
+    goto out;
+  }
+  if (fread(readback, 1U, archive_len, file) != archive_len ||
+      memcmp(readback, archive, archive_len) != 0) {
+    fclose(file);
+    file = 0;
+    rc = 13;
+    goto out;
+  }
+  fclose(file);
+  file = 0;
+  remove(other);
+
+  /* --dry-run + --overwrite: nothing is written at all. */
+  zz9k_archive_skip_existing_outputs = 0;
+  zz9k_archive_overwrite_outputs = 1;
+  zz9k_archive_dry_run_outputs = 1;
+  if (!zz9k_archive_handle_lha_file(&ctx, &service, &codec_ready, path,
+                                    archive_len, "x", ".", &attempted) ||
+      !attempted) {
+    rc = 14;
+    goto out;
+  }
+  file = fopen(other, "rb");
+  if (file) {
+    fclose(file);
+    file = 0;
+    rc = 15; /* dry-run must not create the output */
+    goto out;
+  }
+
+out:
+  zz9k_archive_overwrite_outputs = 0;
+  zz9k_archive_skip_existing_outputs = 0;
+  zz9k_archive_dry_run_outputs = 0;
+  if (file) fclose(file);
+  remove(other);
+  remove(path);
+  return rc;
+}
+
+/*
+ * Probe-time detection must not require a level-2 header to fit the
+ * 512-byte probe: a valid large level-2 archive has to reach the
+ * streaming walker instead of falling back to the whole-file load.
+ */
+static int test_lha_detect_level2_oversized_header(void)
+{
+  const char *path = "archive_tool_l2_big.tmp";
+  uint8_t buf[1024];
+  ZZ9KArchiveEntry mem_entries[2];
+  ZZ9KArchiveEntry file_entries[2];
+  uint32_t count = 0U;
+  uint32_t file_count = 0U;
+  uint32_t header_size = 700U;
+  uint32_t total;
+  FILE *file = 0;
+  int rc = 0;
+
+  memset(buf, 0, sizeof(buf));
+  put_le16(buf, (uint16_t)header_size);
+  memcpy(buf + 2U, "-lh0-", 5U);
+  put_le32(buf + 7U, 5U);
+  put_le32(buf + 11U, 5U);
+  put_le32(buf + 15U, 0U);
+  buf[19] = 0U;
+  buf[20] = 2U;
+  put_le16(buf + 21U, 0U);
+  buf[23] = 'A';
+  put_le16(buf + 24U, (uint16_t)(header_size - 26U)); /* one big ext */
+  buf[26] = 0x03U; /* ignored extension type */
+  put_le16(buf + 26U + (header_size - 26U) - 2U, 0U); /* chain end */
+  memcpy(buf + header_size, "hello", 5U);
+  buf[header_size + 5U] = 0U;
+  total = header_size + 6U;
+
+  /* The 512-byte probe prefix must identify this as LHA. */
+  if (zz9k_archive_detect_format(buf, 512U) != ZZ9K_ARCHIVE_FORMAT_LHA) {
+    return 1;
+  }
+  memset(mem_entries, 0, sizeof(mem_entries));
+  if (!zz9k_archive_lha_list(buf, total, mem_entries, 2U, &count)) return 2;
+  if (count != 1U) return 3;
+  if (mem_entries[0].method != ZZ9K_ARCHIVE_LHA_METHOD_LH0) return 4;
+  if (mem_entries[0].compressed_size != 5U) return 5;
+  if (mem_entries[0].uncompressed_size != 5U) return 6;
+
+  if (!write_test_file(path, buf, total)) return 7;
+  file = fopen(path, "rb");
+  if (!file) {
+    rc = 8;
+    goto out;
+  }
+  memset(file_entries, 0, sizeof(file_entries));
+  if (!zz9k_archive_lha_list_file(file, total, file_entries, 2U,
+                                  &file_count)) {
+    fclose(file);
+    file = 0;
+    rc = 9;
+    goto out;
+  }
+  fclose(file);
+  file = 0;
+  if (file_count != count ||
+      !lha_entries_equal(&mem_entries[0], &file_entries[0])) {
+    rc = 10;
+    goto out;
+  }
+
+out:
+  if (file) fclose(file);
+  remove(path);
+  return rc;
+}
+
 
 static int test_lha_level1_lhd_and_lh0_extract(void)
 {
@@ -7299,6 +7524,16 @@ int main(void)
   if (rc) {
     printf("test_lha_file_extract_refuses_archive_collision failed: %d\n", rc);
     return 470 + rc;
+  }
+  rc = test_lha_file_collision_identity_and_modes();
+  if (rc) {
+    printf("test_lha_file_collision_identity_and_modes failed: %d\n", rc);
+    return 480 + rc;
+  }
+  rc = test_lha_detect_level2_oversized_header();
+  if (rc) {
+    printf("test_lha_detect_level2_oversized_header failed: %d\n", rc);
+    return 490 + rc;
   }
   rc = test_zip_backslash_names_are_normalized();
   if (rc) {
