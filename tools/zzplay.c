@@ -2329,17 +2329,24 @@ static ZZPlayFeedResult zzplay_feed_round(
   return ZZPLAY_FEED_DONE;
 }
 
+/* The large startup locals live in static storage, not on the shell's
+ * stack: main's frame on the caller-provided stack plus a DOS write
+ * path (the trace's first Write) overflowed it on hardware and faulted
+ * inside the handler -- instant guru before the window opened, with
+ * the trace file created but empty. Plain and --fps runs never enter
+ * a file-write path, which is why only --trace died. */
+static struct ZZPlayRuntime runtime;
+static ZZPlayLaunch launch;
+static ZZPlayStatusWindow status_window;
+static ZZPlayMP3Controls mp3_controls;
+static ZZPlayProbeInfo probe;
+static ZZPlayVideoInfo info;
+static ZZPlayTransport transport;
+
 int main(int argc, char **argv)
 {
-  struct ZZPlayRuntime runtime;
   ZZPlayOptionsResult options_result;
-  ZZPlayLaunch launch;
-  ZZPlayStatusWindow status_window;
-  ZZPlayMP3Controls mp3_controls;
   int have_status_window;
-  ZZPlayProbeInfo probe;
-  ZZPlayVideoInfo info;
-  ZZPlayTransport transport;
   ZZ9KBoard board;
   ZZ9KCaps caps;
   ZZ9KApertureLayout aperture;
