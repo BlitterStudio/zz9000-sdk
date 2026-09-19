@@ -493,6 +493,43 @@ static int make_lha_lh5_level2_ext_name(uint8_t *lha, uint32_t *length)
   return 1;
 }
 
+/* Single stored (-lh0-) level-1 member with a given name and data. */
+static int make_lha_lh0_named(const char *name,
+                              const char *data,
+                              uint8_t *lha,
+                              uint32_t *length)
+{
+  uint32_t name_len = (uint32_t)strlen(name);
+  uint32_t data_len = (uint32_t)strlen(data);
+  uint32_t header_size = 25U + name_len;
+  uint32_t pos = 0U;
+  uint32_t i;
+  uint8_t checksum = 0U;
+
+  memset(lha, 0, 256U);
+  lha[pos++] = (uint8_t)header_size;
+  lha[pos++] = 0U;
+  memcpy(lha + pos, "-lh0-", 5U); pos += 5U;
+  put_le32(lha + pos, data_len); pos += 4U;
+  put_le32(lha + pos, data_len); pos += 4U;
+  put_le32(lha + pos, 0U); pos += 4U;
+  lha[pos++] = 0x20U;
+  lha[pos++] = 1U;
+  lha[pos++] = (uint8_t)name_len;
+  memcpy(lha + pos, name, name_len); pos += name_len;
+  put_le16(lha + pos, 0U); pos += 2U;
+  lha[pos++] = 'A';
+  put_le16(lha + pos, 0U); pos += 2U;
+  for (i = 2U; i < 2U + header_size; i++) {
+    checksum = (uint8_t)(checksum + lha[i]);
+  }
+  lha[1] = checksum;
+  memcpy(lha + pos, data, data_len); pos += data_len;
+  lha[pos++] = 0U;
+  *length = pos;
+  return 1;
+}
+
 static const uint8_t lha_lh5_docker_fixture[] = {
   0x54U, 0x00U, 0x2dU, 0x6cU, 0x68U, 0x35U, 0x2dU, 0xb9U, 0x00U, 0x00U, 0x00U, 0x90U,
   0xe2U, 0x00U, 0x00U, 0x59U, 0xddU, 0x16U, 0x6aU, 0x20U, 0x02U, 0xe1U, 0x14U, 0x55U,
@@ -4520,6 +4557,971 @@ static int test_lha_trailing_junk_after_last_member(void)
   return 0;
 }
 
+/*
+ * Level-1 archive whose single member carries one ~5 KB extended header
+ * (an ignored extension type) ahead of its stored data. The file walker's
+ * initial header window is 4 KiB, so this archive forces the window-growth
+ * path: the walk must enlarge its window and still parse exactly what the
+ * in-memory walk parses.
+ */
+static int make_lha_level1_big_ext(uint8_t *lha, uint32_t *length)
+{
+  const char *name = "big.txt";
+  const char *data = "hello";
+  uint32_t name_len = (uint32_t)strlen(name);
+  uint32_t data_len = (uint32_t)strlen(data);
+  uint32_t ext_size = 5000U;
+  uint32_t pos = 0U;
+  uint32_t i;
+  uint8_t header_size;
+  uint8_t checksum = 0U;
+
+  memset(lha, 0, 8192U);
+  header_size = (uint8_t)(25U + name_len);
+  lha[pos++] = header_size;
+  lha[pos++] = 0U;
+  memcpy(lha + pos, "-lh0-", 5U); pos += 5U;
+  put_le32(lha + pos, ext_size + data_len); pos += 4U;
+  put_le32(lha + pos, data_len); pos += 4U;
+  put_le32(lha + pos, 0U); pos += 4U;
+  lha[pos++] = 0x20U;
+  lha[pos++] = 1U;
+  lha[pos++] = (uint8_t)name_len;
+  memcpy(lha + pos, name, name_len); pos += name_len;
+  put_le16(lha + pos, 0U); pos += 2U;   /* crc16 */
+  lha[pos++] = 'A';                    /* os id */
+  put_le16(lha + pos, (uint16_t)ext_size); pos += 2U; /* first ext size */
+  for (i = 2U; i < 2U + header_size; i++) {
+    checksum = (uint8_t)(checksum + lha[i]);
+  }
+  lha[1] = checksum;
+  /* The extension: ignored type byte, zero payload, u16 zero terminator
+     for the chain in its last two bytes. */
+  lha[pos] = 0x03U;
+  put_le16(lha + pos + ext_size - 2U, 0U);
+  pos += ext_size;
+  memcpy(lha + pos, data, data_len); pos += data_len;
+  lha[pos++] = 0U;
+  *length = pos;
+  return 1;
+}
+
+static int lha_entries_equal(const ZZ9KArchiveEntry *a,
+                             const ZZ9KArchiveEntry *b)
+{
+  return strcmp(a->name, b->name) == 0 &&
+      a->method == b->method && a->is_dir == b->is_dir &&
+      a->compressed_size == b->compressed_size &&
+      a->uncompressed_size == b->uncompressed_size &&
+      a->data_offset == b->data_offset && a->crc32 == b->crc32 &&
+      a->flags == b->flags;
+}
+
+/* Walks one archive image both ways -- whole-file memory and seek-based
+   file -- and requires identical verdicts, counts and entry fields. */
+static int check_lha_file_walk_case(const uint8_t *data, uint32_t len,
+                                    int expect_ok)
+{
+  const char *path = "archive_tool_lha_walk.tmp";
+  ZZ9KArchiveEntry mem_entries[8];
+  ZZ9KArchiveEntry file_entries[8];
+  uint32_t mem_count = 0U;
+  uint32_t file_count = 0U;
+  FILE *file;
+  int mem_ok;
+  int file_ok;
+  uint32_t i;
+
+  if (!write_test_file(path, data, len)) {
+    return 100;
+  }
+  mem_ok = zz9k_archive_lha_list(data, len, mem_entries, 8U, &mem_count);
+  file = fopen(path, "rb");
+  if (!file) {
+    remove(path);
+    return 101;
+  }
+  file_ok = zz9k_archive_lha_list_file(file, len, file_entries, 8U,
+                                       &file_count);
+  fclose(file);
+  remove(path);
+  if (mem_ok != file_ok) {
+    return 1;
+  }
+  if (mem_ok != expect_ok) {
+    return 2;
+  }
+  if (!mem_ok) {
+    return 0;
+  }
+  if (mem_count != file_count) {
+    return 3;
+  }
+  for (i = 0U; i < mem_count; i++) {
+    if (!lha_entries_equal(&mem_entries[i], &file_entries[i])) {
+      return 10 + (int)i;
+    }
+  }
+  return 0;
+}
+
+/*
+ * The seek-based header walk must accept, reject and report exactly what
+ * the in-memory walk does, across every header shape the fixtures cover
+ * (level 0/1/2, extension names, multi-member ext headers, EOF-terminated
+ * archives, trailing junk, real compressed members) plus a forced
+ * window-growth case and a corrupt truncated archive.
+ */
+static int test_lha_list_file_matches_memory(void)
+{
+  uint8_t buf[8192];
+  uint32_t len;
+  int rc;
+
+  if (!make_lha_lh0(buf, &len)) return 1;
+  if ((rc = check_lha_file_walk_case(buf, len, 1)) != 0) return 20 + rc;
+
+  if (!make_lha_lh5_level1(buf, &len)) return 2;
+  if ((rc = check_lha_file_walk_case(buf, len, 1)) != 0) return 30 + rc;
+
+  if (!make_lha_lh5_level1_ext_name(buf, &len)) return 3;
+  if ((rc = check_lha_file_walk_case(buf, len, 1)) != 0) return 40 + rc;
+
+  if (!make_lha_level1_lhd_and_lh0(buf, &len)) return 4;
+  if ((rc = check_lha_file_walk_case(buf, len, 1)) != 0) return 50 + rc;
+
+  if (!make_lha_lh5_level2_ext_name(buf, &len)) return 5;
+  if ((rc = check_lha_file_walk_case(buf, len, 1)) != 0) return 60 + rc;
+
+  if (!make_lha_level1_big_ext(buf, &len)) return 6;
+  if ((rc = check_lha_file_walk_case(buf, len, 1)) != 0) return 70 + rc;
+
+  /* One oversized header followed by small members: the walker's logical
+     window resets per member, and the walk stays equivalent. */
+  {
+    uint8_t member[256];
+    uint32_t member_len;
+    uint32_t total;
+
+    if (!make_lha_lh0_named("small.txt", "tiny", member, &member_len)) {
+      return 75;
+    }
+    total = len - 1U + member_len;
+    if (total > sizeof(buf)) {
+      return 76;
+    }
+    memcpy(buf + len - 1U, member, member_len);
+    if ((rc = check_lha_file_walk_case(buf, total, 1)) != 0) {
+      return 77 + rc;
+    }
+  }
+
+  if ((rc = check_lha_file_walk_case(zz9k_lha_undelete,
+                                     zz9k_lha_undelete_len, 1)) != 0) {
+    return 80 + rc;
+  }
+  if ((rc = check_lha_file_walk_case(zz9k_lha_movelow,
+                                     zz9k_lha_movelow_len, 1)) != 0) {
+    return 90 + rc;
+  }
+
+  /* Trailing junk variants must stay tolerant in both walks. */
+  memcpy(buf, zz9k_lha_movelow, zz9k_lha_movelow_len);
+  buf[zz9k_lha_movelow_len] = 0x30U;
+  buf[zz9k_lha_movelow_len + 1U] = 0U;
+  buf[zz9k_lha_movelow_len + 2U] = 0U;
+  if ((rc = check_lha_file_walk_case(buf, zz9k_lha_movelow_len + 3U, 1)) != 0) {
+    return 95 + rc;
+  }
+
+  /* Real compressed members. */
+  if ((rc = check_lha_file_walk_case(lha_lh5_docker_fixture,
+                                     (uint32_t)sizeof(lha_lh5_docker_fixture),
+                                     1)) != 0) {
+    return 100 + rc;
+  }
+  if ((rc = check_lha_file_walk_case(lha_lh1_docker_fixture,
+                                     (uint32_t)sizeof(lha_lh1_docker_fixture),
+                                     1)) != 0) {
+    return 110 + rc;
+  }
+
+  /* Corrupt archive: a member truncated mid-data must fail both walks. */
+  if ((rc = check_lha_file_walk_case(zz9k_lha_undelete,
+                                     zz9k_lha_undelete_len / 2U, 0)) != 0) {
+    return 120 + rc;
+  }
+  return 0;
+}
+
+/* Extracts the same real LH5 archive twice -- once through the in-memory
+   engine, once through the file-backed engine (software decode: the host
+   has no board) -- and requires identical output bytes. */
+static int test_lha_handle_file_extract_and_test(void)
+{
+  const char *path = "archive_tool_lha_file_in.tmp";
+  const char *mem_dir = "archive_tool_lha_file_mem_out";
+  const char *file_dir = "archive_tool_lha_file_out";
+  const uint8_t *fixture = lha_lh5_docker_fixture;
+  uint32_t fixture_len = (uint32_t)sizeof(lha_lh5_docker_fixture);
+  ZZ9KArchiveEntry entries[2];
+  ZZ9KServiceInfo service;
+  ZZ9KContext *ctx = 0;
+  uint32_t count = 0U;
+  uint32_t mem_len = 0U;
+  uint32_t file_len = 0U;
+  uint8_t mem_bytes[512];
+  uint8_t file_bytes[512];
+  char mem_path[512];
+  char file_path[512];
+  FILE *file = 0;
+  int attempted = 0;
+  int codec_ready = 0;
+  int rc = 0;
+
+  memset(&service, 0, sizeof(service));
+  memset(entries, 0, sizeof(entries));
+  if (!zz9k_archive_lha_list(fixture, fixture_len, entries, 2U, &count)) {
+    return 1;
+  }
+  if (count != 1U) return 2;
+
+  if (!write_test_file(path, fixture, fixture_len)) return 3;
+  sprintf(mem_path, "%s/%s", mem_dir, entries[0].name);
+  sprintf(file_path, "%s/%s", file_dir, entries[0].name);
+  remove(mem_path);
+  remove(file_path);
+  remove(mem_dir);
+  remove(file_dir);
+
+  if (!zz9k_archive_handle_lha(0, 0, fixture, fixture_len, "x", mem_dir)) {
+    rc = 4;
+    goto out;
+  }
+  /* The file-backed engine opens the optional board codec itself; on the
+     host zz9k_open fails and it decodes in software, straight from the
+     archive file. */
+  if (!zz9k_archive_handle_lha_file(&ctx, &service, &codec_ready, path,
+                                    fixture_len, "x", file_dir,
+                                    &attempted) ||
+      !attempted) {
+    rc = 5;
+    goto out;
+  }
+  if (codec_ready || ctx) {
+    rc = 6; /* no board on host: must have stayed in software mode */
+    goto out;
+  }
+
+  file = fopen(mem_path, "rb");
+  if (!file) {
+    rc = 7;
+    goto out;
+  }
+  mem_len = (uint32_t)fread(mem_bytes, 1U, sizeof(mem_bytes), file);
+  fclose(file);
+  file = 0;
+  file = fopen(file_path, "rb");
+  if (!file) {
+    rc = 8;
+    goto out;
+  }
+  file_len = (uint32_t)fread(file_bytes, 1U, sizeof(file_bytes), file);
+  fclose(file);
+  file = 0;
+  if (mem_len == 0U || mem_len != file_len ||
+      memcmp(mem_bytes, file_bytes, mem_len) != 0) {
+    rc = 9;
+    goto out;
+  }
+
+  /* test through the file engine too */
+  attempted = 0;
+  if (!zz9k_archive_handle_lha_file(&ctx, &service, &codec_ready, path,
+                                    fixture_len, "t", 0, &attempted) ||
+      !attempted) {
+    rc = 10;
+    goto out;
+  }
+  remove(mem_path);
+  remove(file_path);
+  remove(mem_dir);
+  remove(file_dir);
+
+out:
+  if (file) fclose(file);
+  remove(path);
+  return rc;
+}
+
+/* Stored members must extract through the file engine's range-copy path,
+ * and an unopenable file must fall back (attempted == 0) rather than fail. */
+static int test_lha_handle_file_stored_and_fallback(void)
+{
+  const char *path = "archive_tool_lha_file_l1.tmp";
+  const char *out_dir = "archive_tool_lha_file_l1_out";
+  const char *out_path = "archive_tool_lha_file_l1_out/dir/stored.txt";
+  ZZ9KServiceInfo service;
+  ZZ9KContext *ctx = 0;
+  uint8_t lha[8192];
+  uint8_t actual[5];
+  uint32_t lha_len;
+  FILE *file = 0;
+  int attempted = 0;
+  int codec_ready = 0;
+  int rc = 0;
+
+  memset(&service, 0, sizeof(service));
+  if (!make_lha_level1_lhd_and_lh0(lha, &lha_len)) return 1;
+  if (!write_test_file(path, lha, lha_len)) return 2;
+  remove(out_path);
+  remove("archive_tool_lha_file_l1_out/dir");
+  remove(out_dir);
+
+  if (!zz9k_archive_handle_lha_file(&ctx, &service, &codec_ready, path,
+                                    lha_len, "x", out_dir, &attempted) ||
+      !attempted) {
+    rc = 3;
+    goto out;
+  }
+  file = fopen(out_path, "rb");
+  if (!file) {
+    rc = 4;
+    goto out;
+  }
+  if (fread(actual, 1U, sizeof(actual), file) != sizeof(actual) ||
+      memcmp(actual, "hello", 5U) != 0) {
+    fclose(file);
+    file = 0;
+    rc = 5;
+    goto out;
+  }
+  fclose(file);
+  file = 0;
+
+  attempted = 1;
+  if (zz9k_archive_handle_lha_file(&ctx, &service, &codec_ready,
+                                   "archive_tool_lha_no_such.tmp", 100U,
+                                   "x", out_dir, &attempted) ||
+      attempted) {
+    rc = 6; /* open failure must be reported as unattempted fallback */
+    goto out;
+  }
+  remove(out_path);
+  remove("archive_tool_lha_file_l1_out/dir");
+  remove(out_dir);
+
+out:
+  if (file) fclose(file);
+  remove(path);
+  return rc;
+}
+
+/*
+ * The member's compressed extent must be validated against the ARCHIVE
+ * length, never against the header window: a window smaller than the
+ * member body is the file walker's normal operating state, so a window
+ * bound here would force the walker to grow its window to the size of
+ * the member -- the whole-archive load this PR removes (finding: member
+ * bodies must stay out of the header window).
+ */
+static int test_lha_parse_header_member_extent_uses_archive_length(void)
+{
+  uint8_t lha[128];
+  ZZ9KArchiveEntry entry;
+  uint32_t lha_len;
+  uint32_t header_bytes = 0U;
+  uint32_t header_size;
+  uint32_t i;
+  uint8_t checksum = 0U;
+
+  if (!make_lha_lh0(lha, &lha_len)) return 1;
+  /* Grow the member far beyond the window (and the fixture): stored
+     member, so compressed == uncompressed. */
+  header_size = lha[0];
+  put_le32(lha + 7U, 50000U);
+  put_le32(lha + 11U, 50000U);
+  for (i = 2U; i < 2U + header_size; i++) {
+    checksum = (uint8_t)(checksum + lha[i]);
+  }
+  lha[1] = checksum;
+
+  memset(&entry, 0, sizeof(entry));
+  if (!zz9k_archive_lha_parse_header(lha, lha_len, 60000U, &entry,
+                                     &header_bytes)) {
+    return 2; /* window < member body must still parse */
+  }
+  if (entry.compressed_size != 50000U) return 3;
+  if (entry.uncompressed_size != 50000U) return 4;
+  if (header_bytes == 0U || header_bytes >= lha_len) return 5;
+
+  /* The extent check still rejects a member that overruns the archive. */
+  if (zz9k_archive_lha_parse_header(lha, lha_len, header_bytes + 49999U,
+                                    &entry, &header_bytes)) {
+    return 6;
+  }
+  return 0;
+}
+
+/*
+ * File-backed extraction must refuse a member whose output path is the
+ * archive itself: outputs are opened with "wb", which would truncate the
+ * source mid-read and destroy it (finding: extraction must not truncate
+ * its source archive). With --overwrite the refusal must happen before
+ * any byte of the archive changes, and non-colliding members in the same
+ * directory must still extract.
+ */
+static int test_lha_file_extract_refuses_archive_collision(void)
+{
+  const char *name = "archive_tool_collide.lha";
+  const char *path = "archive_tool_collide.lha";
+  const char *control_path = "dir/hello.txt";
+  uint8_t lha[256];
+  uint8_t control[128];
+  uint8_t readback[256];
+  ZZ9KServiceInfo service;
+  ZZ9KContext *ctx = 0;
+  FILE *file = 0;
+  uint32_t lha_len;
+  uint32_t control_len;
+  int attempted = 0;
+  int codec_ready = 0;
+  int rc = 0;
+
+  /* Self-named stored member: name == archive filename. */
+  if (!make_lha_lh0_named(name, "hello", lha, &lha_len)) return 1;
+
+  if (!write_test_file(path, lha, lha_len)) return 1;
+  memset(&service, 0, sizeof(service));
+  zz9k_archive_overwrite_outputs = 1;
+
+  /* Extracting the self-named member into the archive's directory with
+     --overwrite must refuse without touching the archive. */
+  if (zz9k_archive_handle_lha_file(&ctx, &service, &codec_ready, path,
+                                   lha_len, "x", ".", &attempted) ||
+      !attempted) {
+    rc = 2;
+    goto out;
+  }
+  file = fopen(path, "rb");
+  if (!file) {
+    rc = 3;
+    goto out;
+  }
+  if (fread(readback, 1U, lha_len, file) != lha_len ||
+      memcmp(readback, lha, lha_len) != 0) {
+    fclose(file);
+    file = 0;
+    rc = 4; /* archive was modified despite the refusal */
+    goto out;
+  }
+  fclose(file);
+  file = 0;
+
+  /* Control: a non-colliding member extracts into "." fine. */
+  if (!make_lha_lh0(control, &control_len)) {
+    rc = 5;
+    goto out;
+  }
+  remove(path);
+  if (!write_test_file(path, control, control_len)) {
+    rc = 6;
+    goto out;
+  }
+  if (!zz9k_archive_handle_lha_file(&ctx, &service, &codec_ready, path,
+                                    control_len, "x", ".", &attempted) ||
+      !attempted) {
+    rc = 7;
+    goto out;
+  }
+  file = fopen(control_path, "rb");
+  if (!file) {
+    rc = 8;
+    goto out;
+  }
+  if (fread(readback, 1U, 5U, file) != 5U || memcmp(readback, "hello", 5U)) {
+    fclose(file);
+    file = 0;
+    rc = 9;
+    goto out;
+  }
+  fclose(file);
+  file = 0;
+  remove(control_path);
+  remove("dir");
+
+out:
+  zz9k_archive_overwrite_outputs = 0;
+  if (file) fclose(file);
+  remove(control_path);
+  remove("dir");
+  remove(path);
+  return rc;
+}
+
+static int make_abs_test_path(const char *rel, char *dst, size_t cap)
+{
+#if defined(_WIN32)
+  return _fullpath(dst, rel, cap) != 0;
+#else
+  (void)cap;
+  return realpath(rel, dst) != 0;
+#endif
+}
+
+/*
+ * The collision guard must compare file identity, not spelling: an
+ * absolute archive path with a relative output spelling must still
+ * collide. And it must only refuse in modes that actually write:
+ * --skip-existing and --dry-run + --overwrite are safe (the output
+ * helpers return before any open), so unrelated members still extract.
+ */
+static int test_lha_file_collision_identity_and_modes(void)
+{
+  const char *rel = "archive_tool_alias.lha";
+  const char *other = "other.txt";
+  const char *path = "archive_tool_alias.lha";
+  char abs_path[1024];
+  uint8_t first[256];
+  uint8_t second[256];
+  uint8_t archive[512];
+  uint8_t readback[512];
+  ZZ9KServiceInfo service;
+  ZZ9KContext *ctx = 0;
+  FILE *file = 0;
+  uint32_t first_len;
+  uint32_t second_len;
+  uint32_t archive_len;
+  int attempted = 0;
+  int codec_ready = 0;
+  int rc = 0;
+
+  /* Two members: a self-named stored member plus other.txt. */
+  if (!make_lha_lh0_named(path, "hello", first, &first_len)) return 1;
+  if (!make_lha_lh0_named(other, "world", second, &second_len)) return 2;
+  if (first_len + second_len > sizeof(archive)) return 3;
+  memcpy(archive, first, first_len);
+  memcpy(archive + first_len - 1U, second, second_len);
+  archive_len = first_len - 1U + second_len;
+  if (!write_test_file(path, archive, archive_len)) return 4;
+  memset(&service, 0, sizeof(service));
+
+  /* Alias: archive handed over as an absolute path, output spelled
+     relatively -- the guard must still refuse under --overwrite. */
+  if (!make_abs_test_path(rel, abs_path, sizeof(abs_path))) return 5;
+  zz9k_archive_overwrite_outputs = 1;
+  if (zz9k_archive_handle_lha_file(&ctx, &service, &codec_ready, abs_path,
+                                   archive_len, "x", ".", &attempted) ||
+      !attempted) {
+    rc = 6;
+    goto out;
+  }
+  file = fopen(path, "rb");
+  if (!file) {
+    rc = 7;
+    goto out;
+  }
+  if (fread(readback, 1U, archive_len, file) != archive_len ||
+      memcmp(readback, archive, archive_len) != 0) {
+    fclose(file);
+    file = 0;
+    rc = 8; /* archive truncated despite the identity guard */
+    goto out;
+  }
+  fclose(file);
+  file = 0;
+
+  /* --skip-existing: the self-named member is skipped (it exists -- it
+     IS the archive), other.txt still extracts, archive stays intact. */
+  zz9k_archive_overwrite_outputs = 0;
+  zz9k_archive_skip_existing_outputs = 1;
+  if (!zz9k_archive_handle_lha_file(&ctx, &service, &codec_ready, path,
+                                    archive_len, "x", ".", &attempted) ||
+      !attempted) {
+    rc = 9;
+    goto out;
+  }
+  file = fopen(other, "rb");
+  if (!file) {
+    rc = 10;
+    goto out;
+  }
+  if (fread(readback, 1U, 5U, file) != 5U || memcmp(readback, "world", 5U)) {
+    fclose(file);
+    file = 0;
+    rc = 11;
+    goto out;
+  }
+  fclose(file);
+  file = 0;
+  file = fopen(path, "rb");
+  if (!file) {
+    rc = 12;
+    goto out;
+  }
+  if (fread(readback, 1U, archive_len, file) != archive_len ||
+      memcmp(readback, archive, archive_len) != 0) {
+    fclose(file);
+    file = 0;
+    rc = 13;
+    goto out;
+  }
+  fclose(file);
+  file = 0;
+  remove(other);
+
+  /* --dry-run + --overwrite: nothing is written at all. */
+  zz9k_archive_skip_existing_outputs = 0;
+  zz9k_archive_overwrite_outputs = 1;
+  zz9k_archive_dry_run_outputs = 1;
+  if (!zz9k_archive_handle_lha_file(&ctx, &service, &codec_ready, path,
+                                    archive_len, "x", ".", &attempted) ||
+      !attempted) {
+    rc = 14;
+    goto out;
+  }
+  file = fopen(other, "rb");
+  if (file) {
+    fclose(file);
+    file = 0;
+    rc = 15; /* dry-run must not create the output */
+    goto out;
+  }
+
+out:
+  zz9k_archive_overwrite_outputs = 0;
+  zz9k_archive_skip_existing_outputs = 0;
+  zz9k_archive_dry_run_outputs = 0;
+  if (file) fclose(file);
+  remove(other);
+  remove(path);
+  return rc;
+}
+
+/*
+ * Probe-time detection must not require a level-2 header to fit the
+ * 512-byte probe: a valid large level-2 archive has to reach the
+ * streaming walker instead of falling back to the whole-file load.
+ */
+static int test_lha_detect_level2_oversized_header(void)
+{
+  const char *path = "archive_tool_l2_big.tmp";
+  uint8_t buf[1024];
+  ZZ9KArchiveEntry mem_entries[2];
+  ZZ9KArchiveEntry file_entries[2];
+  uint32_t count = 0U;
+  uint32_t file_count = 0U;
+  uint32_t header_size = 700U;
+  uint32_t total;
+  FILE *file = 0;
+  int rc = 0;
+
+  memset(buf, 0, sizeof(buf));
+  put_le16(buf, (uint16_t)header_size);
+  memcpy(buf + 2U, "-lh0-", 5U);
+  put_le32(buf + 7U, 5U);
+  put_le32(buf + 11U, 5U);
+  put_le32(buf + 15U, 0U);
+  buf[19] = 0U;
+  buf[20] = 2U;
+  put_le16(buf + 21U, 0U);
+  buf[23] = 'A';
+  put_le16(buf + 24U, (uint16_t)(header_size - 26U)); /* one big ext */
+  buf[26] = 0x03U; /* ignored extension type */
+  put_le16(buf + 26U + (header_size - 26U) - 2U, 0U); /* chain end */
+  memcpy(buf + header_size, "hello", 5U);
+  buf[header_size + 5U] = 0U;
+  total = header_size + 6U;
+
+  /* The 512-byte probe prefix must identify this as LHA. */
+  if (zz9k_archive_detect_format(buf, 512U) != ZZ9K_ARCHIVE_FORMAT_LHA) {
+    return 1;
+  }
+  memset(mem_entries, 0, sizeof(mem_entries));
+  if (!zz9k_archive_lha_list(buf, total, mem_entries, 2U, &count)) return 2;
+  if (count != 1U) return 3;
+  if (mem_entries[0].method != ZZ9K_ARCHIVE_LHA_METHOD_LH0) return 4;
+  if (mem_entries[0].compressed_size != 5U) return 5;
+  if (mem_entries[0].uncompressed_size != 5U) return 6;
+
+  if (!write_test_file(path, buf, total)) return 7;
+  file = fopen(path, "rb");
+  if (!file) {
+    rc = 8;
+    goto out;
+  }
+  memset(file_entries, 0, sizeof(file_entries));
+  if (!zz9k_archive_lha_list_file(file, total, file_entries, 2U,
+                                  &file_count)) {
+    fclose(file);
+    file = 0;
+    rc = 9;
+    goto out;
+  }
+  fclose(file);
+  file = 0;
+  if (file_count != count ||
+      !lha_entries_equal(&mem_entries[0], &file_entries[0])) {
+    rc = 10;
+    goto out;
+  }
+
+out:
+  if (file) fclose(file);
+  remove(path);
+  return rc;
+}
+
+/*
+ * The parse verdict must separate definitive invalidity (bad checksum,
+ * method bytes -- the file walker fails after one window, never growing
+ * to archive size) from an incomplete header that legitimately asks for
+ * a bigger window. Without the split, one corrupt member near the start
+ * of a large archive costs an archive-sized window before the walk even
+ * reports failure.
+ */
+static int test_lha_parse_header_tri_state(void)
+{
+  uint8_t buf[8192];
+  ZZ9KArchiveEntry entry;
+  uint32_t len;
+  uint32_t header_bytes = 0U;
+
+  /* Definitive: a bad base checksum is INVALID at any window that covers
+     the base header -- it must not masquerade as NEEDS_WINDOW. */
+  if (!make_lha_lh0(buf, &len)) return 1;
+  buf[1] = (uint8_t)(buf[1] ^ 0xffU);
+  memset(&entry, 0, sizeof(entry));
+  if (zz9k_archive_lha_parse_header(buf, len, 1U << 20, &entry,
+                                    &header_bytes) !=
+      ZZ9K_ARCHIVE_LHA_PARSE_INVALID) {
+    return 2;
+  }
+
+  /* Definitive: a corrupted method field is INVALID. */
+  if (!make_lha_lh0(buf, &len)) return 3;
+  buf[3] = 'x';
+  {
+    uint32_t i;
+    uint8_t checksum = 0U;
+
+    for (i = 2U; i < 2U + buf[0]; i++) {
+      checksum = (uint8_t)(checksum + buf[i]);
+    }
+    buf[1] = checksum;
+  }
+  if (zz9k_archive_lha_parse_header(buf, len, 1U << 20, &entry,
+                                    &header_bytes) !=
+      ZZ9K_ARCHIVE_LHA_PARSE_INVALID) {
+    return 4;
+  }
+
+  /* Incomplete: a header whose extension chain extends past the window
+     asks for a bigger window, then parses at full view. */
+  if (!make_lha_level1_big_ext(buf, &len)) return 5;
+  if (zz9k_archive_lha_parse_header(buf, 100U, len, &entry,
+                                    &header_bytes) !=
+      ZZ9K_ARCHIVE_LHA_PARSE_NEEDS_WINDOW) {
+    return 6;
+  }
+  if (zz9k_archive_lha_parse_header(buf, len, len, &entry,
+                                    &header_bytes) !=
+      ZZ9K_ARCHIVE_LHA_PARSE_OK) {
+    return 7;
+  }
+  return 0;
+}
+
+/*
+ * A corrupt member inside an otherwise-valid archive must fail BOTH
+ * walks with the same verdict (and, in file mode, after a bounded
+ * window -- never an archive-sized read).
+ */
+static int test_lha_corrupt_member_fails_both_walks(void)
+{
+  uint8_t buf[8192];
+  uint32_t len;
+  int rc;
+
+  /* Valid stored member, then a member whose checksum byte is corrupt. */
+  if (!make_lha_lh0(buf, &len)) return 1;
+  {
+    uint8_t second[256];
+    uint32_t second_len;
+
+    if (!make_lha_lh0_named("corrupt.bin", "data", second, &second_len)) {
+      return 2;
+    }
+    second[1] = (uint8_t)(second[1] ^ 0xffU);
+    if (len + second_len > sizeof(buf)) return 3;
+    memcpy(buf + len - 1U, second, second_len);
+    len = len - 1U + second_len;
+  }
+  if ((rc = check_lha_file_walk_case(buf, len, 0)) != 0) {
+    return 10 + rc;
+  }
+  return 0;
+}
+
+/*
+ * The file engine must accept archives with more than 65,535 members:
+ * the ZIP/7z entry helper caps at that count, and routing LHA through
+ * it pushed large backups onto the whole-file load (the exact case this
+ * engine exists for).
+ */
+static int test_lha_file_many_members(void)
+{
+  const char *path = "archive_tool_many.tmp";
+  ZZ9KServiceInfo service;
+  ZZ9KContext *ctx = 0;
+  uint8_t member[256];
+  uint8_t *archive;
+  uint32_t member_len;
+  uint32_t total = 0U;
+  uint32_t i;
+  int attempted = 0;
+  int codec_ready = 0;
+
+  archive = (uint8_t *)malloc(5U * 1024U * 1024U);
+  if (!archive) return 1;
+  if (!make_lha_lh0_named("f.bin", "x", member, &member_len)) {
+    free(archive);
+    return 2;
+  }
+  for (i = 0U; i < 65536U; i++) {
+    uint32_t copy_len = (i == 65535U) ? member_len : member_len - 1U;
+
+    if (total + copy_len > 5U * 1024U * 1024U) {
+      free(archive);
+      return 3;
+    }
+    memcpy(archive + total, member, copy_len);
+    total += copy_len;
+  }
+  if (!write_test_file(path, archive, total)) {
+    free(archive);
+    return 4;
+  }
+  free(archive);
+
+  memset(&service, 0, sizeof(service));
+  zz9k_archive_match_filter = "zz_no_such_member_zz";
+  if (!zz9k_archive_handle_lha_file(&ctx, &service, &codec_ready, path,
+                                    total, "l", 0, &attempted) ||
+      !attempted) {
+    zz9k_archive_match_filter = 0;
+    remove(path);
+    return 5; /* old behavior: capped alloc, attempted == 0 */
+  }
+  zz9k_archive_match_filter = 0;
+  remove(path);
+  return 0;
+}
+
+/*
+ * The fill walk caps STORING at max_entries but still reports the full
+ * member count -- the exact precondition the file handler's capacity
+ * guard defends against when an archive is rewritten in place between
+ * the count and fill walks. Pin both halves of the walker contract:
+ * count may exceed max_entries, and no store happens beyond the cap.
+ */
+static int test_lha_list_file_count_exceeds_max_entries(void)
+{
+  const char *path = "archive_tool_grow.tmp";
+  ZZ9KArchiveEntry entries[4];
+  uint8_t first[256];
+  uint8_t second[256];
+  uint32_t first_len;
+  uint32_t second_len;
+  uint32_t count = 0U;
+  FILE *file;
+  int rc = 0;
+
+  if (!make_lha_lh0_named("first.bin", "aaaa", first, &first_len)) {
+    return 1;
+  }
+  if (!make_lha_lh0_named("second.bin", "bbbb", second, &second_len)) {
+    return 2;
+  }
+
+  /* Count walk over a single-member file. */
+  if (!write_test_file(path, first, first_len)) return 3;
+  file = fopen(path, "rb");
+  if (!file) {
+    rc = 4;
+    goto out;
+  }
+  if (!zz9k_archive_lha_list_file(file, first_len, 0, 0U, &count)) {
+    fclose(file);
+    file = 0;
+    rc = 5;
+    goto out;
+  }
+  if (count != 1U) {
+    fclose(file);
+    file = 0;
+    rc = 6;
+    goto out;
+  }
+
+  /* The archive "grows" a second member before the fill walk, which is
+     capped at the first walk's count. */
+  {
+    uint8_t grown[512];
+
+    if (first_len + second_len > sizeof(grown)) {
+      fclose(file);
+      file = 0;
+      rc = 7;
+      goto out;
+    }
+    memcpy(grown, first, first_len);
+    memcpy(grown + first_len - 1U, second, second_len);
+    fclose(file);
+    file = 0;
+    if (!write_test_file(path, grown, first_len - 1U + second_len)) {
+      rc = 8;
+      goto out;
+    }
+    file = fopen(path, "rb");
+    if (!file) {
+      rc = 9;
+      goto out;
+    }
+    memset(entries, 0xAA, sizeof(entries));
+    if (!zz9k_archive_lha_list_file(file, first_len - 1U + second_len,
+                                    entries, 1U, &count)) {
+      fclose(file);
+      file = 0;
+      rc = 10;
+      goto out;
+    }
+    if (count != 2U) {
+      fclose(file);
+      file = 0;
+      rc = 11; /* count reflects all members, not the cap */
+      goto out;
+    }
+    if (entries[0].name[0] == '\xAA' || entries[0].name[0] == 0) {
+      fclose(file);
+      file = 0;
+      rc = 12; /* the capped slot must still be filled */
+      goto out;
+    }
+    if (entries[1].name[0] != '\xAA' || entries[1].name[1] != '\xAA') {
+      fclose(file);
+      file = 0;
+      rc = 13; /* nothing may be stored beyond max_entries */
+      goto out;
+    }
+  }
+
+out:
+  if (file) fclose(file);
+  remove(path);
+  return rc;
+}
+
 static int test_lha_level1_lhd_and_lh0_extract(void)
 {
   const char *output_dir = "archive_tool_lha_l1_out";
@@ -6765,6 +7767,62 @@ int main(void)
   if (rc) {
     printf("test_lha_trailing_junk_after_last_member failed: %d\n", rc);
     return 420 + rc;
+  }
+  rc = test_lha_list_file_matches_memory();
+  if (rc) {
+    printf("test_lha_list_file_matches_memory failed: %d\n", rc);
+    return 430 + rc;
+  }
+  rc = test_lha_handle_file_extract_and_test();
+  if (rc) {
+    printf("test_lha_handle_file_extract_and_test failed: %d\n", rc);
+    return 440 + rc;
+  }
+  rc = test_lha_handle_file_stored_and_fallback();
+  if (rc) {
+    printf("test_lha_handle_file_stored_and_fallback failed: %d\n", rc);
+    return 450 + rc;
+  }
+  rc = test_lha_parse_header_member_extent_uses_archive_length();
+  if (rc) {
+    printf("test_lha_parse_header_member_extent_uses_archive_length failed: %d\n",
+           rc);
+    return 460 + rc;
+  }
+  rc = test_lha_file_extract_refuses_archive_collision();
+  if (rc) {
+    printf("test_lha_file_extract_refuses_archive_collision failed: %d\n", rc);
+    return 470 + rc;
+  }
+  rc = test_lha_file_collision_identity_and_modes();
+  if (rc) {
+    printf("test_lha_file_collision_identity_and_modes failed: %d\n", rc);
+    return 480 + rc;
+  }
+  rc = test_lha_detect_level2_oversized_header();
+  if (rc) {
+    printf("test_lha_detect_level2_oversized_header failed: %d\n", rc);
+    return 490 + rc;
+  }
+  rc = test_lha_parse_header_tri_state();
+  if (rc) {
+    printf("test_lha_parse_header_tri_state failed: %d\n", rc);
+    return 500 + rc;
+  }
+  rc = test_lha_corrupt_member_fails_both_walks();
+  if (rc) {
+    printf("test_lha_corrupt_member_fails_both_walks failed: %d\n", rc);
+    return 510 + rc;
+  }
+  rc = test_lha_file_many_members();
+  if (rc) {
+    printf("test_lha_file_many_members failed: %d\n", rc);
+    return 520 + rc;
+  }
+  rc = test_lha_list_file_count_exceeds_max_entries();
+  if (rc) {
+    printf("test_lha_list_file_count_exceeds_max_entries failed: %d\n", rc);
+    return 530 + rc;
   }
   rc = test_zip_backslash_names_are_normalized();
   if (rc) {
