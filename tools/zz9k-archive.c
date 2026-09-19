@@ -49,6 +49,19 @@ static int zz9k_archive_cancelled(void)
   return zz9k_archive_cancel_latched;
 }
 
+/* Every armed mailbox round trip (alloc, free, query, decode) can wake
+   on Ctrl-C and return CANCELLED -- and Wait() has already consumed the
+   break signal, so CheckSignal-based checkpoints never see those
+   presses. Any status observation that sees CANCELLED latches the run's
+   cancellation here. */
+static void zz9k_archive_note_status(int status)
+{
+  if (status == ZZ9K_STATUS_CANCELLED) {
+    printf("\ninterrupted\n");
+    zz9k_archive_cancel_latched = 1;
+  }
+}
+
 
 #define ZZ9K_ARCHIVE_MAX_NAME 256U
 #define ZZ9K_ARCHIVE_MAX_PAX_DATA 65536U
@@ -4852,6 +4865,7 @@ static int zz9k_archive_decompress_to_memory_ex(ZZ9KContext *ctx,
 
   status = zz9k_alloc_shared(ctx, compressed_length, 16U, 0U, &input);
   if (status != ZZ9K_STATUS_OK) {
+    zz9k_archive_note_status(status);
     printf("alloc compressed failed: %s (%d), requested=%lu bytes\n",
            zz9k_status_name(status), status,
            (unsigned long)compressed_length);
@@ -4861,6 +4875,7 @@ static int zz9k_archive_decompress_to_memory_ex(ZZ9KContext *ctx,
   }
   status = zz9k_alloc_shared(ctx, output_capacity, 16U, 0U, &decoded);
   if (status != ZZ9K_STATUS_OK) {
+    zz9k_archive_note_status(status);
     printf("alloc decoded failed: %s (%d), requested=%lu bytes\n",
            zz9k_status_name(status), status,
            (unsigned long)output_capacity);
@@ -5674,7 +5689,8 @@ static int zz9k_archive_lha_decode_method_to_file(
 
       if (zz9k_lha_board_diag_valid == 0) {
         int status = zz9k_read_diag(ctx, &zz9k_lha_board_diag);
-        zz9k_lha_board_diag_valid = (status == ZZ9K_STATUS_OK) ? 1 : -1;
+
+        zz9k_archive_note_status(status);
       }
       if (zz9k_lha_board_diag_valid == 1 &&
           !zz9k_archive_lha_offload_fits(&zz9k_lha_board_diag, entry)) {
@@ -11336,7 +11352,7 @@ static int zz9k_archive_run(const char *command, const char *archive_path,
     return 0;
   }
   format = zz9k_archive_detect_format(probe, probe_length);
-  printf("zz9k-archive build 98609dc+irqwatch 2026-09-19d\n");
+  printf("zz9k-archive build 6d542f8+statuslatch 2026-09-19e\n");
   printf("archive: %s (%s)\n", archive_path, zz9k_archive_format_name(format));
 
   if (format == ZZ9K_ARCHIVE_FORMAT_LZMA_ALONE &&
