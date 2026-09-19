@@ -1801,7 +1801,11 @@ static int zz9k_archive_lha_list_file(FILE *file,
       }
       if (parse_rc == ZZ9K_ARCHIVE_LHA_PARSE_INVALID) {
         /* A definitive error never re-reads (bounded failure: one
-           chunk of I/O even inside a multi-hundred-MB archive). */
+           chunk of I/O even inside a multi-hundred-MB archive). Name
+           the member position: the caller treats this as terminal, so
+           the diagnostic is all the user gets. */
+        printf("lha parse failed at offset %lu (member %lu)\n",
+               (unsigned long)pos, (unsigned long)entries_used);
         goto out;
       }
       if (offset != 0U) {
@@ -8624,9 +8628,12 @@ static void zz9k_archive_lha_print_entry(const ZZ9KArchiveEntry *entry,
    point of this path (issue #104: a 180 MB archive used to cost a silent
    multi-minute full-file load before the first output line).
 
-   Returns *attempted = 0 only when the file cannot be opened or the header
-   walk fails, letting the caller fall back to the in-memory engine, which
-   reports those failures exactly as before this path existed. */
+   Returns *attempted = 0 only when the file cannot be opened (the caller
+   falls back and reports it) or the command is not l/t/x. Once the file
+   is open this engine owns the archive: a mid-walk failure is TERMINAL
+   with its own diagnostic, never a cue to load the whole archive into
+   RAM -- on the memory-constrained machines this path exists for, that
+   fallback just masked the real failure under an allocation error. */
 static int zz9k_archive_handle_lha_file(ZZ9KContext **ctx,
                                         ZZ9KServiceInfo *service,
                                         int *codec_ready,
@@ -8658,12 +8665,15 @@ static int zz9k_archive_handle_lha_file(ZZ9KContext **ctx,
                                          archive_length)) {
     return 0; /* the in-memory fallback reports the open failure */
   }
+  *attempted = 1; /* the file engine owns the archive from here on */
   if (!zz9k_archive_lha_list_file(src.file, archive_length, &entries, &count,
                                   is_list ? zz9k_archive_lha_print_entry : 0,
                                   0)) {
+    /* Terminal: the walk has already printed its diagnostic (parse
+       failure with offset and member index, or the read error). */
     zz9k_archive_lha_source_close(&src);
     free(entries);
-    return 0; /* fall back: the in-memory parse reports "lha parse failed" */
+    return 0;
   }
   /* Single pass: the entry table grows inside the walk (no 65,535-style
      cap, no second walk to race a concurrent rewrite), and a listing
