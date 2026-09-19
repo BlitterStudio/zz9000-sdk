@@ -2996,9 +2996,9 @@ cleanup:
            (unsigned long)runtime.stats.core.discarded_frames);
     if (runtime.audio_enabled) {
       zzplay_info(", %lu audio frames played, %lu underruns",
-             /* saturating cast: 2^31 frames is ~13.5 h at 44.1 kHz */
-             (unsigned long)(runtime.final_audio_frames > 0x7fffffffULL
-                                 ? 0x7fffffffULL
+             /* saturating cast: 2^32-1 frames is ~27 h at 44.1 kHz */
+             (unsigned long)(runtime.final_audio_frames > 0xffffffffULL
+                                 ? 0xffffffffULL
                                  : runtime.final_audio_frames),
              (unsigned long)runtime.final_underruns);
     }
