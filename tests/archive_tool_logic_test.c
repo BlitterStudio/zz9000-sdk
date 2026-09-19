@@ -4127,7 +4127,7 @@ static int test_write_file_range_entry(void)
   entry.data_offset = 2U;
   entry.compressed_size = 4U;
   entry.uncompressed_size = 4U;
-  if (!zz9k_archive_write_file_range_entry(".", &entry, input_path)) {
+  if (!zz9k_archive_write_file_range_entry(".", &entry, input_path, 0)) {
     rc = 2;
     goto out;
   }
@@ -4624,7 +4624,7 @@ static int check_lha_file_walk_case(const uint8_t *data, uint32_t len,
 {
   const char *path = "archive_tool_lha_walk.tmp";
   ZZ9KArchiveEntry mem_entries[8];
-  ZZ9KArchiveEntry file_entries[8];
+  ZZ9KArchiveEntry *file_entries = 0;
   uint32_t mem_count = 0U;
   uint32_t file_count = 0U;
   FILE *file;
@@ -4641,27 +4641,33 @@ static int check_lha_file_walk_case(const uint8_t *data, uint32_t len,
     remove(path);
     return 101;
   }
-  file_ok = zz9k_archive_lha_list_file(file, len, file_entries, 8U,
-                                       &file_count);
+  file_ok = zz9k_archive_lha_list_file(file, len, &file_entries,
+                                       &file_count, 0, 0);
   fclose(file);
   remove(path);
   if (mem_ok != file_ok) {
+    free(file_entries);
     return 1;
   }
   if (mem_ok != expect_ok) {
+    free(file_entries);
     return 2;
   }
   if (!mem_ok) {
+    free(file_entries);
     return 0;
   }
-  if (mem_count != file_count) {
+  if (mem_count != file_count || mem_count > 8U) {
+    free(file_entries);
     return 3;
   }
   for (i = 0U; i < mem_count; i++) {
     if (!lha_entries_equal(&mem_entries[i], &file_entries[i])) {
+      free(file_entries);
       return 10 + (int)i;
     }
   }
+  free(file_entries);
   return 0;
 }
 
@@ -5208,7 +5214,7 @@ static int test_lha_detect_level2_oversized_header(void)
   const char *path = "archive_tool_l2_big.tmp";
   uint8_t buf[1024];
   ZZ9KArchiveEntry mem_entries[2];
-  ZZ9KArchiveEntry file_entries[2];
+  ZZ9KArchiveEntry *file_entries = 0;
   uint32_t count = 0U;
   uint32_t file_count = 0U;
   uint32_t header_size = 700U;
@@ -5250,9 +5256,8 @@ static int test_lha_detect_level2_oversized_header(void)
     rc = 8;
     goto out;
   }
-  memset(file_entries, 0, sizeof(file_entries));
-  if (!zz9k_archive_lha_list_file(file, total, file_entries, 2U,
-                                  &file_count)) {
+  if (!zz9k_archive_lha_list_file(file, total, &file_entries,
+                                  &file_count, 0, 0)) {
     fclose(file);
     file = 0;
     rc = 9;
@@ -5267,6 +5272,7 @@ static int test_lha_detect_level2_oversized_header(void)
   }
 
 out:
+  free(file_entries);
   if (file) fclose(file);
   remove(path);
   return rc;
@@ -5419,104 +5425,92 @@ static int test_lha_file_many_members(void)
 }
 
 /*
- * The fill walk caps STORING at max_entries but still reports the full
- * member count -- the exact precondition the file handler's capacity
- * guard defends against when an archive is rewritten in place between
- * the count and fill walks. Pin both halves of the walker contract:
- * count may exceed max_entries, and no store happens beyond the cap.
+ * The single-pass walk grows its entry table from nothing and hands each
+ * member to the caller's callback in archive order the moment it is
+ * parsed -- the contract that makes a network listing stream output
+ * instead of going quiet, and that removed the two-walk count/fill race
+ * structurally.
  */
-static int test_lha_list_file_count_exceeds_max_entries(void)
+typedef struct ZZ9KLhaGrowStreamCtx {
+  char names[4][24];
+  uint32_t count;
+} ZZ9KLhaGrowStreamCtx;
+
+static void grow_stream_cb(const ZZ9KArchiveEntry *entry, void *user)
+{
+  ZZ9KLhaGrowStreamCtx *ctx = (ZZ9KLhaGrowStreamCtx *)user;
+
+  if (ctx->count < 4U) {
+    strcpy(ctx->names[ctx->count], entry->name);
+  }
+  ctx->count++;
+}
+
+static int test_lha_list_file_grows_and_streams(void)
 {
   const char *path = "archive_tool_grow.tmp";
-  ZZ9KArchiveEntry entries[4];
-  uint8_t first[256];
-  uint8_t second[256];
-  uint32_t first_len;
-  uint32_t second_len;
+  ZZ9KLhaGrowStreamCtx seen;
+  ZZ9KArchiveEntry *entries = 0;
+  uint8_t archive[768];
+  uint8_t member[256];
+  uint32_t member_len;
+  uint32_t total = 0U;
   uint32_t count = 0U;
+  uint32_t i;
   FILE *file;
   int rc = 0;
 
-  if (!make_lha_lh0_named("first.bin", "aaaa", first, &first_len)) {
-    return 1;
-  }
-  if (!make_lha_lh0_named("second.bin", "bbbb", second, &second_len)) {
-    return 2;
-  }
+  /* Three members in known order, one shared terminator at the end. */
+  for (i = 0U; i < 3U; i++) {
+    char name[20];
 
-  /* Count walk over a single-member file. */
-  if (!write_test_file(path, first, first_len)) return 3;
+    sprintf(name, "m%u.bin", (unsigned int)i);
+    if (!make_lha_lh0_named(name, "data", member, &member_len)) {
+      return 1 + (int)i;
+    }
+    if (total + member_len > sizeof(archive)) {
+      return 10;
+    }
+    memcpy(archive + total, member, member_len - 1U);
+    total += member_len - 1U;
+  }
+  archive[total++] = 0U;
+
+  memset(&seen, 0, sizeof(seen));
+  if (!write_test_file(path, archive, total)) return 20;
   file = fopen(path, "rb");
   if (!file) {
-    rc = 4;
+    rc = 21;
     goto out;
   }
-  if (!zz9k_archive_lha_list_file(file, first_len, 0, 0U, &count)) {
+  if (!zz9k_archive_lha_list_file(file, total, &entries, &count,
+                                  grow_stream_cb, &seen)) {
     fclose(file);
     file = 0;
-    rc = 5;
+    rc = 22;
     goto out;
   }
-  if (count != 1U) {
-    fclose(file);
-    file = 0;
-    rc = 6;
+  fclose(file);
+  file = 0;
+  if (count != 3U) {
+    rc = 23;
     goto out;
   }
-
-  /* The archive "grows" a second member before the fill walk, which is
-     capped at the first walk's count. */
-  {
-    uint8_t grown[512];
-
-    if (first_len + second_len > sizeof(grown)) {
-      fclose(file);
-      file = 0;
-      rc = 7;
-      goto out;
-    }
-    memcpy(grown, first, first_len);
-    memcpy(grown + first_len - 1U, second, second_len);
-    fclose(file);
-    file = 0;
-    if (!write_test_file(path, grown, first_len - 1U + second_len)) {
-      rc = 8;
-      goto out;
-    }
-    file = fopen(path, "rb");
-    if (!file) {
-      rc = 9;
-      goto out;
-    }
-    memset(entries, 0xAA, sizeof(entries));
-    if (!zz9k_archive_lha_list_file(file, first_len - 1U + second_len,
-                                    entries, 1U, &count)) {
-      fclose(file);
-      file = 0;
-      rc = 10;
-      goto out;
-    }
-    if (count != 2U) {
-      fclose(file);
-      file = 0;
-      rc = 11; /* count reflects all members, not the cap */
-      goto out;
-    }
-    if (entries[0].name[0] == '\xAA' || entries[0].name[0] == 0) {
-      fclose(file);
-      file = 0;
-      rc = 12; /* the capped slot must still be filled */
-      goto out;
-    }
-    if (entries[1].name[0] != '\xAA' || entries[1].name[1] != '\xAA') {
-      fclose(file);
-      file = 0;
-      rc = 13; /* nothing may be stored beyond max_entries */
-      goto out;
-    }
+  if (strcmp(entries[0].name, "m0.bin") != 0 ||
+      strcmp(entries[1].name, "m1.bin") != 0 ||
+      strcmp(entries[2].name, "m2.bin") != 0) {
+    rc = 24;
+    goto out;
+  }
+  if (seen.count != 3U || strcmp(seen.names[0], "m0.bin") != 0 ||
+      strcmp(seen.names[1], "m1.bin") != 0 ||
+      strcmp(seen.names[2], "m2.bin") != 0) {
+    rc = 25; /* callback fired once per member, in order, during the walk */
+    goto out;
   }
 
 out:
+  free(entries);
   if (file) fclose(file);
   remove(path);
   return rc;
@@ -6125,6 +6119,82 @@ static int test_zip_list_file(void)
   else if (entries[0].crc32 != 0x3610a686UL) rc = 9;
 
 out:
+  remove(path);
+  return rc;
+}
+
+/*
+ * Stored-member extraction verifies the CRC inline, in the same read
+ * pass that writes the output (one network round instead of two). A
+ * corrupted member must fail verification AND leave no output behind.
+ */
+static int test_zip_file_store_extract_verifies_inline(void)
+{
+  const char *path = "archive_tool_zip_x.tmp";
+  const char *out_dir = "archive_tool_zip_x_out";
+  const char *out_path = "archive_tool_zip_x_out/hello.txt";
+  uint8_t zip[160];
+  uint8_t actual[8];
+  ZZ9KServiceInfo service;
+  ZZ9KContext *ctx = 0;
+  uint32_t zip_len;
+  FILE *file = 0;
+  int attempted = 0;
+  int codec_ready = 0;
+  int rc = 0;
+
+  memset(&service, 0, sizeof(service));
+  make_zip_store(zip, &zip_len);
+  remove(out_path);
+  remove(out_dir);
+
+  /* Clean extract: bytes on disk, one pass. */
+  remove(path);
+  if (!write_test_file(path, zip, zip_len)) return 1;
+  if (!zz9k_archive_handle_zip_file(&ctx, &service, &codec_ready, path,
+                                    zip_len, "x", out_dir, &attempted) ||
+      !attempted) {
+    rc = 2;
+    goto out;
+  }
+  file = fopen(out_path, "rb");
+  if (!file) {
+    rc = 3;
+    goto out;
+  }
+  if (fread(actual, 1U, 5U, file) != 5U || memcmp(actual, "hello", 5U) != 0) {
+    fclose(file);
+    file = 0;
+    rc = 4;
+    goto out;
+  }
+  fclose(file);
+  file = 0;
+  remove(out_path);
+  remove(out_dir);
+
+  /* Corrupt the stored data: extraction fails and removes the output. */
+  zip[39U] = (uint8_t)(zip[39U] ^ 0xffU);
+  remove(path);
+  if (!write_test_file(path, zip, zip_len)) return 5;
+  if (zz9k_archive_handle_zip_file(&ctx, &service, &codec_ready, path,
+                                   zip_len, "x", out_dir, &attempted) ||
+      !attempted) {
+    rc = 6; /* corruption must fail the extraction */
+    goto out;
+  }
+  file = fopen(out_path, "rb");
+  if (file) {
+    fclose(file);
+    file = 0;
+    rc = 7; /* failed verification must leave nothing behind */
+    goto out;
+  }
+
+out:
+  if (file) fclose(file);
+  remove(out_path);
+  remove(out_dir);
   remove(path);
   return rc;
 }
@@ -7304,6 +7374,109 @@ static int test_empty_tar_archive_is_valid(void)
   return 0;
 }
 
+/*
+ * The file-backed plain-tar engine streams the archive through the same
+ * parser tar.gz uses: extraction matches the in-memory engine byte for
+ * byte, an unopenable file falls back, and a mid-archive read of zero
+ * bytes (empty archive) still succeeds.
+ */
+static int test_tar_file_engine_streams_and_matches(void)
+{
+  const char *path = "archive_tool_tar_file.tmp";
+  const char *mem_dir = "archive_tool_tar_mem_out";
+  const char *file_dir = "archive_tool_tar_file_out";
+  const char *mem_out = "archive_tool_tar_mem_out/dir/file.txt";
+  const char *file_out = "archive_tool_tar_file_out/dir/file.txt";
+  uint8_t tar[1536];
+  uint8_t mem_bytes[8];
+  uint8_t file_bytes[8];
+  uint32_t tar_len;
+  FILE *file = 0;
+  int attempted = 0;
+  int rc = 0;
+
+  if (!make_tar(tar, &tar_len)) return 1;
+  if (!write_test_file(path, tar, tar_len)) return 2;
+  remove(mem_out);
+  remove(file_out);
+  remove("archive_tool_tar_mem_out/dir");
+  remove("archive_tool_tar_file_out/dir");
+  remove(mem_dir);
+  remove(file_dir);
+
+  /* in-memory engine for comparison */
+  if (!zz9k_archive_handle_tar(0, 0, tar, tar_len, "x", mem_dir)) {
+    rc = 3;
+    goto out;
+  }
+  /* file engine, extraction */
+  if (!zz9k_archive_handle_tar_file(path, tar_len, "x", file_dir,
+                                    &attempted) ||
+      !attempted) {
+    rc = 4;
+    goto out;
+  }
+  file = fopen(mem_out, "rb");
+  if (!file) {
+    rc = 5;
+    goto out;
+  }
+  if (fread(mem_bytes, 1U, 5U, file) != 5U) {
+    fclose(file);
+    file = 0;
+    rc = 6;
+    goto out;
+  }
+  fclose(file);
+  file = fopen(file_out, "rb");
+  if (!file) {
+    rc = 7;
+    goto out;
+  }
+  if (fread(file_bytes, 1U, 5U, file) != 5U ||
+      memcmp(mem_bytes, file_bytes, 5U) != 0 ||
+      memcmp(file_bytes, "hello", 5U) != 0) {
+    fclose(file);
+    file = 0;
+    rc = 8;
+    goto out;
+  }
+  fclose(file);
+  file = 0;
+
+  /* test and list go through the streaming parser as well */
+  if (!zz9k_archive_handle_tar_file(path, tar_len, "t", 0, &attempted) ||
+      !attempted) {
+    rc = 9;
+    goto out;
+  }
+  if (!zz9k_archive_handle_tar_file(path, tar_len, "l", 0, &attempted) ||
+      !attempted) {
+    rc = 10;
+    goto out;
+  }
+
+  /* unopenable file: attempted stays 0 (caller falls back) */
+  attempted = 1;
+  if (zz9k_archive_handle_tar_file("archive_tool_tar_no_such.tmp", 1024U,
+                                   "x", 0, &attempted) ||
+      attempted) {
+    rc = 11;
+    goto out;
+  }
+
+out:
+  if (file) fclose(file);
+  remove(mem_out);
+  remove(file_out);
+  remove("archive_tool_tar_mem_out/dir");
+  remove("archive_tool_tar_file_out/dir");
+  remove(mem_dir);
+  remove(file_dir);
+  remove(path);
+  return rc;
+}
+
 static int test_tar_rejects_bad_header_checksum(void)
 {
   uint8_t tar[1536];
@@ -7819,9 +7992,9 @@ int main(void)
     printf("test_lha_file_many_members failed: %d\n", rc);
     return 520 + rc;
   }
-  rc = test_lha_list_file_count_exceeds_max_entries();
+  rc = test_lha_list_file_grows_and_streams();
   if (rc) {
-    printf("test_lha_list_file_count_exceeds_max_entries failed: %d\n", rc);
+    printf("test_lha_list_file_grows_and_streams failed: %d\n", rc);
     return 530 + rc;
   }
   rc = test_zip_backslash_names_are_normalized();
@@ -7867,6 +8040,11 @@ int main(void)
   if (rc) {
     printf("test_zip_list_file failed: %d\n", rc);
     return 140 + rc;
+  }
+  rc = test_zip_file_store_extract_verifies_inline();
+  if (rc) {
+    printf("test_zip_file_store_extract_verifies_inline failed: %d\n", rc);
+    return 550 + rc;
   }
   rc = test_zip_list_file_allows_trailing_central_data();
   if (rc) {
@@ -8005,6 +8183,11 @@ int main(void)
   if (rc) {
     printf("test_empty_tar_archive_is_valid failed: %d\n", rc);
     return 220 + rc;
+  }
+  rc = test_tar_file_engine_streams_and_matches();
+  if (rc) {
+    printf("test_tar_file_engine_streams_and_matches failed: %d\n", rc);
+    return 540 + rc;
   }
   rc = test_tar_rejects_bad_header_checksum();
   if (rc) {
