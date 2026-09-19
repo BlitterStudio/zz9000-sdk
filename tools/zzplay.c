@@ -1346,6 +1346,53 @@ static uint32_t zzplay_audio_underruns(
              : runtime->ahi.clock.underruns;
 }
 
+/* Trace lines are hand-formatted: this path must depend on nothing
+ * beyond dos.library. The --trace guru (80000004, reproducible with
+ * RAM: targets and absent for --fps) survived switching off stdio
+ * file writes, so snprintf/vsnprintf leave the path too. */
+static char *zzplay_trace_put_str(char *at, char *end,
+                                  const char *text)
+{
+  while (*text != '\0' && at < end)
+    *at++ = *text++;
+  return at;
+}
+
+static char *zzplay_trace_put_u32(char *at, char *end, uint32_t value)
+{
+  char digits[10];
+  uint32_t n = value;
+  uint32_t i = 0U;
+
+  do {
+    digits[i++] = (char)('0' + n % 10U);
+    n /= 10U;
+  } while (n != 0U && i < sizeof(digits));
+  while (i != 0U && at < end)
+    *at++ = digits[--i];
+  return at;
+}
+
+static char *zzplay_trace_put_i32(char *at, char *end, int32_t value)
+{
+  uint32_t magnitude;
+
+  if (value < 0 && at < end) {
+    *at++ = '-';
+    magnitude = (uint32_t)(-(value + 1)) + 1U;
+  } else {
+    magnitude = (uint32_t)value;
+  }
+  return zzplay_trace_put_u32(at, end, magnitude);
+}
+
+static void zzplay_trace_write(struct ZZPlayRuntime *runtime,
+                               const char *line, uint32_t bytes)
+{
+  if (runtime->trace && bytes != 0U)
+    (void)Write(runtime->trace, (APTR)line, (LONG)bytes);
+}
+
 /* Milliseconds since the trace file was opened. */
 static uint32_t zzplay_trace_ms(struct ZZPlayRuntime *runtime)
 {
@@ -1356,29 +1403,29 @@ static uint32_t zzplay_trace_ms(struct ZZPlayRuntime *runtime)
 }
 
 static void zzplay_trace_event(struct ZZPlayRuntime *runtime,
-                               const char *format, ...)
+                               const char *label, uint32_t add,
+                               uint32_t total, int have_counts)
 {
-  char line[512];
-  va_list args;
-  int len;
+  char line[128];
+  char *at = line;
+  char *end = line + sizeof(line) - 1U;
 
   if (!runtime->trace) {
     return;
   }
-  len = snprintf(line, sizeof(line), "S %lu ",
-                 (unsigned long)zzplay_trace_ms(runtime));
-  if (len <= 0 || (size_t)len >= sizeof(line)) {
-    return;
+  at = zzplay_trace_put_str(at, end, "S ");
+  at = zzplay_trace_put_u32(at, end, zzplay_trace_ms(runtime));
+  at = zzplay_trace_put_str(at, end, " ");
+  at = zzplay_trace_put_str(at, end, label);
+  if (have_counts) {
+    at = zzplay_trace_put_str(at, end, " +");
+    at = zzplay_trace_put_u32(at, end, add);
+    at = zzplay_trace_put_str(at, end, " (total ");
+    at = zzplay_trace_put_u32(at, end, total);
+    at = zzplay_trace_put_str(at, end, ")");
   }
-  va_start(args, format);
-  vsnprintf(line + len, sizeof(line) - len, format, args);
-  va_end(args);
-  len = (int)strlen(line);
-  if ((size_t)len + 1U < sizeof(line)) {
-    line[len] = '\n';
-    line[len + 1] = '\0';
-    (void)Write(runtime->trace, line, (LONG)(len + 1));
-  }
+  *at++ = '\n';
+  zzplay_trace_write(runtime, line, (uint32_t)(at - line));
 }
 
 /* One line per presented or discarded frame. The counters (acc, ni, wb,
@@ -1393,8 +1440,9 @@ static void zzplay_trace_frame(struct ZZPlayRuntime *runtime,
   uint64_t master_pts = ZZ9K_MEDIA_NO_PTS;
   uint64_t gap_us;
 
-  char line[512];
-  int len;
+  char line[256];
+  char *at = line;
+  char *end = line + sizeof(line) - 1U;
 
   if (!runtime->trace) {
     return;
@@ -1405,32 +1453,49 @@ static void zzplay_trace_frame(struct ZZPlayRuntime *runtime,
   if (runtime->audio_started) {
     master_pts = zzplay_audio_master_pts(runtime);
   }
-  len = snprintf(line, sizeof(line),
-          "F %lu t=%lu v=%ld m=%ld dr=%ld d=%c dec=%lu gap=%lu "
-          "acc=%lu ni=%lu wb=%lu db=%lu rd=%lu rmax=%lu q=%lu "
-          "und=%lu\n",
-          (unsigned long)runtime->frames,
-          (unsigned long)zzplay_trace_ms(runtime),
-          runtime->trace_video_pts == ZZ9K_MEDIA_NO_PTS
-              ? -1L
-              : (long)(runtime->trace_video_pts / 90U),
-          master_pts == ZZ9K_MEDIA_NO_PTS
-              ? -1L
-              : (long)(master_pts / 90U),
-          (long)(runtime->stats.core.current_drift_pts / 90),
-          runtime->trace_decision,
-          (unsigned long)decode_us,
-          (unsigned long)gap_us,
-          (unsigned long)runtime->trace_accepted,
-          (unsigned long)runtime->trace_need_input,
-          (unsigned long)runtime->trace_write_busy,
-          (unsigned long)runtime->trace_decode_busy,
-          (unsigned long)runtime->trace_reads,
-          (unsigned long)runtime->trace_read_max_us,
-          (unsigned long)zzplay_audio_queued_frames(runtime),
-          (unsigned long)runtime->trace_underruns);
-  if (len > 0 && (size_t)len < sizeof(line))
-    (void)Write(runtime->trace, line, (LONG)len);
+  at = zzplay_trace_put_str(at, end, "F ");
+  at = zzplay_trace_put_u32(at, end, runtime->frames);
+  at = zzplay_trace_put_str(at, end, " t=");
+  at = zzplay_trace_put_u32(at, end, zzplay_trace_ms(runtime));
+  at = zzplay_trace_put_str(at, end, " v=");
+  at = zzplay_trace_put_i32(at, end,
+      runtime->trace_video_pts == ZZ9K_MEDIA_NO_PTS
+          ? -1L
+          : (int32_t)(runtime->trace_video_pts / 90U));
+  at = zzplay_trace_put_str(at, end, " m=");
+  at = zzplay_trace_put_i32(at, end,
+      master_pts == ZZ9K_MEDIA_NO_PTS
+          ? -1L
+          : (int32_t)(master_pts / 90U));
+  at = zzplay_trace_put_str(at, end, " dr=");
+  at = zzplay_trace_put_i32(at, end,
+      (int32_t)(runtime->stats.core.current_drift_pts / 90));
+  at = zzplay_trace_put_str(at, end, " d=");
+  if (at < end)
+    *at++ = runtime->trace_decision;
+  at = zzplay_trace_put_str(at, end, " dec=");
+  at = zzplay_trace_put_u32(at, end, decode_us);
+  at = zzplay_trace_put_str(at, end, " gap=");
+  at = zzplay_trace_put_u32(at, end, (uint32_t)gap_us);
+  at = zzplay_trace_put_str(at, end, " acc=");
+  at = zzplay_trace_put_u32(at, end, runtime->trace_accepted);
+  at = zzplay_trace_put_str(at, end, " ni=");
+  at = zzplay_trace_put_u32(at, end, runtime->trace_need_input);
+  at = zzplay_trace_put_str(at, end, " wb=");
+  at = zzplay_trace_put_u32(at, end, runtime->trace_write_busy);
+  at = zzplay_trace_put_str(at, end, " db=");
+  at = zzplay_trace_put_u32(at, end, runtime->trace_decode_busy);
+  at = zzplay_trace_put_str(at, end, " rd=");
+  at = zzplay_trace_put_u32(at, end, runtime->trace_reads);
+  at = zzplay_trace_put_str(at, end, " rmax=");
+  at = zzplay_trace_put_u32(at, end, runtime->trace_read_max_us);
+  at = zzplay_trace_put_str(at, end, " q=");
+  at = zzplay_trace_put_u32(at, end,
+      (uint32_t)zzplay_audio_queued_frames(runtime));
+  at = zzplay_trace_put_str(at, end, " und=");
+  at = zzplay_trace_put_u32(at, end, runtime->trace_underruns);
+  *at++ = '\n';
+  zzplay_trace_write(runtime, line, (uint32_t)(at - line));
   runtime->trace_accepted = 0U;
   runtime->trace_need_input = 0U;
   runtime->trace_write_busy = 0U;
@@ -1790,16 +1855,28 @@ static int zzplay_retire_held_frame(
   return status;
 }
 
+/* Drain is bounded: end-of-stream must never require the user to
+ * close a frozen window. The AX drained flag depends on the card
+ * publishing AUDIO_DRAINED after a full TX ring of committed silence;
+ * if that never arrives (or arrives late), waiting forever just
+ * accumulates pump underruns -- one per 20 ms -- while the picture is
+ * already over. Two seconds covers a full TX ring of silence several
+ * times over; on expiry the drain is treated as complete. */
+#define ZZPLAY_DRAIN_DEADLINE_US 2000000U
+
 static int zzplay_drain_audio(struct ZZPlayRuntime *runtime)
 {
   int draining = 0;
   int refresh_status = 1;
+  TimeVal_Type drain_started;
 
   if (!runtime->audio_enabled) {
     return ZZ9K_STATUS_OK;
   }
+  GetSysTime(&drain_started);
   if (runtime->audio_backend == ZZPLAY_AUDIO_AX) {
     for (;;) {
+      TimeVal_Type now;
       ZZPlayStopReason stop_reason;
       int status = zzplay_audio_pump(
           runtime, 1, refresh_status);
@@ -1833,6 +1910,11 @@ static int zzplay_drain_audio(struct ZZPlayRuntime *runtime)
           zzplay_ax_drained(&runtime->ax)) {
         return ZZ9K_STATUS_OK;
       }
+      GetSysTime(&now);
+      if (zzplay_elapsed_us(&drain_started, &now) >=
+          ZZPLAY_DRAIN_DEADLINE_US) {
+        return ZZ9K_STATUS_OK;
+      }
       stop_reason = zzplay_control_stop_reason_from_action(
           zzplay_poll_control(runtime, 0));
       if (stop_reason != ZZPLAY_STOP_NONE) {
@@ -1843,6 +1925,7 @@ static int zzplay_drain_audio(struct ZZPlayRuntime *runtime)
     }
   }
   for (;;) {
+    TimeVal_Type now;
     ZZPlayStopReason stop_reason;
     int status = zzplay_audio_pump(
         runtime, 1, refresh_status);
@@ -1885,6 +1968,11 @@ static int zzplay_drain_audio(struct ZZPlayRuntime *runtime)
       draining = 1;
     }
     if (draining && zzplay_ahi_drained(&runtime->ahi)) {
+      return ZZ9K_STATUS_OK;
+    }
+    GetSysTime(&now);
+    if (zzplay_elapsed_us(&drain_started, &now) >=
+        ZZPLAY_DRAIN_DEADLINE_US) {
       return ZZ9K_STATUS_OK;
     }
     stop_reason = zzplay_control_stop_reason_from_action(
@@ -2661,10 +2749,9 @@ playback_session:
 
       if (underruns != runtime.trace_underruns) {
         if (underruns > runtime.trace_underruns) {
-          zzplay_trace_event(&runtime, "underrun +%lu (total %lu)",
-                             (unsigned long)(underruns -
-                                             runtime.trace_underruns),
-                             (unsigned long)underruns);
+          zzplay_trace_event(&runtime, "underrun",
+                             underruns - runtime.trace_underruns,
+                             underruns, 1);
         }
         /* A smaller value means the session restarted; adopt silently. */
         runtime.trace_underruns = underruns;
@@ -2838,7 +2925,7 @@ playback_failed:
         runtime.trace_reads = 0U;
         runtime.trace_read_max_us = 0U;
         runtime.trace_decision = 'N';
-        zzplay_trace_event(&runtime, "loop restart");
+        zzplay_trace_event(&runtime, "loop restart", 0U, 0U, 0);
         frame_period_us =
             zzplay_frame_period_us(info.frame_rate_milli);
         zzplay_sync_policy_init(
