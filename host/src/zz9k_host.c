@@ -1329,6 +1329,14 @@ void zz9k_disarm_completion_irq(ZZ9KContext *ctx)
   Forbid();
   RemIntServer(ctx->irq_int_bit, &ctx->irq);
   Permit();
+  /* A completion posted between the disable above and the server removal
+     can leave the board asserting the line with no handler installed --
+     the next interrupt on that chain (often the next program that opens
+     the board) then hits a handlerless assert. Ack once more AFTER the
+     removal: writing the ACK register needs no handler, and it clears
+     any pending assert so the line settles low before the context is
+     torn down. */
+  (void)zz9k_completion_irq_ack(ctx);
   zz9k_timer_close(ctx);
   if (ctx->irq_signal_bit >= 0) {
     FreeSignal(ctx->irq_signal_bit);

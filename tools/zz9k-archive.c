@@ -4881,6 +4881,12 @@ static int zz9k_archive_decompress_to_memory_ex(ZZ9KContext *ctx,
   memset(result, 0, sizeof(*result));
   status = zz9k_decompress(ctx, &desc, result);
   if (status != ZZ9K_STATUS_OK) {
+    if (status == ZZ9K_STATUS_CANCELLED) {
+      /* The armed wait consumed SIGBREAKF_CTRL_C (Wait clears the bit),
+         so CheckSignal-based checkpoints cannot see this press. Latch
+         the cancellation here so every checkpoint stops the run. */
+      zz9k_archive_cancel_latched = 1;
+    }
     printf("%s decompress failed: %s (%d), input=%lu output=%lu\n",
            zz9k_compression_algorithm_text(algorithm),
            zz9k_status_name(status), status,
