@@ -4696,6 +4696,26 @@ static int test_lha_list_file_matches_memory(void)
   if (!make_lha_level1_big_ext(buf, &len)) return 6;
   if ((rc = check_lha_file_walk_case(buf, len, 1)) != 0) return 70 + rc;
 
+  /* One oversized header followed by small members: the walker's logical
+     window resets per member, and the walk stays equivalent. */
+  {
+    uint8_t member[256];
+    uint32_t member_len;
+    uint32_t total;
+
+    if (!make_lha_lh0_named("small.txt", "tiny", member, &member_len)) {
+      return 75;
+    }
+    total = len - 1U + member_len;
+    if (total > sizeof(buf)) {
+      return 76;
+    }
+    memcpy(buf + len - 1U, member, member_len);
+    if ((rc = check_lha_file_walk_case(buf, total, 1)) != 0) {
+      return 77 + rc;
+    }
+  }
+
   if ((rc = check_lha_file_walk_case(zz9k_lha_undelete,
                                      zz9k_lha_undelete_len, 1)) != 0) {
     return 80 + rc;

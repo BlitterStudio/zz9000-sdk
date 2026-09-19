@@ -1720,10 +1720,13 @@ static int zz9k_archive_lha_list(const uint8_t *data,
 
 /* Initial header window for the file walker. Real LHA headers (base plus
    extensions) are a few hundred bytes; 4 KiB reads one in a single go, and
-   the window grows for pathological headers. Member bodies never enter the
-   window: the parse checks them against the archive length, not the window,
-   so even a huge member costs only its header's bytes. The walk accepts
-   exactly the archives the in-memory walk accepts. */
+   the window grows only for pathological headers. The logical window RESETS
+   to this size for every member (the underlying buffer is kept, never
+   shrunk), so one oversized header cannot tax every later member with
+   grown-window reads. Member bodies never enter the window: the parse
+   checks them against the archive length, not the window, so even a huge
+   member costs only its header's bytes. The walk accepts exactly the
+   archives the in-memory walk accepts. */
 #define ZZ9K_ARCHIVE_LHA_HEADER_WINDOW (4096U)
 
 static int zz9k_archive_lha_list_file(FILE *file,
@@ -1734,7 +1737,7 @@ static int zz9k_archive_lha_list_file(FILE *file,
 {
   uint32_t pos = 0U;
   uint32_t entries_used = 0U;
-  uint32_t window_capacity = ZZ9K_ARCHIVE_LHA_HEADER_WINDOW;
+  uint32_t window_allocated = ZZ9K_ARCHIVE_LHA_HEADER_WINDOW;
   uint8_t *window = 0;
   int ok = 0;
 
@@ -1742,7 +1745,7 @@ static int zz9k_archive_lha_list_file(FILE *file,
     return 0;
   }
   *count = 0U;
-  window = (uint8_t *)malloc(window_capacity);
+  window = (uint8_t *)malloc(window_allocated);
   if (!window) {
     printf("lha header window allocation failed\n");
     return 0;
@@ -1750,6 +1753,7 @@ static int zz9k_archive_lha_list_file(FILE *file,
   while (pos < length) {
     ZZ9KArchiveEntry entry;
     uint32_t avail = length - pos;
+    uint32_t window_capacity = ZZ9K_ARCHIVE_LHA_HEADER_WINDOW;
     uint32_t window_len;
     uint32_t header_bytes;
 
@@ -1792,9 +1796,9 @@ static int zz9k_archive_lha_list_file(FILE *file,
       }
       window_capacity *= 4U;
       if (window_capacity > avail) {
-        window_capacity = avail; /* never allocate past the archive end */
+        window_capacity = avail; /* never read past the archive end */
       }
-      {
+      if (window_capacity > window_allocated) {
         uint8_t *grown = (uint8_t *)realloc(window, window_capacity);
 
         if (!grown) {
@@ -1802,6 +1806,7 @@ static int zz9k_archive_lha_list_file(FILE *file,
           goto out;
         }
         window = grown;
+        window_allocated = window_capacity;
       }
     }
     entry.data_offset = pos + entry.data_offset;
