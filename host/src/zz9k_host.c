@@ -115,6 +115,7 @@ struct ZZ9KContext {
   uint32_t offload_timeout_ms;
   uint32_t sync_wait_timeout_ms;   /* armed-wait ENV bound, read once; 0 = unread */
   unsigned char irq_armed;
+  unsigned char late_irq_expected; /* cancelled op still in flight */
   unsigned char aperture_layout_valid;
 #if ZZ9K_HOST_AMIGA
   struct Interrupt irq;
@@ -1318,6 +1319,13 @@ int zz9k_arm_completion_irq(ZZ9KContext *ctx)
 #endif
 }
 
+void zz9k_expect_late_completion_irq(ZZ9KContext *ctx)
+{
+  if (ctx) {
+    ctx->late_irq_expected = 1;
+  }
+}
+
 void zz9k_disarm_completion_irq(ZZ9KContext *ctx)
 {
 #if ZZ9K_HOST_AMIGA
@@ -1342,6 +1350,7 @@ void zz9k_disarm_completion_irq(ZZ9KContext *ctx)
     uint32_t quiet_start = zz9k_now_ms(ctx);
     uint32_t deadline = quiet_start;
     uint32_t spins = 0U;
+    int retired = !ctx->late_irq_expected;
 
     for (;;) {
       uint16_t status = 0;
@@ -1350,15 +1359,18 @@ void zz9k_disarm_completion_irq(ZZ9KContext *ctx)
           (status & ZZ9K_INTERRUPT_SDK) != 0U) {
         (void)zz9k_completion_irq_ack(ctx);
         quiet_start = zz9k_now_ms(ctx);
+        retired = 1; /* observed the abandoned op's completion assert */
       }
-      if ((uint32_t)(zz9k_now_ms(ctx) - quiet_start) >= 500U ||
-          ++spins > 20000000U) {
+      if (retired &&
+          ((uint32_t)(zz9k_now_ms(ctx) - quiet_start) >= 500U ||
+           ++spins > 20000000U)) {
         break;
       }
       if ((uint32_t)(zz9k_now_ms(ctx) - deadline) > 15000U) {
         break; /* give up watching; the disable above is the backstop */
       }
     }
+    ctx->late_irq_expected = 0;
   }
   (void)zz9k_completion_irq_ack(ctx);
   zz9k_timer_close(ctx);
