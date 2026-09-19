@@ -7141,6 +7141,58 @@ out:
   return rc;
 }
 
+/*
+ * A GNU long name of 256+ bytes must FAIL the streaming parser, exactly
+ * as the in-memory walker rejects it -- never a silent 255-byte
+ * truncation that could write to (or collide with) a different path.
+ */
+static int test_tar_stream_rejects_oversized_gnu_long_name(void)
+{
+  uint8_t tar[3072];
+  ZZ9KArchiveTarStream stream;
+  uint32_t tar_len;
+  uint32_t pos = 0U;
+  int saw_failure = 0;
+
+  memset(tar, 0, sizeof(tar));
+  {
+    /* 300 'n' bytes plus NUL = 301-byte long name. */
+    static const char repeat[301] =
+        "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn"
+        "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn"
+        "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn"
+        "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn"
+        "nnnnnnnnnnn";
+
+    make_tar_gnu_long_name_file(tar, &tar_len, repeat);
+  }
+  if (zz9k_archive_tar_list(tar, tar_len, 0, 0U, &tar_len)) {
+    return 1; /* the in-memory walker rejects the oversized name */
+  }
+
+  zz9k_archive_tar_stream_init(&stream, "x", ".");
+  while (pos < tar_len) {
+    uint32_t part = 61U;
+
+    if (part > tar_len - pos) {
+      part = tar_len - pos;
+    }
+    if (!zz9k_archive_tar_stream_consume(&stream, tar + pos, part)) {
+      saw_failure = 1;
+      break;
+    }
+    pos += part;
+  }
+  if (!saw_failure) {
+    saw_failure = !zz9k_archive_tar_stream_finish(&stream);
+  }
+  zz9k_archive_tar_stream_cleanup(&stream);
+  if (!saw_failure) {
+    return 2; /* the stream must fail, not truncate */
+  }
+  return 0;
+}
+
 static int test_tar_pax_path_applies_to_next_entry(void)
 {
   const char *output_name = "archive_tool_tar_pax_path_out.tmp";
@@ -8349,6 +8401,12 @@ int main(void)
   if (rc) {
     printf("test_tar_gnu_long_name_applies_to_next_entry failed: %d\n", rc);
     return 190 + rc;
+  }
+  rc = test_tar_stream_rejects_oversized_gnu_long_name();
+  if (rc) {
+    printf("test_tar_stream_rejects_oversized_gnu_long_name failed: %d\n",
+           rc);
+    return 570 + rc;
   }
   rc = test_tar_pax_path_applies_to_next_entry();
   if (rc) {
