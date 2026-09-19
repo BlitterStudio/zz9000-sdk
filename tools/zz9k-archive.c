@@ -28,6 +28,22 @@
 #include <sys/types.h>
 #endif
 
+/* Ctrl-C checkpoint (Amiga): checks AND consumes SIGBREAKF_CTRL_C, the
+   standard Workbench break signal. Long-running phases call this between
+   work units so an interrupt stops the tool cleanly at a member or chunk
+   boundary instead of aborting a board decode mid-flight (whose
+   CANCELLED status the decode paths must never treat as a cue to fall
+   back and continue). Non-Amiga hosts have no equivalent and never
+   cancel. */
+static int zz9k_archive_cancelled(void)
+{
+#if defined(__amigaos__)
+  return CheckSignal(SIGBREAKF_CTRL_C) != 0L;
+#else
+  return 0;
+#endif
+}
+
 #define ZZ9K_ARCHIVE_MAX_NAME 256U
 #define ZZ9K_ARCHIVE_MAX_PAX_DATA 65536U
 #define ZZ9K_ARCHIVE_TAR_METHOD_STORE 0U
@@ -1784,6 +1800,10 @@ static int zz9k_archive_lha_list_file(FILE *file,
     uint32_t avail = length - pos;
     uint32_t header_bytes;
 
+    if (zz9k_archive_cancelled()) {
+      printf("\ninterrupted\n");
+      goto out; /* terminal: never a cue to fall back or continue */
+    }
     if (pos < window_base || pos >= window_base + window_valid) {
       window_base = pos;
       window_valid = avail < window_allocated ? avail : window_allocated;
@@ -5276,6 +5296,11 @@ static int zz9k_archive_write_file_range_entry(
     uint32_t part = remaining > ZZ9K_ARCHIVE_STREAM_CHUNK ?
         ZZ9K_ARCHIVE_STREAM_CHUNK : remaining;
 
+    if (zz9k_archive_cancelled()) {
+      printf("\ninterrupted\n");
+      goto out;
+    }
+
     if (fread(chunk, 1U, part, input) != part) {
       printf("file range read failed: %s\n", input_path);
       goto out;
@@ -5684,7 +5709,13 @@ static int zz9k_archive_lha_decode_method_to_file(
               zz9k_lha_diag_sw_crc_miss++;
             }
           } else {
-            /* board alloc / codec error (the helper already printed why) */
+            /* board alloc / codec error (the helper already printed why).
+               A Ctrl-C that aborted the board decode must stop the run,
+               never fall back to a full software decode of the member. */
+            if (zz9k_archive_cancelled()) {
+              printf("\ninterrupted\n");
+              return 0;
+            }
             zz9k_lha_diag_sw_codec_fail++;
           }
         }
@@ -9265,6 +9296,10 @@ static int zz9k_archive_handle_tar_file(const char *archive_path,
     uint32_t part = remaining > ZZ9K_ARCHIVE_TAR_WALK_CHUNK ?
         ZZ9K_ARCHIVE_TAR_WALK_CHUNK : remaining;
 
+    if (zz9k_archive_cancelled()) {
+      printf("\ninterrupted\n");
+      goto out;
+    }
     if (fread(chunk, 1U, part, file) != part) {
       printf("read failed: %s\n", archive_path);
       goto out;
