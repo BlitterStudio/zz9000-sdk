@@ -6802,7 +6802,7 @@ static int test_tar_stream_extracts_split_chunks(void)
 
   remove(output_name);
   make_tar_single_file(tar, &tar_len, output_name);
-  zz9k_archive_tar_stream_init(&stream, "x", ".");
+  zz9k_archive_tar_stream_init(&stream, "x", ".", 0);
   while (pos < tar_len) {
     uint32_t part = 37U;
     if (part > tar_len - pos) {
@@ -6855,7 +6855,7 @@ static int test_tar_stream_normalizes_current_dir_prefix(void)
 
   remove(output_name);
   make_tar_current_dir_prefixed_file(tar, &tar_len, output_name);
-  zz9k_archive_tar_stream_init(&stream, "x", ".");
+  zz9k_archive_tar_stream_init(&stream, "x", ".", 0);
   while (pos < tar_len) {
     uint32_t part = 29U;
     if (part > tar_len - pos) {
@@ -6939,7 +6939,7 @@ static int test_tar_current_dir_components_are_normalized(void)
   if (strcmp(entries[0].name, "dir/file.txt") != 0) return 5;
   if (!zz9k_archive_path_is_safe(entries[0].name)) return 6;
 
-  zz9k_archive_tar_stream_init(&stream, "t", ".");
+  zz9k_archive_tar_stream_init(&stream, "t", ".", 0);
   while (pos < tar_len) {
     uint32_t part = 37U;
     if (part > tar_len - pos) {
@@ -6985,7 +6985,7 @@ static int test_tar_duplicate_slashes_are_normalized(void)
   if (strcmp(entries[0].name, "dir/file.txt") != 0) return 5;
   if (!zz9k_archive_path_is_safe(entries[0].name)) return 6;
 
-  zz9k_archive_tar_stream_init(&stream, "t", ".");
+  zz9k_archive_tar_stream_init(&stream, "t", ".", 0);
   while (pos < tar_len) {
     uint32_t part = 41U;
     if (part > tar_len - pos) {
@@ -7030,7 +7030,7 @@ static int test_tar_gnu_long_root_current_dir_metadata_is_skipped(void)
   }
   if (count != 0U) return 4;
 
-  zz9k_archive_tar_stream_init(&stream, "t", ".");
+  zz9k_archive_tar_stream_init(&stream, "t", ".", 0);
   while (pos < tar_len) {
     uint32_t part = 31U;
     if (part > tar_len - pos) {
@@ -7101,7 +7101,7 @@ static int test_tar_gnu_long_name_applies_to_next_entry(void)
   if (count != 1U) return 2;
   if (strcmp(entries[0].name, output_name) != 0) return 3;
 
-  zz9k_archive_tar_stream_init(&stream, "x", ".");
+  zz9k_archive_tar_stream_init(&stream, "x", ".", 0);
   while (pos < tar_len) {
     uint32_t part = 31U;
     if (part > tar_len - pos) {
@@ -7170,7 +7170,7 @@ static int test_tar_stream_rejects_oversized_gnu_long_name(void)
     return 1; /* the in-memory walker rejects the oversized name */
   }
 
-  zz9k_archive_tar_stream_init(&stream, "x", ".");
+  zz9k_archive_tar_stream_init(&stream, "x", ".", 0);
   while (pos < tar_len) {
     uint32_t part = 61U;
 
@@ -7215,7 +7215,7 @@ static int test_tar_pax_path_applies_to_next_entry(void)
   if (count != 1U) return 2;
   if (strcmp(entries[0].name, output_name) != 0) return 3;
 
-  zz9k_archive_tar_stream_init(&stream, "x", ".");
+  zz9k_archive_tar_stream_init(&stream, "x", ".", 0);
   while (pos < tar_len) {
     uint32_t part = 23U;
     if (part > tar_len - pos) {
@@ -7277,7 +7277,7 @@ static int test_tar_pax_root_current_dir_metadata_is_skipped(void)
   }
   if (count != 0U) return 4;
 
-  zz9k_archive_tar_stream_init(&stream, "t", ".");
+  zz9k_archive_tar_stream_init(&stream, "t", ".", 0);
   while (pos < tar_len) {
     uint32_t part = 19U;
     if (part > tar_len - pos) {
@@ -7328,7 +7328,7 @@ static int test_tar_pax_size_applies_to_next_entry(void)
   if (entries[0].uncompressed_size != 5U) return 6;
   if (entries[0].data_offset != 1536U) return 7;
 
-  zz9k_archive_tar_stream_init(&stream, "x", ".");
+  zz9k_archive_tar_stream_init(&stream, "x", ".", 0);
   while (pos < tar_len) {
     uint32_t part = 17U;
     if (part > tar_len - pos) {
@@ -7391,7 +7391,7 @@ static int test_tar_stream_accepts_large_pax_header(void)
   if (strcmp(entries[0].name, output_name) != 0) return 3;
   if (entries[0].uncompressed_size != 5U) return 4;
 
-  zz9k_archive_tar_stream_init(&stream, "x", ".");
+  zz9k_archive_tar_stream_init(&stream, "x", ".", 0);
   while (pos < tar_len) {
     uint32_t part = 53U;
     if (part > tar_len - pos) {
@@ -7458,7 +7458,7 @@ static int test_tar_base256_size_is_accepted(void)
   if (strcmp(entries[0].name, output_name) != 0) return 5;
   if (entries[0].uncompressed_size != 5U) return 6;
 
-  zz9k_archive_tar_stream_init(&stream, "x", ".");
+  zz9k_archive_tar_stream_init(&stream, "x", ".", 0);
   while (pos < tar_len) {
     uint32_t part = 41U;
     if (part > tar_len - pos) {
@@ -7546,7 +7546,7 @@ static int test_tar_skips_unsupported_special_entries(void)
   if (count != 1U) return 2;
   if (strcmp(entries[0].name, output_name) != 0) return 3;
 
-  zz9k_archive_tar_stream_init(&stream, "x", ".");
+  zz9k_archive_tar_stream_init(&stream, "x", ".", 0);
   while (pos < tar_len) {
     uint32_t part = 19U;
     if (part > tar_len - pos) {
@@ -7617,7 +7617,7 @@ static int test_empty_tar_archive_is_valid(void)
   if (!zz9k_archive_alloc_entries(0U, &allocated)) return 5;
   free(allocated);
 
-  zz9k_archive_tar_stream_init(&stream, "t", ".");
+  zz9k_archive_tar_stream_init(&stream, "t", ".", 0);
   if (!zz9k_archive_tar_stream_consume(&stream, tar, sizeof(tar))) {
     return 6;
   }

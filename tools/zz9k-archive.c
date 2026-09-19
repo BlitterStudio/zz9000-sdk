@@ -311,6 +311,7 @@ typedef int (*ZZ9KArchiveDecodedChunkFn)(void *user,
 typedef struct ZZ9KArchiveTarStream {
   const char *command;
   const char *output_dir;
+  const char *archive_path; /* input file for the alias guard, or 0 */
   uint8_t header[ZZ9K_ARCHIVE_TAR_BLOCK];
   ZZ9KArchiveEntry entry;
   FILE *file;
@@ -345,6 +346,7 @@ static int zz9k_archive_tar_header_empty(const uint8_t *header);
 static int zz9k_archive_open_output_entry(const char *output_dir,
                                           const ZZ9KArchiveEntry *entry,
                                           FILE **file);
+static int zz9k_archive_paths_same_file(const char *a, const char *b);
 static int zz9k_archive_open_output_staged(const char *output_dir,
                                           const ZZ9KArchiveEntry *entry,
                                           FILE **file,
@@ -5328,14 +5330,12 @@ static int zz9k_archive_write_file_range_entry(
     printf("file range seek failed: %s\n", input_path);
     goto out;
   }
-  /* Verified writes go to a collision-safe sibling temporary and replace
-     the destination only after the CRC passes: a corrupt member under
-     --overwrite must never destroy the file that was already there (the
-     pre-inline behavior verified before opening, at the cost of a second
-     read). The temporary and backup names probe for free siblings so an
-     unrelated user file (or another member named like a suffix) is never
-     truncated, and a failed rename restores the old destination. */
-  if (verify_crc) {
+  /* ALL file-backed range writes stage to a collision-safe sibling
+     temporary and replace the destination only on success: a corrupt
+     member under --overwrite -- or a Ctrl-C between chunks -- must
+     never destroy the file that was already there. Verified callers
+     additionally gate the replacement on the inline CRC. */
+  {
     tmp_path = (char *)malloc(strlen(path) + 16U);
     if (!tmp_path) {
       printf("path allocation failed\n");
@@ -5347,8 +5347,6 @@ static int zz9k_archive_write_file_range_entry(
       goto out;
     }
     output = fopen(tmp_path, "wb");
-  } else {
-    output = fopen(path, "wb");
   }
   if (!output) {
     printf("open output failed: %s\n", path);
@@ -6145,11 +6143,13 @@ static int zz9k_archive_open_output_staged(
 }
 static void zz9k_archive_tar_stream_init(ZZ9KArchiveTarStream *stream,
                                          const char *command,
-                                         const char *output_dir)
+                                         const char *output_dir,
+                                         const char *archive_path)
 {
   memset(stream, 0, sizeof(*stream));
   stream->command = command;
   stream->output_dir = output_dir;
+  stream->archive_path = archive_path;
   stream->ok = 1;
 }
 
@@ -6401,6 +6401,29 @@ static int zz9k_archive_tar_stream_start_entry(
     return 0;
   }
 
+  if (stream->archive_path && !stream->entry.is_dir &&
+      zz9k_archive_overwrite_outputs &&
+      !zz9k_archive_dry_run_outputs &&
+      !zz9k_archive_skip_existing_outputs) {
+    /* Same guard as the LHA file engine: a member whose output path IS
+       the (still-open) archive would truncate the source mid-read --
+       including via the zero-size write below. Refuse by file identity
+       before any output is opened. */
+    char *out_path = zz9k_archive_join_path(stream->output_dir,
+                                            stream->entry.name);
+
+    if (out_path) {
+      int alias = zz9k_archive_paths_same_file(stream->archive_path,
+                                               out_path);
+      free(out_path);
+      if (alias) {
+        printf("output path is the archive itself, refusing: %s\n",
+               stream->entry.name);
+        stream->ok = 0;
+        return 0;
+      }
+    }
+  }
   if (stream->entry.is_dir || size == 0U) {
     if (!zz9k_archive_write_entry(stream->output_dir, &stream->entry, 0)) {
       stream->ok = 0;
@@ -9393,7 +9416,8 @@ static int zz9k_archive_handle_tar_gzip_feed(
     return 0;
   }
   output_limit = zz9k_archive_zip_test_output_limit(info->uncompressed_size);
-  zz9k_archive_tar_stream_init(&tar_stream, command, output_dir);
+  zz9k_archive_tar_stream_init(&tar_stream, command, output_dir,
+                               archive_path);
   if (!zz9k_archive_decompress_feed_file_to_callback(
           ctx, service, ZZ9K_COMPRESSION_GZIP, archive_path, file_length,
           output_limit, zz9k_archive_tar_stream_chunk, &tar_stream,
@@ -9472,7 +9496,8 @@ static int zz9k_archive_handle_tar_file(const char *archive_path,
   *attempted = 1;
   /* Init before any allocation that can fail: the out path calls
      tar_stream_cleanup, which must never see an uninitialized stream. */
-  zz9k_archive_tar_stream_init(&stream, command, output_dir);
+  zz9k_archive_tar_stream_init(&stream, command, output_dir,
+                               archive_path);
   chunk = (uint8_t *)malloc(ZZ9K_ARCHIVE_TAR_WALK_CHUNK);
   if (!chunk) {
     printf("tar stream chunk allocation failed\n");
@@ -11501,7 +11526,7 @@ static int zz9k_archive_run(const char *command, const char *archive_path,
     return 0;
   }
   format = zz9k_archive_detect_format(probe, probe_length);
-  printf("zz9k-archive build da55ea2+round3 2026-09-19f\n");
+  printf("zz9k-archive build 9e79b9e+round4 2026-09-19g\n");
   printf("archive: %s (%s)\n", archive_path, zz9k_archive_format_name(format));
 
   if (format == ZZ9K_ARCHIVE_FORMAT_LZMA_ALONE &&
