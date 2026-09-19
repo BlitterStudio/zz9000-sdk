@@ -5398,6 +5398,109 @@ static int test_lha_file_many_members(void)
   return 0;
 }
 
+/*
+ * The fill walk caps STORING at max_entries but still reports the full
+ * member count -- the exact precondition the file handler's capacity
+ * guard defends against when an archive is rewritten in place between
+ * the count and fill walks. Pin both halves of the walker contract:
+ * count may exceed max_entries, and no store happens beyond the cap.
+ */
+static int test_lha_list_file_count_exceeds_max_entries(void)
+{
+  const char *path = "archive_tool_grow.tmp";
+  ZZ9KArchiveEntry entries[4];
+  uint8_t first[256];
+  uint8_t second[256];
+  uint32_t first_len;
+  uint32_t second_len;
+  uint32_t count = 0U;
+  FILE *file;
+  int rc = 0;
+
+  if (!make_lha_lh0_named("first.bin", "aaaa", first, &first_len)) {
+    return 1;
+  }
+  if (!make_lha_lh0_named("second.bin", "bbbb", second, &second_len)) {
+    return 2;
+  }
+
+  /* Count walk over a single-member file. */
+  if (!write_test_file(path, first, first_len)) return 3;
+  file = fopen(path, "rb");
+  if (!file) {
+    rc = 4;
+    goto out;
+  }
+  if (!zz9k_archive_lha_list_file(file, first_len, 0, 0U, &count)) {
+    fclose(file);
+    file = 0;
+    rc = 5;
+    goto out;
+  }
+  if (count != 1U) {
+    fclose(file);
+    file = 0;
+    rc = 6;
+    goto out;
+  }
+
+  /* The archive "grows" a second member before the fill walk, which is
+     capped at the first walk's count. */
+  {
+    uint8_t grown[512];
+
+    if (first_len + second_len > sizeof(grown)) {
+      fclose(file);
+      file = 0;
+      rc = 7;
+      goto out;
+    }
+    memcpy(grown, first, first_len);
+    memcpy(grown + first_len - 1U, second, second_len);
+    fclose(file);
+    file = 0;
+    if (!write_test_file(path, grown, first_len - 1U + second_len)) {
+      rc = 8;
+      goto out;
+    }
+    file = fopen(path, "rb");
+    if (!file) {
+      rc = 9;
+      goto out;
+    }
+    memset(entries, 0xAA, sizeof(entries));
+    if (!zz9k_archive_lha_list_file(file, first_len - 1U + second_len,
+                                    entries, 1U, &count)) {
+      fclose(file);
+      file = 0;
+      rc = 10;
+      goto out;
+    }
+    if (count != 2U) {
+      fclose(file);
+      file = 0;
+      rc = 11; /* count reflects all members, not the cap */
+      goto out;
+    }
+    if (entries[0].name[0] == '\xAA' || entries[0].name[0] == 0) {
+      fclose(file);
+      file = 0;
+      rc = 12; /* the capped slot must still be filled */
+      goto out;
+    }
+    if (entries[1].name[0] != '\xAA' || entries[1].name[1] != '\xAA') {
+      fclose(file);
+      file = 0;
+      rc = 13; /* nothing may be stored beyond max_entries */
+      goto out;
+    }
+  }
+
+out:
+  if (file) fclose(file);
+  remove(path);
+  return rc;
+}
 
 static int test_lha_level1_lhd_and_lh0_extract(void)
 {
@@ -7695,6 +7798,11 @@ int main(void)
   if (rc) {
     printf("test_lha_file_many_members failed: %d\n", rc);
     return 520 + rc;
+  }
+  rc = test_lha_list_file_count_exceeds_max_entries();
+  if (rc) {
+    printf("test_lha_list_file_count_exceeds_max_entries failed: %d\n", rc);
+    return 530 + rc;
   }
   rc = test_zip_backslash_names_are_normalized();
   if (rc) {

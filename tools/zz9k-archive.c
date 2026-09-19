@@ -8575,18 +8575,32 @@ static int zz9k_archive_handle_lha_file(ZZ9KContext **ctx,
      65,535): a whole-partition LHA backup can legitimately carry more
      members than that, and capping here would push exactly the large
      archives this engine exists for back onto the whole-file load. */
-  entries = (ZZ9KArchiveEntry *)calloc(count == 0U ? 1U : count,
-                                       sizeof(*entries));
-  if (!entries) {
-    printf("lha entry allocation failed\n");
-    zz9k_archive_lha_source_close(&src);
-    return 0;
-  }
-  if (!zz9k_archive_lha_list_file(src.file, archive_length, entries, count,
-                                  &count)) {
-    zz9k_archive_lha_source_close(&src);
-    free(entries);
-    return 0; /* fall back: the in-memory parse reports "lha parse failed" */
+  {
+    uint32_t capacity = count;
+
+    entries = (ZZ9KArchiveEntry *)calloc(capacity == 0U ? 1U : capacity,
+                                         sizeof(*entries));
+    if (!entries) {
+      printf("lha entry allocation failed\n");
+      zz9k_archive_lha_source_close(&src);
+      return 0;
+    }
+    if (!zz9k_archive_lha_list_file(src.file, archive_length, entries,
+                                    capacity, &count)) {
+      zz9k_archive_lha_source_close(&src);
+      free(entries);
+      return 0; /* fall back: the in-memory parse reports "lha parse failed" */
+    }
+    if (count > capacity) {
+      /* The file grew more members between the two walks: it is being
+         rewritten in place. Never iterate past the allocation -- hand
+         back to the in-memory engine, which reads one consistent
+         snapshot of the changed file. */
+      printf("lha archive changed during listing\n");
+      zz9k_archive_lha_source_close(&src);
+      free(entries);
+      return 0;
+    }
   }
 
 
