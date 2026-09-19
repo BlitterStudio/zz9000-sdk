@@ -1476,8 +1476,17 @@ static int zz9k_archive_lha_parse_header(const uint8_t *hdr,
   char ext_name[ZZ9K_ARCHIVE_MAX_NAME];
   ZZ9KArchiveEntry entry;
 
-  if (!hdr || !entry_out || !header_bytes || window_len < 24U) {
+  if (!hdr || !entry_out || !header_bytes) {
     return ZZ9K_ARCHIVE_LHA_PARSE_INVALID;
+  }
+  if (window_len < 24U) {
+    /* Fewer bytes than a minimal header (24 = 2 size/checksum bytes + a
+       22-byte level-0 base): the window is too short to judge anything.
+       Ask for more window -- declaring this INVALID made the single-pass
+       walker reject a perfectly good member whose header happened to
+       start within the last 23 bytes of a 32 KiB chunk (real-world
+       casualty: member 165 of LightwaveRTGv1.1.lha at offset 3002313). */
+    return ZZ9K_ARCHIVE_LHA_PARSE_NEEDS_WINDOW;
   }
   header_size = hdr[0];
   if (header_size == 0U) {

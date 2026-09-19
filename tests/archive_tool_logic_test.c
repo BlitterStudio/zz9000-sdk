@@ -530,6 +530,44 @@ static int make_lha_lh0_named(const char *name,
   return 1;
 }
 
+/* Same layout with caller-supplied binary data of a given length (the
+   256-byte memset above bounds this builder's usable name length). */
+static int make_lha_lh0_named_raw(const char *name,
+                                  const uint8_t *data,
+                                  uint32_t data_len,
+                                  uint8_t *lha,
+                                  uint32_t *length)
+{
+  uint32_t name_len = (uint32_t)strlen(name);
+  uint32_t header_size = 25U + name_len;
+  uint32_t pos = 0U;
+  uint32_t i;
+  uint8_t checksum = 0U;
+
+  memset(lha, 0, 64U);
+  lha[pos++] = (uint8_t)header_size;
+  lha[pos++] = 0U;
+  memcpy(lha + pos, "-lh0-", 5U); pos += 5U;
+  put_le32(lha + pos, data_len); pos += 4U;
+  put_le32(lha + pos, data_len); pos += 4U;
+  put_le32(lha + pos, 0U); pos += 4U;
+  lha[pos++] = 0x20U;
+  lha[pos++] = 1U;
+  lha[pos++] = (uint8_t)name_len;
+  memcpy(lha + pos, name, name_len); pos += name_len;
+  put_le16(lha + pos, 0U); pos += 2U;
+  lha[pos++] = 'A';
+  put_le16(lha + pos, 0U); pos += 2U;
+  for (i = 2U; i < 2U + header_size; i++) {
+    checksum = (uint8_t)(checksum + lha[i]);
+  }
+  lha[1] = checksum;
+  memcpy(lha + pos, data, data_len); pos += data_len;
+  lha[pos++] = 0U;
+  *length = pos;
+  return 1;
+}
+
 static const uint8_t lha_lh5_docker_fixture[] = {
   0x54U, 0x00U, 0x2dU, 0x6cU, 0x68U, 0x35U, 0x2dU, 0xb9U, 0x00U, 0x00U, 0x00U, 0x90U,
   0xe2U, 0x00U, 0x00U, 0x59U, 0xddU, 0x16U, 0x6aU, 0x20U, 0x02U, 0xe1U, 0x14U, 0x55U,
@@ -5335,7 +5373,136 @@ static int test_lha_parse_header_tri_state(void)
       ZZ9K_ARCHIVE_LHA_PARSE_OK) {
     return 7;
   }
+  /* A window shorter than a minimal header asks for more window rather
+     than declaring the member invalid: a header starting in the last 23
+     bytes of a chunk is the real-world case this guards (found on
+     member 165 of a 4,997-member real archive). */
+  if (zz9k_archive_lha_parse_header(buf, 23U, len, &entry,
+                                    &header_bytes) !=
+      ZZ9K_ARCHIVE_LHA_PARSE_NEEDS_WINDOW) {
+    return 8;
+  }
   return 0;
+}
+
+/*
+ * A member header that starts within the last bytes of a 32 KiB walk
+ * chunk must still parse: the walker re-centers its window instead of
+ * failing the walk. Deterministic layout: member 0's data is sized so
+ * member 1's header begins exactly 10 bytes before the chunk edge.
+ */
+static int test_lha_walk_header_straddles_chunk_edge(void)
+{
+  const char *path = "archive_tool_straddle.tmp";
+  ZZ9KArchiveEntry *entries = 0;
+  ZZ9KArchiveEntry *mem_entries = 0;
+  uint8_t *archive;
+  uint8_t member[256];
+  uint32_t member_len;
+  uint32_t header_len;
+  uint32_t data_len;
+  uint32_t total = 0U;
+  uint32_t count = 0U;
+  uint32_t mem_count = 0U;
+  FILE *file;
+  int rc = 0;
+
+  /* member 0: pad.bin with data sized so its END lands 10 bytes before
+     the 32 KiB chunk edge, leaving member 1's header to start there. */
+  if (!make_lha_lh0_named("pad.bin", "p", member, &header_len)) {
+    return 1;
+  }
+  /* header_len includes 1 data byte + terminator; member body without
+     terminator = header_len - 1. We want a total member size of
+     32768 - 10 = 32758, so data length = 32758 - (header_len - 1 - 1)
+     ... computed below from the fixed base. */
+  data_len = 32758U - (header_len - 1U) + 1U; /* fill to exact size */
+  archive = (uint8_t *)malloc(40U * 1024U);
+  if (!archive) {
+    return 2;
+  }
+  {
+    uint8_t *big = (uint8_t *)malloc(data_len + 1U);
+
+    if (!big) {
+      free(archive);
+      return 3;
+    }
+    memset(big, 'p', data_len);
+    if (!make_lha_lh0_named_raw("pad.bin", big, data_len, archive,
+                                &member_len)) {
+      free(big);
+      free(archive);
+      return 4;
+    }
+    free(big);
+  }
+  if (member_len - 1U != 32758U) {
+    /* sizing failed to land the boundary; adjust deterministically */
+    free(archive);
+    return 5;
+  }
+  total = member_len - 1U; /* drop terminator, shared below */
+  if (!make_lha_lh0_named("tail.bin", "x", member, &header_len)) {
+    free(archive);
+    return 6;
+  }
+  memcpy(archive + total, member, header_len);
+  total += header_len;
+
+  if (!zz9k_archive_lha_list(archive, total, 0, 0U, &mem_count)) {
+    free(archive);
+    return 7;
+  }
+  mem_entries = (ZZ9KArchiveEntry *)calloc(mem_count, sizeof(*mem_entries));
+  if (!mem_entries) {
+    free(archive);
+    return 8;
+  }
+  if (!zz9k_archive_lha_list(archive, total, mem_entries, mem_count,
+                             &mem_count)) {
+    free(mem_entries);
+    free(archive);
+    return 9;
+  }
+  if (mem_count != 2U) {
+    free(mem_entries);
+    free(archive);
+    return 10;
+  }
+
+  if (!write_test_file(path, archive, total)) {
+    free(mem_entries);
+    free(archive);
+    return 11;
+  }
+  file = fopen(path, "rb");
+  if (!file) {
+    rc = 12;
+    goto out;
+  }
+  if (!zz9k_archive_lha_list_file(file, total, &entries, &count, 0, 0)) {
+    fclose(file);
+    file = 0;
+    rc = 13; /* the straddling header must parse after re-centering */
+    goto out;
+  }
+  fclose(file);
+  file = 0;
+  if (count != mem_count ||
+      !lha_entries_equal(&mem_entries[0], &entries[0]) ||
+      !lha_entries_equal(&mem_entries[1], &entries[1])) {
+    rc = 14;
+    goto out;
+  }
+
+out:
+  free(entries);
+  free(mem_entries);
+  free(archive);
+  if (file) fclose(file);
+  remove(path);
+  return rc;
 }
 
 /*
@@ -8016,6 +8183,11 @@ int main(void)
   if (rc) {
     printf("test_lha_parse_header_tri_state failed: %d\n", rc);
     return 500 + rc;
+  }
+  rc = test_lha_walk_header_straddles_chunk_edge();
+  if (rc) {
+    printf("test_lha_walk_header_straddles_chunk_edge failed: %d\n", rc);
+    return 560 + rc;
   }
   rc = test_lha_corrupt_member_fails_both_walks();
   if (rc) {
