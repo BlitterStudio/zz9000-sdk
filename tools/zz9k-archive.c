@@ -1729,14 +1729,16 @@ static int zz9k_archive_lha_list(const uint8_t *data,
 }
 
 /* Read granularity for the single-pass file walk. One refill is one
-   seekable-read round trip, which network filesystems pay in latency
-   regardless of size, so the chunk is deliberately generous: consecutive
-   members whose data fits inside one chunk parse from a single read with
-   no further I/O. The chunk doubles as the initial header-window size;
-   pathological headers larger than it grow the window as before.
-   Member bodies are never parsed -- the next member's header is reached
-   by seeking, not by reading through the data. */
-#define ZZ9K_ARCHIVE_LHA_WALK_CHUNK (32U * 1024U)
+   seekable-read round trip; a refill happens for essentially every
+   member because consecutive headers are separated by that member's
+   DATA (often far more than any chunk), so a large chunk mostly reads
+   bytes the walk never looks at. 4 KiB covers every realistic header
+   (base + extensions) while transferring ~8x less than a 32 KiB chunk
+   over a bandwidth-starved network mount; pathological headers larger
+   than it grow the window as before. Member bodies are never parsed --
+   the next member's header is reached by seeking, not by reading
+   through the data. */
+#define ZZ9K_ARCHIVE_LHA_WALK_CHUNK (4U * 1024U)
 #define ZZ9K_ARCHIVE_LHA_WALK_INITIAL_ENTRIES 1024U
 
 typedef void (*ZZ9KArchiveLhaEntryFn)(const ZZ9KArchiveEntry *entry,
@@ -8370,20 +8372,53 @@ static void zz9k_archive_lha_batch_run_src(ZZ9KContext *ctx,
     }
     blob = 0U;
     chunk_bytes_in = 0UL;
-    for (i = 0U; i < chunk.count; i++) {
-      const ZZ9KArchiveEntry *entry = &entries[members[chunk.first + i]];
-      const uint8_t *member = 0;
+    {
+      /* Network-friendly blob fill: when the chunk's members sit close
+         enough together in the archive (the common no-filter case --
+         they are consecutive, separated only by each other's headers),
+         read the whole span in ONE seek+read and slice the members out
+         of it, instead of one round trip per member. A sparse --match
+         filter makes the span large; those fall back to per-member
+         reads rather than dragging unrelated data over the wire. */
+      const ZZ9KArchiveEntry *first_entry =
+          &entries[members[chunk.first]];
+      const ZZ9KArchiveEntry *last_entry =
+          &entries[members[chunk.first + chunk.count - 1U]];
+      uint32_t span_start = first_entry->data_offset;
+      uint32_t span_end =
+          last_entry->data_offset + last_entry->compressed_size;
+      uint32_t span = span_end - span_start;
+      int spanned = 0;
+      uint8_t *span_buf = 0;
 
-      /* File mode reads the member's compressed range into the source
-         bounce buffer here; chunk planning bounds it by the blob budget,
-         so the bounce never exceeds one chunk's input. */
-      if (!zz9k_archive_lha_src_member(src, entry, &member) ||
-          !zz9k_shared_copy_to(&arena, layout.blob_offset + blob,
-                               member, entry->compressed_size)) {
-        goto out; /* read/Zorro copy failure -> per-member for the rest */
+      if (src->file && span >= chunk.blob_length &&
+          span - chunk.blob_length <= 256U * 1024U) {
+        span_buf = (uint8_t *)malloc(span);
+        if (span_buf &&
+            fseek(src->file, (long)span_start, SEEK_SET) == 0 &&
+            fread(span_buf, 1U, span, src->file) == span) {
+          spanned = 1;
+        }
       }
-      blob += entry->compressed_size;
-      chunk_bytes_in += (unsigned long)entry->compressed_size;
+      for (i = 0U; i < chunk.count; i++) {
+        const ZZ9KArchiveEntry *entry = &entries[members[chunk.first + i]];
+        const uint8_t *member = 0;
+
+        if (spanned) {
+          member = span_buf + (entry->data_offset - span_start);
+        } else if (!zz9k_archive_lha_src_member(src, entry, &member)) {
+          free(span_buf);
+          goto out; /* read failure -> per-member for the rest */
+        }
+        if (!zz9k_shared_copy_to(&arena, layout.blob_offset + blob,
+                                 member, entry->compressed_size)) {
+          free(span_buf);
+          goto out; /* Zorro copy failure -> per-member for the rest */
+        }
+        blob += entry->compressed_size;
+        chunk_bytes_in += (unsigned long)entry->compressed_size;
+      }
+      free(span_buf);
     }
 
     desc.arena_handle = arena.handle;
@@ -8720,6 +8755,23 @@ static void zz9k_archive_lha_print_entry(const ZZ9KArchiveEntry *entry,
   }
 }
 
+/* Progress callback for t/x walks: the walk itself is silent without a
+   callback, and over a network mount it can run for minutes -- print a
+   single updating line so the tool never looks dead before the first
+   "x <name>" output. */
+static void zz9k_archive_lha_progress_entry(const ZZ9KArchiveEntry *entry,
+                                            void *user)
+{
+  uint32_t *count = (uint32_t *)user;
+
+  (void)entry;
+  (*count)++;
+  if ((*count & 511U) == 0U) {
+    printf("\rscanning headers: %lu members", (unsigned long)*count);
+    fflush(stdout);
+  }
+}
+
 /* File-backed LHA engine: walks member headers with seeks and reads each
    member's compressed bytes on demand. A large archive never has to fit in
    RAM before the first member is listed, tested or extracted -- the whole
@@ -8764,15 +8816,29 @@ static int zz9k_archive_handle_lha_file(ZZ9KContext **ctx,
     return 0; /* the in-memory fallback reports the open failure */
   }
   *attempted = 1; /* the file engine owns the archive from here on */
-  if (!zz9k_archive_lha_list_file(src.file, archive_length, &entries, &count,
-                                  is_list ? zz9k_archive_lha_print_entry : 0,
-                                  0)) {
-    /* Terminal: the walk has already printed its diagnostic (parse
-       failure with offset and member index, or the read error). */
-    zz9k_archive_lha_source_close(&src);
-    free(entries);
-    return 0;
+  {
+    uint32_t scanned = 0U;
+    ZZ9KArchiveLhaEntryFn cb = is_list ? zz9k_archive_lha_print_entry :
+        (is_test || is_extract) ? zz9k_archive_lha_progress_entry : 0;
+
+    if (cb == zz9k_archive_lha_progress_entry) {
+      printf("scanning headers...\n");
+      fflush(stdout);
+    }
+    if (!zz9k_archive_lha_list_file(src.file, archive_length, &entries,
+                                    &count, cb, &scanned)) {
+      /* Terminal: the walk has already printed its diagnostic (parse
+         failure with offset and member index, or the read error). */
+      zz9k_archive_lha_source_close(&src);
+      free(entries);
+      return 0;
+    }
+    if (cb == zz9k_archive_lha_progress_entry && scanned >= 512U) {
+      printf("\r%lu members          \n", (unsigned long)scanned);
+      fflush(stdout);
+    }
   }
+
   /* Single pass: the entry table grows inside the walk (no 65,535-style
      cap, no second walk to race a concurrent rewrite), and a listing
      streams each entry the moment it is parsed. */
