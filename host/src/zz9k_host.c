@@ -640,7 +640,9 @@ static int zz9k_await_completion_locked(ZZ9KContext *ctx, uint32_t request_id,
          completion retires and the firmware is done with the buffers
          before they are released. Never blocks on Wait again -- only
          polls, so further Ctrl-C presses do not extend the drain. The
-         iteration cap is belt-and-braces alongside the timer deadline. */
+         iteration cap is belt-and-braces alongside the timer deadline.
+         The drain itself owns late_irq_expected: a retired request
+         clears it (no assert will come), a timed-out one sets it. */
       uint32_t drain_start = zz9k_now_ms(ctx);
       uint32_t drain_polls = 0U;
 
@@ -650,7 +652,12 @@ static int zz9k_await_completion_locked(ZZ9KContext *ctx, uint32_t request_id,
             reply->request_id == request_id &&
             reply->opcode == opcode &&
             reply->user_cookie == sync_cookie) {
-          return ZZ9K_STATUS_CANCELLED; /* retired cleanly, then cancel */
+          /* Retired cleanly: the completion is consumed and no further
+             assert will arrive -- clear any stale expectation so disarm
+             does not busy-wait the full window for an assert that is
+             never coming. */
+          ctx->late_irq_expected = 0;
+          return ZZ9K_STATUS_CANCELLED;
         }
         if (status != ZZ9K_STATUS_BUSY && status != ZZ9K_STATUS_OK) {
           break; /* transport error: nothing more to drain */
@@ -661,8 +668,13 @@ static int zz9k_await_completion_locked(ZZ9KContext *ctx, uint32_t request_id,
         }
         zz9k_idle_between_polls_backoff(28U);
       }
-#endif
+      /* Drain window expired with the request outstanding: the ARM will
+         post its completion (and assert the IRQ) after we return and
+         the caller frees its buffers -- disarm must watch for that. */
+      ctx->late_irq_expected = 1;
       return ZZ9K_STATUS_CANCELLED;
+#endif
+      return ZZ9K_STATUS_CANCELLED; /* host stub wake: no drain needed */
     }
     if (zz9k_now_ms(ctx) - start >= hard_timeout_ms) {
       return ZZ9K_STATUS_TIMEOUT;

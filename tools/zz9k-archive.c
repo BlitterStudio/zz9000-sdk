@@ -4911,7 +4911,10 @@ static int zz9k_archive_decompress_to_memory_ex(ZZ9KContext *ctx,
          so CheckSignal-based checkpoints cannot see this press. Latch
          the cancellation here so every checkpoint stops the run. */
       zz9k_archive_cancel_latched = 1;
-      zz9k_expect_late_completion_irq(ctx);
+      /* The library's drain now owns late_irq_expected: retired drains
+         clear it, timed-out drains set it. Marking here unconditionally
+         made even cleanly retired cancellations spin disarm's watcher
+         for its full window. */
       /* Never free the board buffers: a timed-out drain means the ARM
          may still be decoding into them. Board-heap slots freed now get
          reused by the next allocation (this or a later process) while
@@ -5739,6 +5742,13 @@ static int zz9k_archive_lha_decode_method_to_file(
         int status = zz9k_read_diag(ctx, &zz9k_lha_board_diag);
 
         zz9k_archive_note_status(status);
+        if (status == ZZ9K_STATUS_CANCELLED) {
+          /* The wait consumed the break: with try_offload still true the
+             member would fully decode (and write) before the next walk
+             checkpoint sees the latch. Stop before starting another
+             codec operation. */
+          return 0;
+        }
         zz9k_lha_board_diag_valid = (status == ZZ9K_STATUS_OK) ? 1 : -1;
       }
       if (zz9k_lha_board_diag_valid == 1 &&
@@ -6478,14 +6488,25 @@ static int zz9k_archive_tar_stream_consume(ZZ9KArchiveTarStream *stream,
       }
       if ((stream->entry.flags & ZZ9K_ARCHIVE_TAR_FLAG_GNU_LONG_NAME) != 0U) {
         uint32_t used = (uint32_t)strlen(stream->pending_name);
+        uint32_t space =
+            (uint32_t)sizeof(stream->pending_name) - 1U - used;
         uint32_t copy_len = part;
 
-        if (used + copy_len >= sizeof(stream->pending_name)) {
-          /* The in-memory walker rejects names this long outright; the
-             streaming path must not silently keep a truncated prefix
-             that could collide with another member's output path. */
-          copy_len = (uint32_t)sizeof(stream->pending_name) - 1U - used;
-          stream->pending_name_overflow = 1;
+        if (copy_len > space) {
+          /* Overflow only when non-NUL name bytes exceed the buffer: a
+             record of exactly capacity bytes holding a 255-char name
+             plus its terminator FITS (the in-memory parser accepts it),
+             so judge by the first byte that would not fit -- a NUL
+             there means the name ended exactly at the limit. */
+          uint8_t boundary = space != 0U ? data[pos + space] : data[pos];
+
+          copy_len = space;
+          if (boundary != 0U) {
+            /* The in-memory walker rejects names this long outright; the
+               streaming path must not silently keep a truncated prefix
+               that could collide with another member's output path. */
+            stream->pending_name_overflow = 1;
+          }
         }
         if (copy_len != 0U) {
           memcpy(stream->pending_name + used, data + pos, copy_len);
@@ -11544,7 +11565,7 @@ static int zz9k_archive_run(const char *command, const char *archive_path,
     return 0;
   }
   format = zz9k_archive_detect_format(probe, probe_length);
-  printf("zz9k-archive build 12bb19e+round5 2026-09-19h\n");
+  printf("zz9k-archive build 37d0f70+round6 2026-09-19i\n");
   printf("archive: %s (%s)\n", archive_path, zz9k_archive_format_name(format));
 
   if (format == ZZ9K_ARCHIVE_FORMAT_LZMA_ALONE &&
