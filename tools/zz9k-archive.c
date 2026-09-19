@@ -11336,7 +11336,7 @@ static int zz9k_archive_run(const char *command, const char *archive_path,
     return 0;
   }
   format = zz9k_archive_detect_format(probe, probe_length);
-  printf("zz9k-archive build dcc218d+ 2026-09-19c\n");
+  printf("zz9k-archive build 98609dc+irqwatch 2026-09-19d\n");
   printf("archive: %s (%s)\n", archive_path, zz9k_archive_format_name(format));
 
   if (format == ZZ9K_ARCHIVE_FORMAT_LZMA_ALONE &&

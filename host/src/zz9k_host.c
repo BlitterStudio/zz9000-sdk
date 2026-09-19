@@ -1331,11 +1331,35 @@ void zz9k_disarm_completion_irq(ZZ9KContext *ctx)
   Permit();
   /* A completion posted between the disable above and the server removal
      can leave the board asserting the line with no handler installed --
-     the next interrupt on that chain (often the next program that opens
-     the board) then hits a handlerless assert. Ack once more AFTER the
-     removal: writing the ACK register needs no handler, and it clears
-     any pending assert so the line settles low before the context is
-     torn down. */
+     and a decode abandoned by a Ctrl-C may post its completion SECONDS
+     later, after any single ack. An asserted line with no handler crashes
+     the next interrupt-heavy operation (directory deletes, disk
+     activity). Watch the board's interrupt status for a grace window and
+     ack every late assert until the board has been quiet for half a
+     second: the ACK register write needs no handler, and by the time the
+     loop exits the abandoned work has actually finished posting. */
+  {
+    uint32_t quiet_start = zz9k_now_ms(ctx);
+    uint32_t deadline = quiet_start;
+    uint32_t spins = 0U;
+
+    for (;;) {
+      uint16_t status = 0;
+
+      if (zz9k_interrupt_status(ctx, &status) == ZZ9K_STATUS_OK &&
+          (status & ZZ9K_INTERRUPT_SDK) != 0U) {
+        (void)zz9k_completion_irq_ack(ctx);
+        quiet_start = zz9k_now_ms(ctx);
+      }
+      if ((uint32_t)(zz9k_now_ms(ctx) - quiet_start) >= 500U ||
+          ++spins > 20000000U) {
+        break;
+      }
+      if ((uint32_t)(zz9k_now_ms(ctx) - deadline) > 15000U) {
+        break; /* give up watching; the disable above is the backstop */
+      }
+    }
+  }
   (void)zz9k_completion_irq_ack(ctx);
   zz9k_timer_close(ctx);
   if (ctx->irq_signal_bit >= 0) {
