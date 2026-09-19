@@ -42,6 +42,7 @@ static int zz9k_archive_cancelled(void)
 #if defined(__amigaos__)
   if (!zz9k_archive_cancel_latched &&
       CheckSignal(SIGBREAKF_CTRL_C) != 0L) {
+    printf("\ninterrupted\n");
     zz9k_archive_cancel_latched = 1;
   }
 #endif
@@ -1806,7 +1807,7 @@ static int zz9k_archive_lha_list_file(FILE *file,
     uint32_t header_bytes;
 
     if (zz9k_archive_cancelled()) {
-      printf("\ninterrupted\n");
+
       goto out; /* terminal: never a cue to fall back or continue */
     }
     if (pos < window_base || pos >= window_base + window_valid) {
@@ -4886,6 +4887,16 @@ static int zz9k_archive_decompress_to_memory_ex(ZZ9KContext *ctx,
          so CheckSignal-based checkpoints cannot see this press. Latch
          the cancellation here so every checkpoint stops the run. */
       zz9k_archive_cancel_latched = 1;
+      /* Never free the board buffers: a timed-out drain means the ARM
+         may still be decoding into them. Board-heap slots freed now get
+         reused by the next allocation (this or a later process) while
+         the firmware is still writing -- the delayed crash after a
+         Ctrl-C stop. Leaking on an interrupted run is a few hundred KB
+         of board RAM and entirely safe. */
+      printf("%s decompress interrupted: board buffers abandoned\n",
+             zz9k_compression_algorithm_text(algorithm));
+      free(bytes);
+      return 0;
     }
     printf("%s decompress failed: %s (%d), input=%lu output=%lu\n",
            zz9k_compression_algorithm_text(algorithm),
@@ -5308,7 +5319,7 @@ static int zz9k_archive_write_file_range_entry(
         ZZ9K_ARCHIVE_STREAM_CHUNK : remaining;
 
     if (zz9k_archive_cancelled()) {
-      printf("\ninterrupted\n");
+
       goto out;
     }
 
@@ -5724,7 +5735,7 @@ static int zz9k_archive_lha_decode_method_to_file(
                A Ctrl-C that aborted the board decode must stop the run,
                never fall back to a full software decode of the member. */
             if (zz9k_archive_cancelled()) {
-              printf("\ninterrupted\n");
+
               return 0;
             }
             zz9k_lha_diag_sw_codec_fail++;
@@ -9308,7 +9319,7 @@ static int zz9k_archive_handle_tar_file(const char *archive_path,
         ZZ9K_ARCHIVE_TAR_WALK_CHUNK : remaining;
 
     if (zz9k_archive_cancelled()) {
-      printf("\ninterrupted\n");
+
       goto out;
     }
     if (fread(chunk, 1U, part, file) != part) {
