@@ -127,6 +127,7 @@ struct ZZPlayRuntime {
   uint32_t trace_read_max_us;
   uint32_t trace_underruns;
   char trace_decision;
+  uint8_t trace_anchored;
   ZZ9KMediaSessionAudioResult audio_result;
   ZZPlaySyncPolicy sync_policy;
   ZZPlayAudioBackend audio_backend;
@@ -1393,12 +1394,20 @@ static void zzplay_trace_write(struct ZZPlayRuntime *runtime,
     (void)Write(runtime->trace, (APTR)line, (LONG)bytes);
 }
 
-/* Milliseconds since the trace file was opened. */
+/* Milliseconds since the trace clock anchored. The anchor is taken
+ * lazily on first use: the trace file opens before zzplay_timer_open
+ * has set TimerBase, and a GetSysTime through a NULL device base is
+ * what gurud the machine instantly with --trace. */
 static uint32_t zzplay_trace_ms(struct ZZPlayRuntime *runtime)
 {
   TimeVal_Type now;
 
   GetSysTime(&now);
+  if (!runtime->trace_anchored) {
+    runtime->trace_started = now;
+    runtime->trace_last_frame = now;
+    runtime->trace_anchored = 1U;
+  }
   return zzplay_elapsed_us(&runtime->trace_started, &now) / 1000U;
 }
 
@@ -1448,6 +1457,11 @@ static void zzplay_trace_frame(struct ZZPlayRuntime *runtime,
     return;
   }
   GetSysTime(&now);
+  if (!runtime->trace_anchored) {
+    runtime->trace_started = now;
+    runtime->trace_last_frame = now;
+    runtime->trace_anchored = 1U;
+  }
   gap_us = zzplay_elapsed_us(&runtime->trace_last_frame, &now);
   runtime->trace_last_frame = now;
   if (runtime->audio_started) {
@@ -2407,8 +2421,9 @@ int main(int argc, char **argv)
               "wb=writeBusy db=decodeBusy rd=fileReads "
               "rmax=maxReadUs q=audioQueuedFrames und=underruns\n";
 
-      GetSysTime(&runtime.trace_started);
-      runtime.trace_last_frame = runtime.trace_started;
+      /* No GetSysTime here: TimerBase is not open yet (see
+       * zzplay_trace_ms). The clock anchors on the first traced
+       * frame, after the timer is open. */
       (void)Write(runtime.trace, (APTR)header,
                   (LONG)(sizeof(header) - 1U));
     } else {
