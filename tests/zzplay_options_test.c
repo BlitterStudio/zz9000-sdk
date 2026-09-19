@@ -21,6 +21,10 @@ static int same_options(const ZZPlayOptions *a, const ZZPlayOptions *b)
   if (a->fullscreen != b->fullscreen) return 0;
   if (a->audio_explicit != b->audio_explicit) return 0;
   if (a->quiet != b->quiet) return 0;
+  if (!a->trace_path != !b->trace_path) return 0;
+  if (a->trace_path && b->trace_path &&
+      strcmp(a->trace_path, b->trace_path) != 0)
+    return 0;
   if (!a->path != !b->path) return 0;
   if (a->path && b->path && strcmp(a->path, b->path) != 0) return 0;
   return 1;
@@ -83,13 +87,13 @@ static int test_tooltype_parity_with_cli(void)
   ZZPlayOptions cli;
   ZZPlayOptions wb;
   char *argv[] = { "zzplay", "--fps", "--loop=3", "--audio=mhi",
-                   "--fullscreen", "song.mp3" };
+                   "--fullscreen", "--trace=RAM:t", "song.mp3" };
   static const char *tooltypes[] = {
-    "FPS", "LOOP=3", "AUDIO=MHI", "FULLSCREEN"
+    "FPS", "LOOP=3", "AUDIO=MHI", "FULLSCREEN", "TRACE=RAM:t"
   };
   unsigned i;
 
-  if (zzplay_options_parse_cli(6, argv, &cli) != ZZPLAY_OPTIONS_OK)
+  if (zzplay_options_parse_cli(7, argv, &cli) != ZZPLAY_OPTIONS_OK)
     return 1;
   zzplay_options_init(&wb, ZZPLAY_LAUNCH_WORKBENCH);
   for (i = 0U; i < sizeof(tooltypes) / sizeof(tooltypes[0]); i++) {
@@ -234,7 +238,46 @@ static int test_defaults(void)
   if (options.show_fps || options.uncapped || options.fullscreen) return 3;
   if (options.audio_explicit) return 4;
   if (options.path) return 5;
+  if (options.trace_path) return 7;
   if (options.quiet || options.quiet_explicit) return 6;
+  return 0;
+}
+
+/* --trace defaults to a RAM-backed path and accepts an explicit one; the
+ * ToolType spelling must reach the same option (R7). */
+static int test_trace_option(void)
+{
+  ZZPlayOptions options;
+  char *argv[] = { "zzplay", "--trace", "movie.mpg" };
+  char *named[] = { "zzplay", "--trace=RAM:zz.trace", "movie.mpg" };
+  char *empty[] = { "zzplay", "--trace=", "movie.mpg" };
+
+  if (zzplay_options_parse_cli(3, argv, &options) != ZZPLAY_OPTIONS_OK)
+    return 1;
+  if (!options.trace_path ||
+      strcmp(options.trace_path, "T:zzplay.trace") != 0)
+    return 2;
+  if (zzplay_options_parse_cli(3, named, &options) != ZZPLAY_OPTIONS_OK)
+    return 3;
+  if (!options.trace_path ||
+      strcmp(options.trace_path, "RAM:zz.trace") != 0)
+    return 4;
+  if (zzplay_options_parse_cli(3, empty, &options) != ZZPLAY_OPTIONS_OK)
+    return 5;
+  if (!options.trace_path ||
+      strcmp(options.trace_path, "T:zzplay.trace") != 0)
+    return 6;
+  zzplay_options_init(&options, ZZPLAY_LAUNCH_WORKBENCH);
+  if (!zzplay_options_apply_tooltype(&options, "Trace=RAM:wb.trace"))
+    return 7;
+  if (!options.trace_path ||
+      strcmp(options.trace_path, "RAM:wb.trace") != 0)
+    return 8;
+  zzplay_options_init(&options, ZZPLAY_LAUNCH_WORKBENCH);
+  if (!zzplay_options_apply_tooltype(&options, "TRACE")) return 9;
+  if (!options.trace_path ||
+      strcmp(options.trace_path, "T:zzplay.trace") != 0)
+    return 10;
   return 0;
 }
 
@@ -256,6 +299,8 @@ int main(void)
   if (rc != 0) { printf("benchmark %d\n", rc); return 120 + rc; }
   rc = test_path_supplied_late();
   if (rc != 0) { printf("late-path %d\n", rc); return 150 + rc; }
+  rc = test_trace_option();
+  if (rc != 0) { printf("trace %d\n", rc); return 180 + rc; }
   printf("zzplay_options_test: all checks passed\n");
   return 0;
 }

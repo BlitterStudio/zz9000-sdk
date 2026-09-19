@@ -51,6 +51,7 @@
  * a pause on every read. ~16 KB keeps a read under one frame period even
  * at ~2 MB/s and removes the staging copy entirely. */
 #define ZZPLAY_READ_CHUNK_BYTES (16U * 1024U)
+#define ZZPLAY_FEED_ROUNDS_PER_PASS 4U
 #define ZZPLAY_PCM_BYTES (128U * 1024U)
 #define ZZPLAY_Z2_INPUT_BYTES (24U * 1024U)
 #define ZZPLAY_Z2_PCM_BYTES (32U * 1024U)
@@ -108,6 +109,19 @@ struct ZZPlayRuntime {
   uint32_t completed_loops;
   uint64_t audio_origin_pts;
   uint64_t final_audio_frames;
+  /* Per-frame playback trace (diagnostics; --trace). */
+  FILE *trace;
+  TimeVal_Type trace_started;
+  TimeVal_Type trace_last_frame;
+  uint64_t trace_video_pts;
+  uint32_t trace_accepted;
+  uint32_t trace_need_input;
+  uint32_t trace_write_busy;
+  uint32_t trace_decode_busy;
+  uint32_t trace_reads;
+  uint32_t trace_read_max_us;
+  uint32_t trace_underruns;
+  char trace_decision;
   ZZ9KMediaSessionAudioResult audio_result;
   ZZPlaySyncPolicy sync_policy;
   ZZPlayAudioBackend audio_backend;
@@ -268,12 +282,15 @@ static void zzplay_usage(FILE *stream)
           "  --verbose     force progress output even from Workbench\n"
           "  --audio=...   select MPEG/MP3 audio output "
           "(MP3 AUTO tries MHI, then accelerated decode + AHI)\n"
+          "  --trace[=p]   log per-frame timing diagnostics "
+          "(default T:zzplay.trace)\n"
           "\n"
           "Workbench: drop a file on the zzplay icon, or start zzplay to be\n"
           "asked for one. ToolTypes FPS, BENCHMARK, LOOP[=N], FULLSCREEN,\n"
-          "QUIET, VERBOSE and AUDIO=<backend> match the options above.\n"
-          "A Workbench launch is quiet by default, because printing there\n"
-          "makes AmigaDOS open an output window that never closes.\n",
+          "QUIET, VERBOSE, TRACE[=PATH] and AUDIO=<backend> match the\n"
+          "options above. A Workbench launch is quiet by default, because\n"
+          "printing there makes AmigaDOS open an output window that never\n"
+          "closes.\n",
           zzplay_version + 6);
 }
 
@@ -1321,6 +1338,84 @@ static uint32_t zzplay_audio_underruns(
              : runtime->ahi.clock.underruns;
 }
 
+/* Milliseconds since the trace file was opened. */
+static uint32_t zzplay_trace_ms(struct ZZPlayRuntime *runtime)
+{
+  TimeVal_Type now;
+
+  GetSysTime(&now);
+  return zzplay_elapsed_us(&runtime->trace_started, &now) / 1000U;
+}
+
+static void zzplay_trace_event(struct ZZPlayRuntime *runtime,
+                               const char *format, ...)
+{
+  va_list args;
+
+  if (!runtime->trace) {
+    return;
+  }
+  fprintf(runtime->trace, "S %lu ",
+          (unsigned long)zzplay_trace_ms(runtime));
+  va_start(args, format);
+  vfprintf(runtime->trace, format, args);
+  va_end(args);
+  fputc('\n', runtime->trace);
+}
+
+/* One line per presented or discarded frame. The counters (acc, ni, wb,
+ * db, rd, rmax) cover everything since the previous F line, so a stall
+ * shows up as a large gap with either a large dec (decode-bound), a large
+ * ni/rd/rmax with small dec (input-bound), or growing und/q (audio-bound)
+ * no matter which branch of the loop caused it. */
+static void zzplay_trace_frame(struct ZZPlayRuntime *runtime,
+                               uint32_t decode_us)
+{
+  TimeVal_Type now;
+  uint64_t master_pts = ZZ9K_MEDIA_NO_PTS;
+  uint64_t gap_us;
+
+  if (!runtime->trace) {
+    return;
+  }
+  GetSysTime(&now);
+  gap_us = zzplay_elapsed_us(&runtime->trace_last_frame, &now);
+  runtime->trace_last_frame = now;
+  if (runtime->audio_started) {
+    master_pts = zzplay_audio_master_pts(runtime);
+  }
+  fprintf(runtime->trace,
+          "F %lu t=%lu v=%ld m=%ld dr=%ld d=%c dec=%lu gap=%lu "
+          "acc=%lu ni=%lu wb=%lu db=%lu rd=%lu rmax=%lu q=%lu "
+          "und=%lu\n",
+          (unsigned long)runtime->frames,
+          (unsigned long)zzplay_trace_ms(runtime),
+          runtime->trace_video_pts == ZZ9K_MEDIA_NO_PTS
+              ? -1L
+              : (long)(runtime->trace_video_pts / 90U),
+          master_pts == ZZ9K_MEDIA_NO_PTS
+              ? -1L
+              : (long)(master_pts / 90U),
+          (long)(runtime->stats.core.current_drift_pts / 90),
+          runtime->trace_decision,
+          (unsigned long)decode_us,
+          (unsigned long)gap_us,
+          (unsigned long)runtime->trace_accepted,
+          (unsigned long)runtime->trace_need_input,
+          (unsigned long)runtime->trace_write_busy,
+          (unsigned long)runtime->trace_decode_busy,
+          (unsigned long)runtime->trace_reads,
+          (unsigned long)runtime->trace_read_max_us,
+          (unsigned long)zzplay_audio_queued_frames(runtime),
+          (unsigned long)runtime->trace_underruns);
+  runtime->trace_accepted = 0U;
+  runtime->trace_need_input = 0U;
+  runtime->trace_write_busy = 0U;
+  runtime->trace_decode_busy = 0U;
+  runtime->trace_reads = 0U;
+  runtime->trace_read_max_us = 0U;
+}
+
 static int zzplay_audio_fallback_to_ahi(
     struct ZZPlayRuntime *runtime, int ax_status)
 {
@@ -1621,6 +1716,7 @@ static int zzplay_retire_held_frame(
         decision, zzplay_audio_queued_frames(runtime),
         zzplay_audio_low_water_frames(runtime));
     if (decision == ZZPLAY_SYNC_HOLD) {
+      runtime->trace_decision = 'H';
       zzplay_stats_record_sync(
           &runtime->stats.core, decision, drift);
       zzplay_wait_us(
@@ -1630,6 +1726,7 @@ static int zzplay_retire_held_frame(
       return ZZ9K_STATUS_OK;
     }
   } else if (!runtime->options.uncapped) {
+    runtime->trace_decision = 'N';
     zzplay_wait_us(
         &runtime->timer,
         zzplay_pacing_wait_us(
@@ -1655,6 +1752,8 @@ static int zzplay_retire_held_frame(
         runtime, &started, ZZPLAY_PROFILE_SDK_RETIRE);
   }
   if (status == ZZ9K_STATUS_OK) {
+    runtime->trace_decision =
+        decision == ZZPLAY_SYNC_DISCARD ? 'D' : 'P';
     zzplay_stats_record_sync(
         &runtime->stats.core, decision, drift);
   }
@@ -1998,6 +2097,127 @@ static int zzplay_restart_session(struct ZZPlayRuntime *runtime,
   return zzplay_begin_session(runtime);
 }
 
+/* One feed round: a 16 KB file read into the card-visible input buffer
+ * plus the matching WRITE, or the continuation/EOF bookkeeping when the
+ * previous round left work. Split out of the main loop so a pass can top
+ * the card's input ring up while the loop is between frames; one chunk
+ * per frame pass capped the sustained feed at ~400 KB/s (16 KB x 25 fps),
+ * which starved decode whenever the stream's local bitrate exceeded it.
+ * The m68k is the present clock, so rounds stay bounded and reads stay
+ * sub-frame (ZZPLAY_READ_CHUNK_BYTES). */
+typedef enum ZZPlayFeedResult {
+  ZZPLAY_FEED_MORE = 0,        /* chunk fully accepted; ring may take more */
+  ZZPLAY_FEED_BACKPRESSURE,    /* ring full or almost full (partial accept) */
+  ZZPLAY_FEED_DONE,            /* nothing left to feed (EOF sent) */
+  ZZPLAY_FEED_ERROR            /* I/O or protocol failure; runtime failed */
+} ZZPlayFeedResult;
+
+static ZZPlayFeedResult zzplay_feed_round(
+    struct ZZPlayRuntime *runtime, ZZPlayTransport *transport,
+    ZZ9KMediaSessionMainResult *result)
+{
+  ZZ9KMediaSessionWriteDesc write;
+  int status;
+
+  if (transport->pending_length == 0U && !transport->eof) {
+    TimeVal_Type started;
+    TimeVal_Type read_started;
+    TimeVal_Type read_ended;
+    size_t read_capacity = runtime->input.length;
+    size_t got;
+
+    if (read_capacity > ZZPLAY_READ_CHUNK_BYTES) {
+      read_capacity = ZZPLAY_READ_CHUNK_BYTES;
+    }
+    /* Read straight into the card-visible input buffer: the previous
+     * chunk was fully accepted (pending is empty), so offset zero is
+     * free. The write op below orders these stores to the card before
+     * the firmware can read them, exactly as the old staging copy
+     * did. */
+    zzplay_profile_begin(runtime, &started);
+    GetSysTime(&read_started);
+    got = fread((void *)runtime->input.data, 1U,
+                read_capacity, runtime->file);
+    GetSysTime(&read_ended);
+    zzplay_profile_end(
+        runtime, &started, ZZPLAY_PROFILE_FILE_READ);
+    if (runtime->trace) {
+      uint32_t read_us =
+          zzplay_elapsed_us(&read_started, &read_ended);
+
+      runtime->trace_reads++;
+      if (read_us > runtime->trace_read_max_us) {
+        runtime->trace_read_max_us = read_us;
+      }
+    }
+    if (ferror(runtime->file)) {
+      zzplay_error(runtime, "zzplay: input read failed\n");
+      zzplay_fail(runtime, ZZPLAY_FAILURE_IO, ZZ9K_STATUS_IO_ERROR);
+      return ZZPLAY_FEED_ERROR;
+    }
+    zzplay_transport_set_chunk(
+        transport, (uint32_t)got, got < read_capacity);
+  }
+
+  if (transport->pending_length == 0U &&
+      !(transport->eof && !transport->eof_sent)) {
+    return ZZPLAY_FEED_DONE;
+  }
+  memset(&write, 0, sizeof(write));
+  write.session = runtime->session;
+  write.src_handle = runtime->input.handle;
+  write.src_offset = transport->pending_offset;
+  write.src_length = transport->pending_length;
+  write.flags = zzplay_transport_write_flags(transport);
+  {
+    TimeVal_Type started;
+
+    zzplay_profile_begin(runtime, &started);
+    status = zz9k_media_session_write(runtime->ctx, &write, result);
+    zzplay_profile_end(
+        runtime, &started, ZZPLAY_PROFILE_SDK_WRITE);
+  }
+  if (runtime->audio_enabled) {
+    runtime->audio_refresh_needed = 1U;
+  }
+  if (runtime->trace) {
+    if (status == ZZ9K_STATUS_BUSY) {
+      runtime->trace_write_busy++;
+    } else {
+      runtime->trace_accepted += result->bytes_written;
+    }
+  }
+  if (status != ZZ9K_STATUS_OK && status != ZZ9K_STATUS_BUSY) {
+    zzplay_error(runtime, "zzplay: stream write failed: %s\n",
+                 zz9k_status_name(status));
+    zzplay_fail(runtime, ZZPLAY_FAILURE_IO, status);
+    return ZZPLAY_FEED_ERROR;
+  }
+  if (status == ZZ9K_STATUS_BUSY) {
+    return ZZPLAY_FEED_BACKPRESSURE;
+  }
+  if (write.src_length != 0U) {
+    if (!zzplay_transport_advance(
+            transport, result->bytes_accepted)) {
+      zzplay_error(runtime,
+                   "zzplay: firmware reported invalid input "
+                   "progress\n");
+      zzplay_fail(runtime, ZZPLAY_FAILURE_PROTOCOL,
+                  ZZ9K_STATUS_INTERNAL_ERROR);
+      return ZZPLAY_FEED_ERROR;
+    }
+    if (transport->pending_length != 0U) {
+      return ZZPLAY_FEED_BACKPRESSURE;
+    }
+    if (transport->eof) {
+      return ZZPLAY_FEED_DONE; /* short read fully staged; EOF next */
+    }
+    return ZZPLAY_FEED_MORE;
+  }
+  transport->eof_sent = 1;
+  return ZZPLAY_FEED_DONE;
+}
+
 int main(int argc, char **argv)
 {
   struct ZZPlayRuntime runtime;
@@ -2013,7 +2233,6 @@ int main(int argc, char **argv)
   ZZ9KCaps caps;
   ZZ9KApertureLayout aperture;
   ZZ9KServiceInfo service;
-  ZZ9KMediaSessionWriteDesc write;
   ZZ9KMediaSessionMainResult result;
   ZZPlayBackendDecision audio_decision;
   uint32_t frame_period_us;
@@ -2058,6 +2277,23 @@ int main(int argc, char **argv)
   }
 
   zzplay_set_quiet(runtime.options.quiet);
+
+  if (runtime.options.trace_path) {
+    runtime.trace = fopen(runtime.options.trace_path, "w");
+    if (runtime.trace) {
+      GetSysTime(&runtime.trace_started);
+      runtime.trace_last_frame = runtime.trace_started;
+      fprintf(runtime.trace,
+              "# zzplay trace v1: F frame t=ms v=videoMs m=masterMs "
+              "dr=driftMs d=decision(P/H/D/N) dec=decodeUs gap=us "
+              "acc=inputBytesSinceLastF ni=needInputPolls "
+              "wb=writeBusy db=decodeBusy rd=fileReads "
+              "rmax=maxReadUs q=audioQueuedFrames und=underruns\n");
+    } else {
+      zzplay_info("zzplay: cannot open trace file %s\n",
+                  runtime.options.trace_path);
+    }
+  }
 
   runtime.file = fopen(runtime.options.path, "rb");
   if (!runtime.file) {
@@ -2393,6 +2629,21 @@ playback_session:
     }
     runtime.audio_refresh_needed = 0U;
 
+    if (runtime.trace) {
+      uint32_t underruns = zzplay_audio_underruns(&runtime);
+
+      if (underruns != runtime.trace_underruns) {
+        if (underruns > runtime.trace_underruns) {
+          zzplay_trace_event(&runtime, "underrun +%lu (total %lu)",
+                             (unsigned long)(underruns -
+                                             runtime.trace_underruns),
+                             (unsigned long)underruns);
+        }
+        /* A smaller value means the session restarted; adopt silently. */
+        runtime.trace_underruns = underruns;
+      }
+    }
+
     if (runtime.frame_held) {
       int retired;
 
@@ -2420,6 +2671,7 @@ playback_session:
         if (runtime.options.show_fps) {
           zzplay_stats_frame(&runtime.stats, held_decode_us);
         }
+        zzplay_trace_frame(&runtime, held_decode_us);
         /* One mailbox round trip roughly twice a second, plus an immediate
          * recheck after any geometry change. */
         if (runtime.present_recheck || !runtime.present_known ||
@@ -2435,76 +2687,21 @@ playback_session:
       break;
     }
 
-    if (transport.pending_length == 0U && !transport.eof) {
-      TimeVal_Type started;
-      size_t read_capacity = runtime.input.length;
-      size_t got;
+    {
+      uint32_t feed_rounds = 0U;
 
-      if (read_capacity > ZZPLAY_READ_CHUNK_BYTES) {
-        read_capacity = ZZPLAY_READ_CHUNK_BYTES;
-      }
-      /* Read straight into the card-visible input buffer: the previous
-       * chunk was fully accepted (pending is empty), so offset zero is
-       * free. The write op below orders these stores to the card before
-       * the firmware can read them, exactly as the old staging copy
-       * did. */
-      zzplay_profile_begin(&runtime, &started);
-      got = fread((void *)runtime.input.data, 1U,
-                  read_capacity, runtime.file);
-      zzplay_profile_end(
-          &runtime, &started, ZZPLAY_PROFILE_FILE_READ);
+      for (;;) {
+        const ZZPlayFeedResult feed = zzplay_feed_round(
+            &runtime, &transport, &result);
 
-      if (ferror(runtime.file)) {
-        zzplay_error(&runtime, "zzplay: input read failed\n");
-        zzplay_fail(&runtime, ZZPLAY_FAILURE_IO, ZZ9K_STATUS_IO_ERROR);
-        break;
-      }
-      zzplay_transport_set_chunk(
-          &transport, (uint32_t)got, got < read_capacity);
-    }
-
-    if (transport.pending_length != 0U ||
-        (transport.eof && !transport.eof_sent)) {
-      memset(&write, 0, sizeof(write));
-      write.session = runtime.session;
-      write.src_handle = runtime.input.handle;
-      write.src_offset = transport.pending_offset;
-      write.src_length = transport.pending_length;
-      write.flags = zzplay_transport_write_flags(&transport);
-      {
-        TimeVal_Type started;
-
-        zzplay_profile_begin(&runtime, &started);
-        cleanup_status = zz9k_media_session_write(
-            runtime.ctx, &write, &result);
-        zzplay_profile_end(
-            &runtime, &started, ZZPLAY_PROFILE_SDK_WRITE);
-      }
-      if (runtime.audio_enabled) {
-        runtime.audio_refresh_needed = 1U;
-      }
-      if (cleanup_status != ZZ9K_STATUS_OK &&
-          cleanup_status != ZZ9K_STATUS_BUSY) {
-        zzplay_error(&runtime, "zzplay: stream write failed: %s\n",
-                zz9k_status_name(cleanup_status));
-        zzplay_fail(&runtime, ZZPLAY_FAILURE_IO,
-                    cleanup_status);
-        break;
-      }
-      if (cleanup_status == ZZ9K_STATUS_OK) {
-        if (write.src_length != 0U) {
-          if (!zzplay_transport_advance(
-                  &transport, result.bytes_accepted)) {
-            zzplay_error(&runtime,
-                    "zzplay: firmware reported invalid input "
-                    "progress\n");
-            zzplay_fail(&runtime, ZZPLAY_FAILURE_PROTOCOL,
-                        ZZ9K_STATUS_INTERNAL_ERROR);
-            break;
-          }
-        } else {
-          transport.eof_sent = 1;
+        if (feed == ZZPLAY_FEED_ERROR) {
+          goto playback_failed;
         }
+        if (feed != ZZPLAY_FEED_MORE ||
+            feed_rounds >= ZZPLAY_FEED_ROUNDS_PER_PASS) {
+          break;
+        }
+        feed_rounds++;
       }
     }
 
@@ -2525,6 +2722,9 @@ playback_session:
       runtime.audio_refresh_needed = 1U;
     }
     if (cleanup_status == ZZ9K_STATUS_BUSY) {
+      if (runtime.trace) {
+        runtime.trace_decode_busy++;
+      }
       zzplay_wait_us(&runtime.timer, ZZPLAY_SYNC_POLL_US);
       continue;
     }
@@ -2551,21 +2751,29 @@ playback_session:
     if (action == ZZPLAY_MEDIA_FRAME_HELD) {
       runtime.frames++;
       runtime.frame_held = 1U;
+      runtime.trace_video_pts = result.video_pts;
       continue;
     }
     if (action == ZZPLAY_MEDIA_DONE) {
       media_done = 1;
       continue;
     }
-    if (action == ZZPLAY_MEDIA_NEED_INPUT &&
-        transport.eof && transport.eof_sent &&
-        transport.pending_length == 0U) {
-      zzplay_error(&runtime, "zzplay: truncated stream at end of input\n");
-      zzplay_fail(&runtime, ZZPLAY_FAILURE_IO,
-                  ZZ9K_STATUS_IO_ERROR);
-      break;
+    if (action == ZZPLAY_MEDIA_NEED_INPUT) {
+      if (runtime.trace) {
+        runtime.trace_need_input++;
+      }
+      if (transport.eof && transport.eof_sent &&
+          transport.pending_length == 0U) {
+        zzplay_error(&runtime,
+                     "zzplay: truncated stream at end of input\n");
+        zzplay_fail(&runtime, ZZPLAY_FAILURE_IO,
+                    ZZ9K_STATUS_IO_ERROR);
+        break;
+      }
     }
   }
+
+playback_failed:
 
   if (runtime.core.state == ZZPLAY_STATE_PLAYING && media_done) {
     (void)zzplay_core_begin_drain(&runtime.core);
@@ -2596,6 +2804,14 @@ playback_session:
         media_done = 0;
         held_decode_us = 0U;
         memset(&result, 0, sizeof(result));
+        runtime.trace_accepted = 0U;
+        runtime.trace_need_input = 0U;
+        runtime.trace_write_busy = 0U;
+        runtime.trace_decode_busy = 0U;
+        runtime.trace_reads = 0U;
+        runtime.trace_read_max_us = 0U;
+        runtime.trace_decision = 'N';
+        zzplay_trace_event(&runtime, "loop restart");
         frame_period_us =
             zzplay_frame_period_us(info.frame_rate_milli);
         zzplay_sync_policy_init(
@@ -2620,6 +2836,10 @@ playback_session:
   }
 
 cleanup:
+  if (runtime.trace) {
+    fclose(runtime.trace);
+    runtime.trace = 0;
+  }
   if (runtime.options.show_fps) {
     zzplay_stats_stop(&runtime.stats);
     /* Must run before resource release closes the media session. */

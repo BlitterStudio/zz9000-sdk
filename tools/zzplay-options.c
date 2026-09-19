@@ -129,6 +129,13 @@ int zzplay_options_apply(ZZPlayOptions *options, ZZPlayOptionKey key,
     options->quiet = 0;
     options->quiet_explicit = 1;
     return 1;
+  case ZZPLAY_OPT_TRACE:
+    if (!value || !*value) {
+      options->trace_path = "T:zzplay.trace";
+      return 1;
+    }
+    options->trace_path = value;
+    return 1;
   case ZZPLAY_OPT_LOOP:
     if (!value) {
       options->loop_mode = ZZPLAY_LOOP_FOREVER;
@@ -181,6 +188,15 @@ ZZPlayOptionKey zzplay_options_key_from_cli(const char *token,
   if (strcmp(token, "help") == 0) {
     return ZZPLAY_OPT_HELP;
   }
+  if (strcmp(token, "trace") == 0) {
+    return ZZPLAY_OPT_TRACE;
+  }
+  if (strncmp(token, "trace=", 6U) == 0) {
+    if (value) {
+      *value = token + 6;
+    }
+    return ZZPLAY_OPT_TRACE;
+  }
   if (strcmp(token, "loop") == 0) {
     return ZZPLAY_OPT_LOOP;
   }
@@ -230,6 +246,7 @@ ZZPlayOptionKey zzplay_options_key_from_tooltype(const char *tooltype,
       { "FULLSCREEN", ZZPLAY_OPT_FULLSCREEN },
       { "QUIET", ZZPLAY_OPT_QUIET },
       { "VERBOSE", ZZPLAY_OPT_VERBOSE },
+      { "TRACE", ZZPLAY_OPT_TRACE },
       { "LOOP", ZZPLAY_OPT_LOOP },
       { "AUDIO", ZZPLAY_OPT_AUDIO }
     };

@@ -42,6 +42,7 @@ typedef enum ZZPlayOptionKey {
   ZZPLAY_OPT_FULLSCREEN,
   ZZPLAY_OPT_QUIET,
   ZZPLAY_OPT_VERBOSE,
+  ZZPLAY_OPT_TRACE,
   ZZPLAY_OPT_HELP
 } ZZPlayOptionKey;
 
@@ -61,6 +62,8 @@ typedef struct ZZPlayOptions {
   /* Set when the user named a backend. Only an unspecified backend may be
    * silently replaced by --benchmark, and only AUTO may fall back (R4). */
   int audio_explicit;
+  /* Per-frame playback trace destination (diagnostics); NULL when off. */
+  const char *trace_path;
   ZZPlayLaunchSource launch;
 } ZZPlayOptions;
 
