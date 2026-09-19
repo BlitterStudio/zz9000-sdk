@@ -288,6 +288,7 @@ typedef struct ZZ9KArchiveTarStream {
   uint32_t count;
   int pending_size_valid;
   int pending_name_skip;
+  int pending_name_overflow;
   int ok;
   int done;
 } ZZ9KArchiveTarStream;
@@ -5160,21 +5161,35 @@ static int zz9k_archive_write_file_range_entry(
     printf("file range seek failed: %s\n", input_path);
     goto out;
   }
-  /* Verified writes go to a sibling temporary and replace the destination
-     only after the CRC passes: a corrupt member under --overwrite must
-     never destroy the file that was already there (the pre-inline
-     behavior verified before opening, at the cost of a second read). */
+  /* Verified writes go to a collision-safe sibling temporary and
+     replace the destination only after the CRC passes: a corrupt member
+     under --overwrite must never destroy the file that was already
+     there (the pre-inline behavior verified before opening, at the cost
+     of a second read). The temporary name probes for a free sibling so
+     an unrelated user file (or another member named like the suffix)
+     is never truncated, and the replacement renames the old
+     destination to a backup first so a failed rename can roll back. */
   if (verify_crc) {
     size_t path_len = strlen(path);
+    uint32_t attempt;
 
-    tmp_path = (char *)malloc(path_len + sizeof(".zz9k-tmp"));
+    tmp_path = (char *)malloc(path_len + sizeof(".zz9k-t16"));
     if (!tmp_path) {
       printf("path allocation failed\n");
       goto out;
     }
-    memcpy(tmp_path, path, path_len);
-    memcpy(tmp_path + path_len, ".zz9k-tmp", sizeof(".zz9k-tmp"));
-    output = fopen(tmp_path, "wb");
+    output = 0;
+    for (attempt = 0U; attempt < 16U && !output; attempt++) {
+      if (attempt == 0U) {
+        sprintf(tmp_path, "%s.zz9k-tmp", path);
+      } else {
+        sprintf(tmp_path, "%s.zz9k-t%u", path, (unsigned int)attempt);
+      }
+      if (zz9k_archive_path_exists(tmp_path)) {
+        continue; /* never truncate an existing sibling */
+      }
+      output = fopen(tmp_path, "wb");
+    }
   } else {
     output = fopen(path, "wb");
   }
@@ -5218,8 +5233,11 @@ static int zz9k_archive_write_file_range_entry(
     goto out;
   }
   if (tmp_path) {
-    /* Verified clean: swap the temporary in, replacing any destination
-     left by --overwrite. */
+    /* Verified clean: swap the temporary in. The old destination moves
+       aside first so a failed rename restores it instead of leaving
+       nothing. */
+    char *backup = 0;
+
     if (fclose(output) != 0) {
       output = 0;
       remove(tmp_path);
@@ -5227,11 +5245,36 @@ static int zz9k_archive_write_file_range_entry(
       goto out;
     }
     output = 0;
-    remove(path);
+    if (zz9k_archive_path_exists(path)) {
+      backup = (char *)malloc(strlen(path) + sizeof(".zz9k-old"));
+      if (!backup) {
+        remove(tmp_path);
+        printf("path allocation failed\n");
+        goto out;
+      }
+      sprintf(backup, "%s.zz9k-old", path);
+      remove(backup); /* stale backup from an interrupted run */
+      if (rename(path, backup) != 0) {
+        free(backup);
+        remove(tmp_path);
+        printf("file range rename failed: %s\n", output_entry.name);
+        goto out;
+      }
+    }
     if (rename(tmp_path, path) != 0) {
       remove(tmp_path);
+      if (backup) {
+        if (rename(backup, path) != 0) {
+          printf("file range restore failed: %s\n", output_entry.name);
+        }
+        free(backup);
+      }
       printf("file range rename failed: %s\n", output_entry.name);
       goto out;
+    }
+    if (backup) {
+      remove(backup);
+      free(backup);
     }
   }
 
@@ -6025,7 +6068,11 @@ static int zz9k_archive_tar_stream_consume(ZZ9KArchiveTarStream *stream,
         uint32_t copy_len = part;
 
         if (used + copy_len >= sizeof(stream->pending_name)) {
+          /* The in-memory walker rejects names this long outright; the
+             streaming path must not silently keep a truncated prefix
+             that could collide with another member's output path. */
           copy_len = (uint32_t)sizeof(stream->pending_name) - 1U - used;
+          stream->pending_name_overflow = 1;
         }
         if (copy_len != 0U) {
           memcpy(stream->pending_name + used, data + pos, copy_len);
@@ -6052,6 +6099,11 @@ static int zz9k_archive_tar_stream_consume(ZZ9KArchiveTarStream *stream,
           (stream->entry.flags & ZZ9K_ARCHIVE_TAR_FLAG_GNU_LONG_NAME) != 0U) {
         int skip = 0;
 
+        if (stream->pending_name_overflow) {
+          printf("tar long name too long: %s...\n", stream->pending_name);
+          stream->ok = 0;
+          return 0;
+        }
         if (!zz9k_archive_tar_normalize_name(
                 stream->pending_name, &skip)) {
           stream->ok = 0;
