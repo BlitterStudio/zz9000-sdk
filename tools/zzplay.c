@@ -385,11 +385,14 @@ static void zzplay_stats_finish(const struct ZZPlayStats *stats)
   for (category = 0; category < ZZPLAY_PROFILE_COUNT; category++) {
     const ZZPlayProfileMetric *metric = &stats->core.profile[category];
 
-    zzplay_info("zzplay: profile %-14s %lu calls, %llu ms total, "
+    /* u64 -> u32 ms casts: libnix's printf predates the %ll length
+     * modifier, so every 64-bit value is narrowed after the math
+     * instead (totals fit 32 bits for any realistic session). */
+    zzplay_info("zzplay: profile %-14s %lu calls, %lu ms total, "
            "%lu us average\n",
            profile_name[category],
            (unsigned long)metric->calls,
-           (unsigned long long)(metric->elapsed_us / 1000U),
+           (unsigned long)(metric->elapsed_us / 1000U),
            (unsigned long)zzplay_stats_profile_average_us(
                &stats->core, (ZZPlayProfileCategory)category));
   }
@@ -397,11 +400,11 @@ static void zzplay_stats_finish(const struct ZZPlayStats *stats)
   other_us = stats->profile_wall_us > accounted_us
                  ? stats->profile_wall_us - accounted_us
                  : 0U;
-  zzplay_info("zzplay: profile wall %lu ms, accounted %llu ms, "
-         "other %llu ms\n",
+  zzplay_info("zzplay: profile wall %lu ms, accounted %lu ms, "
+         "other %lu ms\n",
          (unsigned long)(stats->profile_wall_us / 1000U),
-         (unsigned long long)(accounted_us / 1000U),
-         (unsigned long long)(other_us / 1000U));
+         (unsigned long)(accounted_us / 1000U),
+         (unsigned long)(other_us / 1000U));
 }
 
 static int zzplay_timer_open(struct ZZPlayTimer *timer)
@@ -2883,8 +2886,11 @@ cleanup:
            (unsigned long)runtime.stats.core.presented_frames,
            (unsigned long)runtime.stats.core.discarded_frames);
     if (runtime.audio_enabled) {
-      zzplay_info(", %llu audio frames played, %lu underruns",
-             (unsigned long long)runtime.final_audio_frames,
+      zzplay_info(", %lu audio frames played, %lu underruns",
+             /* saturating cast: 2^31 frames is ~13.5 h at 44.1 kHz */
+             (unsigned long)(runtime.final_audio_frames > 0x7fffffffULL
+                                 ? 0x7fffffffULL
+                                 : runtime.final_audio_frames),
              (unsigned long)runtime.final_underruns);
     }
     if (runtime.completed_loops != 0U) {
