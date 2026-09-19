@@ -4860,6 +4860,174 @@ out:
   return rc;
 }
 
+/*
+ * The member's compressed extent must be validated against the ARCHIVE
+ * length, never against the header window: a window smaller than the
+ * member body is the file walker's normal operating state, so a window
+ * bound here would force the walker to grow its window to the size of
+ * the member -- the whole-archive load this PR removes (finding: member
+ * bodies must stay out of the header window).
+ */
+static int test_lha_parse_header_member_extent_uses_archive_length(void)
+{
+  uint8_t lha[128];
+  ZZ9KArchiveEntry entry;
+  uint32_t lha_len;
+  uint32_t header_bytes = 0U;
+  uint32_t header_size;
+  uint32_t i;
+  uint8_t checksum = 0U;
+
+  if (!make_lha_lh0(lha, &lha_len)) return 1;
+  /* Grow the member far beyond the window (and the fixture): stored
+     member, so compressed == uncompressed. */
+  header_size = lha[0];
+  put_le32(lha + 7U, 50000U);
+  put_le32(lha + 11U, 50000U);
+  for (i = 2U; i < 2U + header_size; i++) {
+    checksum = (uint8_t)(checksum + lha[i]);
+  }
+  lha[1] = checksum;
+
+  memset(&entry, 0, sizeof(entry));
+  if (!zz9k_archive_lha_parse_header(lha, lha_len, 60000U, &entry,
+                                     &header_bytes)) {
+    return 2; /* window < member body must still parse */
+  }
+  if (entry.compressed_size != 50000U) return 3;
+  if (entry.uncompressed_size != 50000U) return 4;
+  if (header_bytes == 0U || header_bytes >= lha_len) return 5;
+
+  /* The extent check still rejects a member that overruns the archive. */
+  if (zz9k_archive_lha_parse_header(lha, lha_len, header_bytes + 49999U,
+                                    &entry, &header_bytes)) {
+    return 6;
+  }
+  return 0;
+}
+
+/*
+ * File-backed extraction must refuse a member whose output path is the
+ * archive itself: outputs are opened with "wb", which would truncate the
+ * source mid-read and destroy it (finding: extraction must not truncate
+ * its source archive). With --overwrite the refusal must happen before
+ * any byte of the archive changes, and non-colliding members in the same
+ * directory must still extract.
+ */
+static int test_lha_file_extract_refuses_archive_collision(void)
+{
+  const char *name = "archive_tool_collide.lha";
+  const char *path = "archive_tool_collide.lha";
+  const char *control_path = "dir/hello.txt";
+  uint8_t lha[128];
+  uint8_t control[128];
+  uint8_t readback[128];
+  ZZ9KServiceInfo service;
+  ZZ9KContext *ctx = 0;
+  FILE *file = 0;
+  uint32_t lha_len;
+  uint32_t control_len;
+  uint32_t name_len = (uint32_t)strlen(name);
+  uint32_t data_len = 5U;
+  uint32_t header_size = 25U + name_len;
+  uint32_t pos = 0U;
+  uint32_t i;
+  uint8_t checksum = 0U;
+  int attempted = 0;
+  int codec_ready = 0;
+  int rc = 0;
+
+  /* Self-named stored member: "-lh0-", name == archive filename. */
+  memset(lha, 0, sizeof(lha));
+  lha[pos++] = (uint8_t)header_size;
+  lha[pos++] = 0U;
+  memcpy(lha + pos, "-lh0-", 5U); pos += 5U;
+  put_le32(lha + pos, data_len); pos += 4U;
+  put_le32(lha + pos, data_len); pos += 4U;
+  put_le32(lha + pos, 0U); pos += 4U;
+  lha[pos++] = 0x20U;
+  lha[pos++] = 1U;
+  lha[pos++] = (uint8_t)name_len;
+  memcpy(lha + pos, name, name_len); pos += name_len;
+  put_le16(lha + pos, 0U); pos += 2U;
+  lha[pos++] = 'A';
+  put_le16(lha + pos, 0U); pos += 2U;
+  for (i = 2U; i < 2U + header_size; i++) {
+    checksum = (uint8_t)(checksum + lha[i]);
+  }
+  lha[1] = checksum;
+  memcpy(lha + pos, "hello", data_len); pos += data_len;
+  lha[pos++] = 0U;
+  lha_len = pos;
+
+  if (!write_test_file(path, lha, lha_len)) return 1;
+  memset(&service, 0, sizeof(service));
+  zz9k_archive_overwrite_outputs = 1;
+
+  /* Extracting the self-named member into the archive's directory with
+     --overwrite must refuse without touching the archive. */
+  if (zz9k_archive_handle_lha_file(&ctx, &service, &codec_ready, path,
+                                   lha_len, "x", ".", &attempted) ||
+      !attempted) {
+    rc = 2;
+    goto out;
+  }
+  file = fopen(path, "rb");
+  if (!file) {
+    rc = 3;
+    goto out;
+  }
+  if (fread(readback, 1U, lha_len, file) != lha_len ||
+      memcmp(readback, lha, lha_len) != 0) {
+    fclose(file);
+    file = 0;
+    rc = 4; /* archive was modified despite the refusal */
+    goto out;
+  }
+  fclose(file);
+  file = 0;
+
+  /* Control: a non-colliding member extracts into "." fine. */
+  if (!make_lha_lh0(control, &control_len)) {
+    rc = 5;
+    goto out;
+  }
+  remove(path);
+  if (!write_test_file(path, control, control_len)) {
+    rc = 6;
+    goto out;
+  }
+  if (!zz9k_archive_handle_lha_file(&ctx, &service, &codec_ready, path,
+                                    control_len, "x", ".", &attempted) ||
+      !attempted) {
+    rc = 7;
+    goto out;
+  }
+  file = fopen(control_path, "rb");
+  if (!file) {
+    rc = 8;
+    goto out;
+  }
+  if (fread(readback, 1U, 5U, file) != 5U || memcmp(readback, "hello", 5U)) {
+    fclose(file);
+    file = 0;
+    rc = 9;
+    goto out;
+  }
+  fclose(file);
+  file = 0;
+  remove(control_path);
+  remove("dir");
+
+out:
+  zz9k_archive_overwrite_outputs = 0;
+  if (file) fclose(file);
+  remove(control_path);
+  remove("dir");
+  remove(path);
+  return rc;
+}
+
 static int test_lha_level1_lhd_and_lh0_extract(void)
 {
   const char *output_dir = "archive_tool_lha_l1_out";
@@ -7121,6 +7289,18 @@ int main(void)
     printf("test_lha_handle_file_stored_and_fallback failed: %d\n", rc);
     return 450 + rc;
   }
+  rc = test_lha_parse_header_member_extent_uses_archive_length();
+  if (rc) {
+    printf("test_lha_parse_header_member_extent_uses_archive_length failed: %d\n",
+           rc);
+    return 460 + rc;
+  }
+  rc = test_lha_file_extract_refuses_archive_collision();
+  if (rc) {
+    printf("test_lha_file_extract_refuses_archive_collision failed: %d\n", rc);
+    return 470 + rc;
+  }
+  rc = test_zip_backslash_names_are_normalized();
   if (rc) {
     printf("test_zip_backslash_names_are_normalized failed: %d\n", rc);
     return 45 + rc;
