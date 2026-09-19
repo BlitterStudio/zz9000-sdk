@@ -7809,6 +7809,150 @@ out:
   return rc;
 }
 
+/*
+ * The tar streaming alias guard must refuse a member whose output path
+ * is the archive itself under --overwrite, before any output is opened,
+ * leaving the archive byte-identical (mirrors the LHA collision test:
+ * only the LHA variant existed).
+ */
+static int test_tar_file_extract_refuses_archive_collision(void)
+{
+  const char *path = "archive_tool_tar_collide.tmp";
+  uint8_t tar[1536];
+  uint8_t readback[1536];
+  uint32_t tar_len;
+  FILE *file = 0;
+  int attempted = 0;
+  int rc = 0;
+
+  /* Self-named member: name == archive filename. */
+  if (!make_tar_single_file(tar, &tar_len, path)) return 1;
+  if (!write_test_file(path, tar, tar_len)) return 2;
+  zz9k_archive_overwrite_outputs = 1;
+
+  if (zz9k_archive_handle_tar_file(path, tar_len, "x", ".", &attempted) ||
+      !attempted) {
+    rc = 3;
+    goto out;
+  }
+  file = fopen(path, "rb");
+  if (!file) {
+    rc = 4;
+    goto out;
+  }
+  if (fread(readback, 1U, tar_len, file) != tar_len ||
+      memcmp(readback, tar, tar_len) != 0) {
+    fclose(file);
+    file = 0;
+    rc = 5; /* archive was modified despite the refusal */
+    goto out;
+  }
+  fclose(file);
+  file = 0;
+
+out:
+  zz9k_archive_overwrite_outputs = 0;
+  if (file) fclose(file);
+  remove(path);
+  return rc;
+}
+
+/*
+ * The ZIP/7z range-copy choke point (zz9k_archive_write_file_range_entry)
+ * must refuse a member whose destination is the archive itself under
+ * --overwrite: without the guard the staged backup-rename dance replaces
+ * the still-open source archive with the member's own bytes.
+ */
+static int test_zip_file_extract_refuses_archive_collision(void)
+{
+  const char *path = "archive_tool_zip_collide.zip";
+  uint8_t zip[512];
+  uint8_t readback[512];
+  uint32_t zip_len;
+  ZZ9KServiceInfo service;
+  ZZ9KContext *ctx = 0;
+  FILE *file = 0;
+  int attempted = 0;
+  int codec_ready = 0;
+  int rc = 0;
+
+  /* Self-named stored member with the correct CRC for "hello". */
+  if (!make_zip_store_named(zip, &zip_len, path, "hello",
+                            0x3610a686UL, 0U)) return 1;
+  if (!write_test_file(path, zip, zip_len)) return 2;
+  memset(&service, 0, sizeof(service));
+  zz9k_archive_overwrite_outputs = 1;
+
+  if (zz9k_archive_handle_zip_file(&ctx, &service, &codec_ready, path,
+                                   zip_len, "x", ".", &attempted) ||
+      !attempted) {
+    rc = 3;
+    goto out;
+  }
+  file = fopen(path, "rb");
+  if (!file) {
+    rc = 4;
+    goto out;
+  }
+  if (fread(readback, 1U, zip_len, file) != zip_len ||
+      memcmp(readback, zip, zip_len) != 0) {
+    fclose(file);
+    file = 0;
+    rc = 5; /* archive was replaced despite the refusal */
+    goto out;
+  }
+  fclose(file);
+  file = 0;
+
+out:
+  zz9k_archive_overwrite_outputs = 0;
+  if (file) fclose(file);
+  remove(path);
+  return rc;
+}
+
+/*
+ * Cancellation is a latch: any CANCELLED mailbox status (an armed Wait
+ * consumed SIGBREAKF_CTRL_C, so CheckSignal checkpoints cannot see the
+ * press) must stop every later checkpoint until zz9k_archive_run resets
+ * it for the next invocation. note_status/cancelled are plain C on the
+ * host, so the semantics are testable here.
+ */
+static int test_cancel_latch_latches_and_run_resets(void)
+{
+  const char *path = "archive_tool_cancel_latch.lha";
+  uint8_t lha[256];
+  uint32_t lha_len;
+
+  if (zz9k_archive_cancelled()) return 1; /* clean slate required */
+  zz9k_archive_note_status(ZZ9K_STATUS_OK);
+  if (zz9k_archive_cancelled()) return 2; /* non-cancel must not latch */
+  zz9k_archive_note_status(ZZ9K_STATUS_TIMEOUT);
+  if (zz9k_archive_cancelled()) return 3;
+  zz9k_archive_note_status(ZZ9K_STATUS_CANCELLED);
+  if (!zz9k_archive_cancelled()) return 4; /* CANCELLED must latch */
+  zz9k_archive_note_status(ZZ9K_STATUS_OK);
+  if (!zz9k_archive_cancelled()) return 5; /* latch is sticky */
+  zz9k_archive_cancel_latched = 0;
+  if (zz9k_archive_cancelled()) return 6; /* per-run reset clears it */
+
+  /* run() resets the latch at entry: a stale latch from a cancelled
+     prior invocation must not abort the next one. */
+  if (!make_lha_lh0(lha, &lha_len)) return 7;
+  if (!write_test_file(path, lha, lha_len)) return 8;
+  zz9k_archive_cancel_latched = 1;
+  if (!zz9k_archive_run("l", path, 0, 0U)) {
+    remove(path);
+    return 9; /* the stale latch aborted a fresh run */
+  }
+  if (zz9k_archive_cancelled()) {
+    remove(path);
+    return 10; /* run must clear the latch */
+  }
+  remove(path);
+  return 0;
+}
+
 static int test_tar_rejects_bad_header_checksum(void)
 {
   uint8_t tar[1536];
@@ -8578,6 +8722,21 @@ int main(void)
   if (rc) {
     printf("test_pair_shrink_retry_gates_on_minimum failed: %d\n", rc);
     return 470 + rc;
+  }
+  rc = test_tar_file_extract_refuses_archive_collision();
+  if (rc) {
+    printf("test_tar_file_extract_refuses_archive_collision failed: %d\n", rc);
+    return 550 + rc;
+  }
+  rc = test_zip_file_extract_refuses_archive_collision();
+  if (rc) {
+    printf("test_zip_file_extract_refuses_archive_collision failed: %d\n", rc);
+    return 560 + rc;
+  }
+  rc = test_cancel_latch_latches_and_run_resets();
+  if (rc) {
+    printf("test_cancel_latch_latches_and_run_resets failed: %d\n", rc);
+    return 570 + rc;
   }
   return 0;
 }

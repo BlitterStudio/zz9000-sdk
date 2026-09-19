@@ -5269,7 +5269,11 @@ static int zz9k_archive_replace_with_staged(const char *tmp_path,
     remove(tmp_path);
     if (backup) {
       if (rename(backup, path) != 0) {
-        printf("output restore failed: %s\n", name);
+        /* Both renames failed (a dropped network volume can do this):
+         the destination is gone and the user's original survives ONLY
+         at the backup path -- say so, or the file looks simply lost. */
+        printf("output restore failed: %s (original kept as %s)\n",
+               name, backup);
       }
       free(backup);
     }
@@ -5277,7 +5281,9 @@ static int zz9k_archive_replace_with_staged(const char *tmp_path,
     return 0;
   }
   if (backup) {
-    remove(backup);
+    if (remove(backup) != 0) {
+      printf("output backup removal failed: %s\n", backup);
+    }
     free(backup);
   }
   return 1;
@@ -5320,6 +5326,21 @@ static int zz9k_archive_write_file_range_entry(
   }
   if (zz9k_archive_path_is_dir(path)) {
     printf("output path is a directory: %s\n", path);
+    goto out;
+  }
+  if (zz9k_archive_overwrite_outputs &&
+      !zz9k_archive_dry_run_outputs &&
+      !zz9k_archive_skip_existing_outputs &&
+      zz9k_archive_paths_same_file(input_path, path)) {
+    /* Same guard as the LHA and tar engines, at the one choke point all
+       file-backed range writes (ZIP store, 7z Copy, LHA LH0) share: a
+       member named like the archive would otherwise run the staged
+       backup-rename dance on the still-open source archive and replace
+       it with the member's own bytes. Only --overwrite can clobber:
+       the other modes refuse or skip existing outputs before any
+       rename. */
+    printf("output path is the archive itself, refusing: %s\n",
+           output_entry.name);
     goto out;
   }
   if (zz9k_archive_skip_existing_outputs && zz9k_archive_path_exists(path)) {
@@ -8864,6 +8885,13 @@ static void zz9k_archive_lha_batch_run_src(ZZ9KContext *ctx,
          per-member path. */
       printf("lha batch decode failed: %s (%d)\n", zz9k_status_name(status),
              status);
+      zz9k_archive_note_status(status);
+      if (zz9k_archive_cancelled()) {
+        /* The armed Wait consumed SIGBREAKF_CTRL_C: without latching it
+           here, the per-member fallback would happily keep decoding on
+           a working board to the end of the archive. */
+        return;
+      }
       break;
     }
     zz9k_lha_diag_chunks++;
@@ -9066,6 +9094,14 @@ static int zz9k_archive_lha_command_loop(ZZ9KContext *ctx,
       printf("%c %10lu %s\n", entry->is_dir ? 'd' : '-',
              (unsigned long)entry->uncompressed_size, entry->name);
       continue;
+    }
+
+    if (zz9k_archive_cancelled()) {
+      /* Same checkpoint as the file walker: once Ctrl-C is latched
+         (batch decode, an armed wait, or a direct press), the run stops
+         -- per-member work must never continue past it. */
+      ok = 0;
+      break;
     }
     if (!zz9k_archive_path_is_safe(entry->name)) {
       printf("unsafe path rejected: %s\n", entry->name);
@@ -9313,6 +9349,7 @@ static int zz9k_archive_handle_lha_file(ZZ9KContext **ctx,
        decode in software, exactly like the in-memory engine's caller. */
     int status = zz9k_open(ctx);
 
+    zz9k_archive_note_status(status);
     if (status == ZZ9K_STATUS_OK) {
       if (zz9k_archive_require_codec_service(*ctx, service)) {
         *codec_ready = 1;
@@ -9323,6 +9360,14 @@ static int zz9k_archive_handle_lha_file(ZZ9KContext **ctx,
       }
     } else {
       *ctx = 0;
+    }
+    if (zz9k_archive_cancelled()) {
+      /* A Ctrl-C consumed by any codec-open round trip (the armed Wait
+         clears SIGBREAKF_CTRL_C, so checkpoints cannot see it) must stop
+         the run -- never silently demote the whole archive to a slow
+         full software decode the user asked to abort. */
+      zz9k_archive_lha_source_close(&src);
+      return 0;
     }
   }
 
@@ -11565,7 +11610,7 @@ static int zz9k_archive_run(const char *command, const char *archive_path,
     return 0;
   }
   format = zz9k_archive_detect_format(probe, probe_length);
-  printf("zz9k-archive build 37d0f70+round6 2026-09-19i\n");
+  printf("zz9k-archive build f82a24e+review1 2026-09-19j\n");
   printf("archive: %s (%s)\n", archive_path, zz9k_archive_format_name(format));
 
   if (format == ZZ9K_ARCHIVE_FORMAT_LZMA_ALONE &&

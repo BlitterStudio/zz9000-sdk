@@ -645,6 +645,7 @@ static int zz9k_await_completion_locked(ZZ9KContext *ctx, uint32_t request_id,
          clears it (no assert will come), a timed-out one sets it. */
       uint32_t drain_start = zz9k_now_ms(ctx);
       uint32_t drain_polls = 0U;
+      int drain_expired = 0;
 
       for (;;) {
         status = zz9k_consume_next_completion_locked(ctx, reply);
@@ -660,18 +661,25 @@ static int zz9k_await_completion_locked(ZZ9KContext *ctx, uint32_t request_id,
           return ZZ9K_STATUS_CANCELLED;
         }
         if (status != ZZ9K_STATUS_BUSY && status != ZZ9K_STATUS_OK) {
-          break; /* transport error: nothing more to drain */
+          break; /* transport error: nothing more to drain, and nothing
+                     on a dead transport will ever assert -- leave
+                     late_irq_expected untouched rather than arming a
+                     15s disarm spin that can never be satisfied */
         }
         if ((uint32_t)(zz9k_now_ms(ctx) - drain_start) >= 2000U ||
             ++drain_polls > 4000000U) {
+          drain_expired = 1;
           break;
         }
         zz9k_idle_between_polls_backoff(28U);
       }
-      /* Drain window expired with the request outstanding: the ARM will
-         post its completion (and assert the IRQ) after we return and
-         the caller frees its buffers -- disarm must watch for that. */
-      ctx->late_irq_expected = 1;
+      /* Only a drain that timed out with the request still outstanding
+         leaves the ARM working after we return: it will post its
+         completion (and assert the IRQ) after the caller frees its
+         buffers -- disarm must watch for that. */
+      if (drain_expired) {
+        ctx->late_irq_expected = 1;
+      }
       return ZZ9K_STATUS_CANCELLED;
 #endif
       return ZZ9K_STATUS_CANCELLED; /* host stub wake: no drain needed */
