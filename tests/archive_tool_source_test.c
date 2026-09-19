@@ -170,7 +170,7 @@ int main(int argc, char **argv)
   ok &= expect_contains(source, "ZZ9KLhaSource");
   ok &= expect_contains(source, "zz9k_archive_lha_batch_run_src");
   ok &= expect_contains(source, "zz9k_archive_lha_command_loop");
-  ok &= expect_contains(source, "zz9k_archive_paths_same_file");
+  ok &= expect_contains(source, "ZZ9K_ARCHIVE_LHA_PARSE_NEEDS_WINDOW");
   ok &= expect_contains(source, "board.zorro_version == 2U");
   ok &= expect_contains(source, "zz9k_archive_lha_join_dir_name");
   ok &= expect_contains(source, "ext_size");

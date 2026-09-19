@@ -1430,19 +1430,27 @@ static int zz9k_archive_lzma_info_from_header(
 
 /* Parses one LHA member header from `hdr`, where `window_len` bytes are
    readable at the member position and `archive_avail` bytes remain in the
-   archive. On success fills *entry_out and *header_bytes.
-   entry_out->data_offset is RELATIVE to hdr: the byte distance from the
-   header start to the compressed data (which is also the header's total
-   length, base plus extensions); walkers add the member position to make
-   it absolute.
+   archive. Returns ZZ9K_ARCHIVE_LHA_PARSE_OK and fills *entry_out and
+   *header_bytes on success. entry_out->data_offset is RELATIVE to hdr:
+   the byte distance from the header start to the compressed data (which
+   is also the header's total length, base plus extensions); walkers add
+   the member position to make it absolute.
 
    Header bytes (base header, extensions, name, CRC) are validated against
    window_len only; the member's compressed-data extent is validated
    against archive_avail, so a caller may hand this function a small
-   prefix window of a huge member -- a short window can only make the
-   header parse fail, never accept, which the file walker uses to grow
-   its window for pathological headers without ever pulling member bodies
-   into it. */
+   prefix window of a huge member without ever pulling member bodies into
+   it. The verdict distinguishes a definitive INVALID (bad checksum,
+   method or size fields -- provable from the bytes already inside the
+   window; the file walker fails immediately without enlarging anything)
+   from NEEDS_WINDOW (the base header or an extension chain extends past
+   the window; the file walker grows its window and retries). A short
+   window can therefore never make the parse accept -- only ask for
+   more. */
+#define ZZ9K_ARCHIVE_LHA_PARSE_INVALID 0
+#define ZZ9K_ARCHIVE_LHA_PARSE_OK 1
+#define ZZ9K_ARCHIVE_LHA_PARSE_NEEDS_WINDOW 2
+
 static int zz9k_archive_lha_parse_header(const uint8_t *hdr,
                                          uint32_t window_len,
                                          uint32_t archive_avail,
@@ -1469,17 +1477,16 @@ static int zz9k_archive_lha_parse_header(const uint8_t *hdr,
   ZZ9KArchiveEntry entry;
 
   if (!hdr || !entry_out || !header_bytes || window_len < 24U) {
-    return 0;
+    return ZZ9K_ARCHIVE_LHA_PARSE_INVALID;
   }
   header_size = hdr[0];
   if (header_size == 0U) {
-    return 0; /* end-of-archive terminator: walkers decide this, not parse */
-  }
-  if (!zz9k_archive_lha_header_checksum_valid(hdr, window_len) ||
-      hdr[20U] > 2U) {
-    return 0;
+    return ZZ9K_ARCHIVE_LHA_PARSE_INVALID; /* terminator: walkers decide */
   }
   level = hdr[20U];
+  if (level > 2U) {
+    return ZZ9K_ARCHIVE_LHA_PARSE_INVALID;
+  }
   method_offset = 2U;
   if (level == 2U) {
     header_size = zz9k_archive_get_le16(hdr);
@@ -1499,18 +1506,25 @@ static int zz9k_archive_lha_parse_header(const uint8_t *hdr,
     name_offset = 22U;
     data_offset = 2U + header_size;
   }
+  /* Window sufficiency before validation: an incomplete header only asks
+     for a bigger window. Every check below this point sees a header whose
+     base bytes are fully inside the window, which makes its failures
+     definitive for the file walker. */
+  if ((level == 2U && header_size > window_len) ||
+      (level != 2U && 2U + header_size > window_len)) {
+    return ZZ9K_ARCHIVE_LHA_PARSE_NEEDS_WINDOW;
+  }
   if (header_size < base_header_size ||
-      (level == 2U && header_size > window_len) ||
-      (level != 2U && 2U + header_size > window_len) ||
+      !zz9k_archive_lha_header_checksum_valid(hdr, window_len) ||
       hdr[method_offset] != '-' || hdr[method_offset + 4U] != '-' ||
       hdr[method_offset + 1U] != 'l' ||
       (hdr[method_offset + 2U] != 'h' && hdr[method_offset + 2U] != 'z')) {
-    return 0;
+    return ZZ9K_ARCHIVE_LHA_PARSE_INVALID;
   }
   compressed_size = zz9k_archive_get_le32(hdr + 7U);
   uncompressed_size = zz9k_archive_get_le32(hdr + 11U);
   if (level != 2U && name_len > header_size - base_header_size) {
-    return 0;
+    return ZZ9K_ARCHIVE_LHA_PARSE_INVALID;
   }
   ext_size = 0U;
   ext_total = 0U;
@@ -1519,16 +1533,18 @@ static int zz9k_archive_lha_parse_header(const uint8_t *hdr,
   memset(ext_name, 0, sizeof(ext_name));
   if (level == 1U || level == 2U) {
     if (ext_size_offset + 2U > window_len) {
-      return 0;
+      return ZZ9K_ARCHIVE_LHA_PARSE_NEEDS_WINDOW;
     }
     ext_size = zz9k_archive_get_le16(hdr + ext_size_offset);
     while (ext_size != 0U) {
       uint32_t ext_data_len;
       uint32_t next_ext_size;
 
-      if (ext_size < 3U || ext_pos > window_len ||
-          ext_size > window_len - ext_pos) {
-        return 0;
+      if (ext_pos > window_len || ext_size > window_len - ext_pos) {
+        return ZZ9K_ARCHIVE_LHA_PARSE_NEEDS_WINDOW;
+      }
+      if (ext_size < 3U) {
+        return ZZ9K_ARCHIVE_LHA_PARSE_INVALID;
       }
       ext_total += ext_size;
       ext_data_len = ext_size - 3U;
@@ -1543,7 +1559,7 @@ static int zz9k_archive_lha_parse_header(const uint8_t *hdr,
             !zz9k_archive_copy_lha_name(
                 ext_name, sizeof(ext_name), hdr + ext_pos + 1U,
                 ext_data_len)) {
-          return 0;
+          return ZZ9K_ARCHIVE_LHA_PARSE_INVALID;
         }
       } else if (hdr[ext_pos] == 0x02U && ext_data_len != 0U) {
         while (ext_data_len != 0U &&
@@ -1554,7 +1570,7 @@ static int zz9k_archive_lha_parse_header(const uint8_t *hdr,
             !zz9k_archive_copy_lha_name(
                 ext_dir, sizeof(ext_dir), hdr + ext_pos + 1U,
                 ext_data_len)) {
-          return 0;
+          return ZZ9K_ARCHIVE_LHA_PARSE_INVALID;
         }
       }
       ext_pos += ext_size;
@@ -1574,21 +1590,20 @@ static int zz9k_archive_lha_parse_header(const uint8_t *hdr,
        zero, so the field equals ext_total exactly), over-skip by
        ext_total and mis-locate the next header. */
     if (compressed_size < ext_total) {
-      return 0;
+      return ZZ9K_ARCHIVE_LHA_PARSE_INVALID;
     }
     compressed_size -= ext_total;
   }
   if (compressed_size > archive_avail || data_offset > archive_avail ||
       compressed_size > archive_avail - data_offset) {
-    return 0;
+    return ZZ9K_ARCHIVE_LHA_PARSE_INVALID;
   }
-
 
   memset(&entry, 0, sizeof(entry));
   if (name_len != 0U) {
     if (!zz9k_archive_copy_lha_name(
             entry.name, sizeof(entry.name), hdr + name_offset, name_len)) {
-      return 0;
+      return ZZ9K_ARCHIVE_LHA_PARSE_INVALID;
     }
   } else {
     strcpy(entry.name, "unnamed");
@@ -1596,12 +1611,12 @@ static int zz9k_archive_lha_parse_header(const uint8_t *hdr,
   if (ext_name[0] != '\0') {
     if (!zz9k_archive_lha_join_dir_name(
             entry.name, sizeof(entry.name), ext_dir, ext_name)) {
-      return 0;
+      return ZZ9K_ARCHIVE_LHA_PARSE_INVALID;
     }
   } else if (ext_dir[0] != '\0') {
     if (!zz9k_archive_lha_join_dir_name(
             entry.name, sizeof(entry.name), ext_dir, entry.name)) {
-      return 0;
+      return ZZ9K_ARCHIVE_LHA_PARSE_INVALID;
     }
   }
   if (memcmp(hdr + method_offset, "-lh0-", 5U) == 0 ||
@@ -1616,7 +1631,7 @@ static int zz9k_archive_lha_parse_header(const uint8_t *hdr,
     if (!zz9k_archive_name_ends_with_slash(entry.name)) {
       size_t entry_name_len = strlen(entry.name);
       if (entry_name_len + 1U >= sizeof(entry.name)) {
-        return 0;
+        return ZZ9K_ARCHIVE_LHA_PARSE_INVALID;
       }
       entry.name[entry_name_len] = '/';
       entry.name[entry_name_len + 1U] = '\0';
@@ -1644,7 +1659,7 @@ static int zz9k_archive_lha_parse_header(const uint8_t *hdr,
   }
   *entry_out = entry;
   *header_bytes = data_offset;
-  return 1;
+  return ZZ9K_ARCHIVE_LHA_PARSE_OK;
 }
 
 static int zz9k_archive_lha_list(const uint8_t *data,
@@ -1681,9 +1696,10 @@ static int zz9k_archive_lha_list(const uint8_t *data,
       *count = entries_used;
       return 1;
     }
-    if (!zz9k_archive_lha_parse_header(data + pos, length - pos,
-                                       length - pos, &entry,
-                                       &header_bytes)) {
+    if (zz9k_archive_lha_parse_header(data + pos, length - pos,
+                                      length - pos, &entry,
+                                      &header_bytes) !=
+        ZZ9K_ARCHIVE_LHA_PARSE_OK) {
       return 0;
     }
     entry.data_offset = pos + entry.data_offset;
@@ -1754,18 +1770,25 @@ static int zz9k_archive_lha_list_file(FILE *file,
       goto done;
     }
     for (;;) {
+      int parse_rc;
+
       window_len = avail < window_capacity ? avail : window_capacity;
       if (fseek(file, (long)pos, SEEK_SET) != 0 ||
           fread(window, 1U, window_len, file) != window_len) {
         printf("lha header read failed at offset %lu\n", (unsigned long)pos);
         goto out;
       }
-      if (zz9k_archive_lha_parse_header(window, window_len, avail, &entry,
-                                        &header_bytes)) {
+      parse_rc = zz9k_archive_lha_parse_header(window, window_len, avail,
+                                               &entry, &header_bytes);
+      if (parse_rc == ZZ9K_ARCHIVE_LHA_PARSE_OK) {
         break;
       }
-      if (window_len >= avail) {
-        goto out; /* the same parse failure the in-memory walk reports */
+      if (parse_rc == ZZ9K_ARCHIVE_LHA_PARSE_INVALID ||
+          window_len >= avail) {
+        /* A definitive error never grows the window (bounded failure:
+           one 4 KiB read even inside a multi-hundred-MB archive), and a
+           NEEDS_WINDOW at full view is the in-memory walk's failure. */
+        goto out;
       }
       window_capacity *= 4U;
       if (window_capacity > avail) {
@@ -8544,14 +8567,28 @@ static int zz9k_archive_handle_lha_file(ZZ9KContext **ctx,
     return 0; /* the in-memory fallback reports the open failure */
   }
   if (!zz9k_archive_lha_list_file(src.file, archive_length, 0, 0U,
-                                  &count) ||
-      !zz9k_archive_alloc_entries(count, &entries) ||
-      !zz9k_archive_lha_list_file(src.file, archive_length, entries, count,
+                                  &count)) {
+    zz9k_archive_lha_source_close(&src);
+    return 0; /* fall back: the in-memory parse reports "lha parse failed" */
+  }
+  /* Uncapped, unlike the ZIP/7z helper (which bounds directory sizes at
+     65,535): a whole-partition LHA backup can legitimately carry more
+     members than that, and capping here would push exactly the large
+     archives this engine exists for back onto the whole-file load. */
+  entries = (ZZ9KArchiveEntry *)calloc(count == 0U ? 1U : count,
+                                       sizeof(*entries));
+  if (!entries) {
+    printf("lha entry allocation failed\n");
+    zz9k_archive_lha_source_close(&src);
+    return 0;
+  }
+  if (!zz9k_archive_lha_list_file(src.file, archive_length, entries, count,
                                   &count)) {
     zz9k_archive_lha_source_close(&src);
     free(entries);
     return 0; /* fall back: the in-memory parse reports "lha parse failed" */
   }
+
 
   *attempted = 1;
   if ((is_test || is_extract) && !*codec_ready) {

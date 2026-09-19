@@ -5252,6 +5252,152 @@ out:
   return rc;
 }
 
+/*
+ * The parse verdict must separate definitive invalidity (bad checksum,
+ * method bytes -- the file walker fails after one window, never growing
+ * to archive size) from an incomplete header that legitimately asks for
+ * a bigger window. Without the split, one corrupt member near the start
+ * of a large archive costs an archive-sized window before the walk even
+ * reports failure.
+ */
+static int test_lha_parse_header_tri_state(void)
+{
+  uint8_t buf[8192];
+  ZZ9KArchiveEntry entry;
+  uint32_t len;
+  uint32_t header_bytes = 0U;
+
+  /* Definitive: a bad base checksum is INVALID at any window that covers
+     the base header -- it must not masquerade as NEEDS_WINDOW. */
+  if (!make_lha_lh0(buf, &len)) return 1;
+  buf[1] = (uint8_t)(buf[1] ^ 0xffU);
+  memset(&entry, 0, sizeof(entry));
+  if (zz9k_archive_lha_parse_header(buf, len, 1U << 20, &entry,
+                                    &header_bytes) !=
+      ZZ9K_ARCHIVE_LHA_PARSE_INVALID) {
+    return 2;
+  }
+
+  /* Definitive: a corrupted method field is INVALID. */
+  if (!make_lha_lh0(buf, &len)) return 3;
+  buf[3] = 'x';
+  {
+    uint32_t i;
+    uint8_t checksum = 0U;
+
+    for (i = 2U; i < 2U + buf[0]; i++) {
+      checksum = (uint8_t)(checksum + buf[i]);
+    }
+    buf[1] = checksum;
+  }
+  if (zz9k_archive_lha_parse_header(buf, len, 1U << 20, &entry,
+                                    &header_bytes) !=
+      ZZ9K_ARCHIVE_LHA_PARSE_INVALID) {
+    return 4;
+  }
+
+  /* Incomplete: a header whose extension chain extends past the window
+     asks for a bigger window, then parses at full view. */
+  if (!make_lha_level1_big_ext(buf, &len)) return 5;
+  if (zz9k_archive_lha_parse_header(buf, 100U, len, &entry,
+                                    &header_bytes) !=
+      ZZ9K_ARCHIVE_LHA_PARSE_NEEDS_WINDOW) {
+    return 6;
+  }
+  if (zz9k_archive_lha_parse_header(buf, len, len, &entry,
+                                    &header_bytes) !=
+      ZZ9K_ARCHIVE_LHA_PARSE_OK) {
+    return 7;
+  }
+  return 0;
+}
+
+/*
+ * A corrupt member inside an otherwise-valid archive must fail BOTH
+ * walks with the same verdict (and, in file mode, after a bounded
+ * window -- never an archive-sized read).
+ */
+static int test_lha_corrupt_member_fails_both_walks(void)
+{
+  uint8_t buf[8192];
+  uint32_t len;
+  int rc;
+
+  /* Valid stored member, then a member whose checksum byte is corrupt. */
+  if (!make_lha_lh0(buf, &len)) return 1;
+  {
+    uint8_t second[256];
+    uint32_t second_len;
+
+    if (!make_lha_lh0_named("corrupt.bin", "data", second, &second_len)) {
+      return 2;
+    }
+    second[1] = (uint8_t)(second[1] ^ 0xffU);
+    if (len + second_len > sizeof(buf)) return 3;
+    memcpy(buf + len - 1U, second, second_len);
+    len = len - 1U + second_len;
+  }
+  if ((rc = check_lha_file_walk_case(buf, len, 0)) != 0) {
+    return 10 + rc;
+  }
+  return 0;
+}
+
+/*
+ * The file engine must accept archives with more than 65,535 members:
+ * the ZIP/7z entry helper caps at that count, and routing LHA through
+ * it pushed large backups onto the whole-file load (the exact case this
+ * engine exists for).
+ */
+static int test_lha_file_many_members(void)
+{
+  const char *path = "archive_tool_many.tmp";
+  ZZ9KServiceInfo service;
+  ZZ9KContext *ctx = 0;
+  uint8_t member[256];
+  uint8_t *archive;
+  uint32_t member_len;
+  uint32_t total = 0U;
+  uint32_t i;
+  int attempted = 0;
+  int codec_ready = 0;
+
+  archive = (uint8_t *)malloc(5U * 1024U * 1024U);
+  if (!archive) return 1;
+  if (!make_lha_lh0_named("f.bin", "x", member, &member_len)) {
+    free(archive);
+    return 2;
+  }
+  for (i = 0U; i < 65536U; i++) {
+    uint32_t copy_len = (i == 65535U) ? member_len : member_len - 1U;
+
+    if (total + copy_len > 5U * 1024U * 1024U) {
+      free(archive);
+      return 3;
+    }
+    memcpy(archive + total, member, copy_len);
+    total += copy_len;
+  }
+  if (!write_test_file(path, archive, total)) {
+    free(archive);
+    return 4;
+  }
+  free(archive);
+
+  memset(&service, 0, sizeof(service));
+  zz9k_archive_match_filter = "zz_no_such_member_zz";
+  if (!zz9k_archive_handle_lha_file(&ctx, &service, &codec_ready, path,
+                                    total, "l", 0, &attempted) ||
+      !attempted) {
+    zz9k_archive_match_filter = 0;
+    remove(path);
+    return 5; /* old behavior: capped alloc, attempted == 0 */
+  }
+  zz9k_archive_match_filter = 0;
+  remove(path);
+  return 0;
+}
+
 
 static int test_lha_level1_lhd_and_lh0_extract(void)
 {
@@ -7534,6 +7680,21 @@ int main(void)
   if (rc) {
     printf("test_lha_detect_level2_oversized_header failed: %d\n", rc);
     return 490 + rc;
+  }
+  rc = test_lha_parse_header_tri_state();
+  if (rc) {
+    printf("test_lha_parse_header_tri_state failed: %d\n", rc);
+    return 500 + rc;
+  }
+  rc = test_lha_corrupt_member_fails_both_walks();
+  if (rc) {
+    printf("test_lha_corrupt_member_fails_both_walks failed: %d\n", rc);
+    return 510 + rc;
+  }
+  rc = test_lha_file_many_members();
+  if (rc) {
+    printf("test_lha_file_many_members failed: %d\n", rc);
+    return 520 + rc;
   }
   rc = test_zip_backslash_names_are_normalized();
   if (rc) {
