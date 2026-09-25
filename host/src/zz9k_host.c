@@ -51,14 +51,16 @@ struct ExpansionBase *ExpansionBase;
 #endif
 
 #if ZZ9K_HOST_AMIGA
-/* GetVar() dispatches through this global library base. Compiled -fcommon,
- * this tentative definition merges with (and yields to) whatever DOSBase a
- * given link target already provides -- libnix startup for normal tools,
- * clib2 for the amissl os3 build, or the resident library's own copy -- and
- * supplies the symbol for any consumer that provides none.
+/* GetVar() dispatches through this global library base. Defined weak so it
+ * merges with (and yields to) whatever DOSBase a given link target already
+ * provides -- libnix startup for normal tools, clib2 for the amissl os3
+ * build, or the resident library's own copy -- and supplies the symbol for
+ * any consumer that provides none. (A plain tentative definition behaved
+ * this way under GCC's old -fcommon default; GCC 10+ made -fno-common the
+ * default, which would turn every such pair into a link error.)
  * zz9k_sync_wait_timeout_ms() opens dos.library itself and save/restores this
  * base around the call. */
-struct DosLibrary *DOSBase;
+struct DosLibrary *DOSBase __attribute__((weak));
 #endif
 void zz9k_audio_ring_cache_flush(const volatile void *address, uint32_t length)
 {

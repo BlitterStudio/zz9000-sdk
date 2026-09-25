@@ -86,7 +86,7 @@ binary that overflows on Windows bind-mount inodes (`Value too large for defined
 data type`) — build on the container's own ext4 (copy sources off the mount).
 And it rejects `\`-continuations followed by CR, so a Windows (CRLF) checkout of
 AmiSSL must be normalised to LF (`dos2unix`) first. A Linux/ext4 checkout — what
-the workflow uses — has neither problem. (The `sacredbanana/amiga-compiler`
+the workflow uses — has neither problem. (The `amigadev/crosstools` m68k
 image compiles the provider objects fine but is *not* a clean AmiSSL-from-source
 environment: its NDK conflicts with AmiSSL's `libcmt` and it lacks `bumprev`.)
 

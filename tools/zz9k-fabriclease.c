@@ -31,6 +31,7 @@
 #include <exec/types.h>
 #include <proto/dos.h>
 #include <proto/exec.h>
+#include <dos/dos.h>
 #endif
 
 /* Set by the client test, which compiles this file directly and
