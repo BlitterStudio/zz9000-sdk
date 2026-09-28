@@ -1,5 +1,12 @@
 # ZZ9000 SDK v2 - BlitterStudio fork
 
+> **This repository is archived.** The ZZ9000 SDK now lives at
+> [`sdk/`](https://github.com/BlitterStudio/zz9000-firmware/tree/master/sdk)
+> inside the [zz9000-firmware repository](https://github.com/BlitterStudio/zz9000-firmware).
+> The consolidation landed on 2026-09-28; this repo's history through
+> `81b972f` is preserved here for reference and all tags remain browsable.
+> New issues and development happen in the firmware repository.
+
 > **Fork notice.** This repository is an independent fork and continued
 > development of the original MNT ZZ9000 ARM SDK. It is maintained by
 > Dimitris Panokostas / **BlitterStudio** and is **not affiliated with,
