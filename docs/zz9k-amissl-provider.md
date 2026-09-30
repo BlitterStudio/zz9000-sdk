@@ -147,7 +147,7 @@ Compile the provider objects together with your program and define
   `host/src/zz9k_host.c`, and the software reference `tools/zz9k-crypto-soft.c`)
   use no OpenSSL and compile without the force-include.
 
-The `sacredbanana/amiga-compiler:m68k-amigaos` image already ships the AmiSSL
+The `amigadev/crosstools:m68k-amigaos-gcc10` image already ships the AmiSSL
 SDK (headers and `libamisslauto.a`), so no separate `-I$AMISSL` is required.
 From the SDK root:
 

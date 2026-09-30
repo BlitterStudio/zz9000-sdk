@@ -12,7 +12,10 @@
 #if ZZ9K_IMAGE_WINDOW_AMIGA
 #include <graphics/clip.h>
 #include <graphics/layers.h>
-struct IntuitionBase *IntuitionBase;
+/* Weak so this shared object yields to link targets that define their own
+ * IntuitionBase (the picture datatype does) — GCC 10+ defaults to
+ * -fno-common, where two plain tentative definitions are a link error. */
+struct IntuitionBase *IntuitionBase __attribute__((weak));
 #endif
 
 static void zz9k_image_window_to_rect(const ZZ9KFbRect *source,

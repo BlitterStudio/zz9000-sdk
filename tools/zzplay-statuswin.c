@@ -6,6 +6,7 @@
 #include <intuition/intuition.h>
 
 #include <proto/exec.h>
+#include <dos/dos.h>
 #include <proto/graphics.h>
 #include <proto/intuition.h>
 

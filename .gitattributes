@@ -20,6 +20,7 @@ CMakeLists.txt text eol=lf
 Dockerfile     text eol=lf
 *.fd           text eol=lf
 *.b64          text eol=lf
+AMISSL_REF     text eol=lf
 
 # Binary — never EOL-convert
 *.bit       binary

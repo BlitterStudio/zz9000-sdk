@@ -281,7 +281,7 @@ U1 precedes every consumer. U2 and U3 depend on the ABI. U4 starts after grant v
 |---|---|---|
 | SDK host contract | Configure the existing CMake host build and run the direct-ring ABI/client tests | Grant parsing, cursor publication, pacing independence, cleanup |
 | Firmware audio | `make test` in `test/audio` under WSL/Linux | Compositor parity, direct lease lifecycle, isolation, timeout |
-| AmigaOS 3 build | `scripts/build-m68k-amigaos.ps1` with `sacredbanana/amiga-compiler:m68k-amigaos` | Public API and proof-client cross-build |
+| AmigaOS 3 build | `scripts/build-m68k-amigaos.ps1` with `amigadev/crosstools:m68k-amigaos-gcc10` | Public API and proof-client cross-build |
 | Firmware images | `build_firmware_docker.ps1` for normal, benchmark, and three-source compositor variants | ARM firmware and boot images |
 | Zorro III | AE1 plus AE3-AE7 on physical hardware for at least 60 seconds | Multi-producer throughput and recovery |
 | Zorro II | AE2 plus applicable AE3-AE7 on physical hardware for at least 60 seconds | One-slot compact geometry and refusal |

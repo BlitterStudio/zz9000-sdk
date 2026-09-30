@@ -160,7 +160,7 @@ int main(int argc, char **argv)
   ok &= expect_contains("proto", proto, "#include <clib/mpega_protos.h>");
   ok &= expect_contains("proto", proto, "#include <pragmas/mpega_pragmas.h>");
   ok &= expect_contains("proto", proto, "#include <inline/mpega.h>");
-  ok &= expect_contains("inline", inline_header, "MPEGA_INLINE_CLOBBERS");
+  ok &= expect_contains("inline", inline_header, ": \"cc\", \"memory\", \"d1\"");
   ok &= expect_contains("pragmas", pragmas, "#ifndef PRAGMAS_MPEGA_PRAGMAS_H");
   ok &= expect_contains("pragmas", pragmas, "#include <clib/mpega_protos.h>");
 
